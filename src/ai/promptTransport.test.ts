@@ -52,6 +52,30 @@ it('passes the exact fixed turns and schema to ONLY_ON_DEVICE', async () => {
       }),
     }),
   );
+  await adapter.generate('input', schema, {
+    system: 'system v2',
+    exampleInput: 'example A input',
+    exampleOutput: 'example A output',
+    additionalExamples: [{ input: 'example B input', output: 'example B output' }],
+  });
+  expect(mocks.model).toHaveBeenLastCalledWith(
+    expect.anything(),
+    expect.objectContaining({
+      mode: 'only_on_device',
+      onDeviceParams: expect.objectContaining({
+        promptOptions: { responseConstraint: schema },
+        createOptions: expect.objectContaining({
+          initialPrompts: [
+            { role: 'system', content: [{ type: 'text', value: 'system v2' }] },
+            { role: 'user', content: [{ type: 'text', value: 'example A input' }] },
+            { role: 'assistant', content: [{ type: 'text', value: 'example A output' }] },
+            { role: 'user', content: [{ type: 'text', value: 'example B input' }] },
+            { role: 'assistant', content: [{ type: 'text', value: 'example B output' }] },
+          ],
+        }),
+      }),
+    }),
+  );
   vi.stubGlobal('LanguageModel', undefined);
   await expect(
     adapter.generate('input', schema, {

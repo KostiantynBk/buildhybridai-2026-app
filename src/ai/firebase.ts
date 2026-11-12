@@ -70,6 +70,13 @@ export function makeFirebaseModel(config: AppConfig): Model {
               role: 'assistant' as const,
               content: [{ type: 'text' as const, value: instructions.exampleOutput }],
             },
+            ...(instructions.additionalExamples ?? []).flatMap((example) => [
+              { role: 'user' as const, content: [{ type: 'text' as const, value: example.input }] },
+              {
+                role: 'assistant' as const,
+                content: [{ type: 'text' as const, value: example.output }],
+              },
+            ]),
           ]
         : undefined;
       model = getGenerativeModel(ai, {

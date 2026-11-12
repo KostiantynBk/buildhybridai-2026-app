@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { canStartMeasuredRun, normalizeModelIdentity } from './modelIdentity';
+import {
+  canStartMeasuredRun,
+  lockEvaluationIdentity,
+  normalizeModelIdentity,
+} from './modelIdentity';
 import { runEvaluation, type RunMode } from './runner';
 import type { LocalRunner } from '../pipeline/extract';
 
@@ -15,6 +19,11 @@ describe('on-device model identity', () => {
     expect(canStartMeasuredRun({ ...ready, model: 'synthetic', running: true })).toBe(false);
     expect(normalizeModelIdentity(`  ${'x'.repeat(250)}  `)).toHaveLength(200);
   });
+  it('locks model and prompt version together while a run is active or retained', () => {
+    expect(lockEvaluationIdentity(false, 0)).toBe(false);
+    expect(lockEvaluationIdentity(true, 0)).toBe(true);
+    expect(lockEvaluationIdentity(false, 1)).toBe(true);
+  });
   it.each<RunMode>(['run1', 'latency'])(
     'blocks %s before invoking the runner when empty',
     async (mode) => {
@@ -23,6 +32,7 @@ describe('on-device model identity', () => {
         runEvaluation({
           mode,
           runner,
+          promptVersion: 'extract.v1',
           onDeviceModel: '  ',
           warmupLatencyMs: null,
           signal: new AbortController().signal,

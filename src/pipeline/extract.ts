@@ -1,5 +1,6 @@
 import type { Job } from '../ai/localModel';
 import { extractV1 } from './prompts/extract.v1';
+import { extractV2 } from './prompts/extract.v2';
 import { bindTemplate } from './bindTemplate';
 
 export type Item = { kind: string; text: string; quote: string; topics: string[] };
@@ -10,6 +11,8 @@ export type LocalRunner = <T>(job: Job<T>) => Promise<{
   source: string;
   raw: string;
 }>;
+export const extractionPrompts = { 'extract.v1': extractV1, 'extract.v2': extractV2 } as const;
+export type ExtractVersion = keyof typeof extractionPrompts;
 export const extractVersion = extractV1.version;
 export const normalizeQuote = (value: string) =>
   value.toLocaleLowerCase('en').replace(/\s+/g, ' ').trim();
@@ -21,12 +24,14 @@ export async function extract(
   title: string,
   paragraph: string,
   signal?: AbortSignal,
+  version: ExtractVersion = 'extract.v1',
 ) {
   const prompt = extractInput(title, paragraph);
+  const definition = extractionPrompts[version];
   const response = await runner<Extraction>({
     prompt,
     schema: extractV1.schema,
-    instructions: extractV1,
+    instructions: definition,
     signal,
   });
   const seen = new Set<string>();
@@ -52,7 +57,7 @@ export async function extract(
   }
   return {
     ...response,
-    promptVersion: extractVersion,
+    promptVersion: version,
     prompt,
     items,
     beforeDrop: response.data.items.length,

@@ -2,6 +2,8 @@
 import { createHash } from 'node:crypto';
 import { expect, it } from 'vitest';
 import { prompts } from '../../eval/playground';
+import { extractV1 } from './extract.v1';
+import { extractV2 } from './extract.v2';
 
 const hashes = {
   extract: '10f748957d507d1c6a99f8a4ed691df0dff4ddd643dcceaec2626bea8ee8aa76',
@@ -18,4 +20,17 @@ it('preserves the exact v1 system, example, input template and schema text', () 
     );
     expect(createHash('sha256').update(content).digest('hex')).toBe(hashes[name]);
   }
+});
+
+it('preserves the approved v2 system and first example and reuses v1 for the rest', () => {
+  const text = [extractV2.system, extractV2.exampleInput, extractV2.exampleOutput].join('\0');
+  expect(createHash('sha256').update(text).digest('hex')).toBe(
+    '2d5f70c0256ca7c5af5d1061feb97d73d06ff826bd9cdf7762339474a7eadf23',
+  );
+  expect(extractV2.additionalExamples).toEqual([
+    { input: extractV1.exampleInput, output: extractV1.exampleOutput },
+  ]);
+  expect(extractV2.inputTemplate).toBe(extractV1.inputTemplate);
+  expect(extractV2.schemaText).toBe(extractV1.schemaText);
+  expect(extractV2.schema).toBe(extractV1.schema);
 });

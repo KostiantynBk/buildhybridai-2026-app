@@ -37,6 +37,7 @@ async function runWithFailure(failure: unknown) {
     mode: 'run1',
     runner: (job) => service.runLocal(job),
     warmupLatencyMs: 0,
+    promptVersion: 'extract.v1',
     onDeviceModel: 'synthetic-model',
     signal: new AbortController().signal,
     rest: async () => {},
@@ -125,6 +126,7 @@ describe('safe failure diagnostics', () => {
       mode: 'run1',
       runner: (job) => service.runLocal(job),
       warmupLatencyMs: 0,
+      promptVersion: 'extract.v1',
       onDeviceModel: 'synthetic-model',
       signal: controller.signal,
       onUpdate: (evaluation) => {
@@ -141,6 +143,83 @@ describe('safe failure diagnostics', () => {
     });
     expect(service.state.kind).toBe('ready');
     expect(JSON.stringify(result)).not.toContain(sentinel);
+  });
+  it('never leaks a changing name getter through the export or status', async () => {
+    let reads = 0;
+    const error = {
+      get name() {
+        return ++reads <= 5 ? 'TypeError' : sentinel;
+      },
+    };
+    const result = await runWithFailure(error);
+    expect(result.rows[0].errorName).toBe('TypeError');
+    expect(JSON.stringify(result)).not.toContain(sentinel);
+    expect(formatFailureStatus(result.rows[0])).not.toContain(sentinel);
+    expect(reads).toBe(1);
+  });
+  it('never leaks a changing Firebase code getter through the export or status', async () => {
+    let reads = 0;
+    const error = {
+      name: 'FirebaseError',
+      get code() {
+        return ++reads <= 3 ? 'no-api-key' : sentinel;
+      },
+    };
+    const result = await runWithFailure(error);
+    expect(result.rows[0].errorName).toBe('no-api-key');
+    expect(JSON.stringify(result)).not.toContain(sentinel);
+    expect(formatFailureStatus(result.rows[0])).not.toContain(sentinel);
+    expect(reads).toBe(1);
+  });
+  it('reads the root cause and each candidate name and code at most once', () => {
+    const counts = { rootCause: 0, rootName: 0, rootCode: 0, causeName: 0, causeCode: 0 };
+    const cause = {
+      get name() {
+        counts.causeName++;
+        return 'UnknownError';
+      },
+      get code() {
+        counts.causeCode++;
+        return undefined;
+      },
+    };
+    const root = {
+      get cause() {
+        counts.rootCause++;
+        return cause;
+      },
+      get name() {
+        counts.rootName++;
+        return 'Error';
+      },
+      get code() {
+        counts.rootCode++;
+        return undefined;
+      },
+    };
+    expect(safeErrorName(root)).toBe('UnknownError');
+    expect(counts).toEqual({ rootCause: 1, rootName: 1, rootCode: 1, causeName: 1, causeCode: 1 });
+  });
+  it('reads a self-referential cause candidate only once', () => {
+    let names = 0;
+    let codes = 0;
+    let causes = 0;
+    const error = {
+      get cause() {
+        causes++;
+        return error;
+      },
+      get name() {
+        names++;
+        return 'TypeError';
+      },
+      get code() {
+        codes++;
+        return undefined;
+      },
+    };
+    expect(safeErrorName(error)).toBe('TypeError');
+    expect({ causes, names, codes }).toEqual({ causes: 1, names: 1, codes: 1 });
   });
   it('does not treat arbitrary exception names or codes as safe', () => {
     expect(safeErrorName({ name: sentinel, code: sentinel })).toBe('OtherError');

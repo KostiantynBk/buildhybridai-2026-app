@@ -6,6 +6,7 @@ import { anglesV1 } from '../pipeline/prompts/angles.v1';
 import { questionV1 } from '../pipeline/prompts/question.v1';
 import { whynoteV1 } from '../pipeline/prompts/whynote.v1';
 import { bindTemplate } from '../pipeline/bindTemplate';
+import { extractionPrompts, type ExtractVersion } from '../pipeline/extract';
 
 export const prompts = {
   extract: extractV1,
@@ -18,6 +19,9 @@ export type PromptName = keyof typeof prompts;
 export type PracticeId = (typeof practice.examples)[number]['id'];
 export type ProfileId = 'A' | 'B';
 export const examples = practice.examples;
+export function promptFor(name: PromptName, version: ExtractVersion = 'extract.v1') {
+  return name === 'extract' ? extractionPrompts[version] : prompts[name];
+}
 
 function recordsFor(topics: string[], profile: ProfileId): string {
   const records = profiles.profiles[profile].records;
@@ -75,12 +79,18 @@ export function practiceInput(name: PromptName, id: PracticeId, profile: Profile
   };
   return bindTemplate(prompts[name].inputTemplate, fields);
 }
-export function sizeInCharacters(name: PromptName, input: string): number {
-  const p = prompts[name];
+export function sizeInCharacters(
+  name: PromptName,
+  input: string,
+  version: ExtractVersion = 'extract.v1',
+): number {
+  const p = promptFor(name, version);
+  const extra = 'additionalExamples' in p ? p.additionalExamples : [];
   return (
     p.system.length +
     p.exampleInput.length +
     p.exampleOutput.length +
+    extra.reduce((total, example) => total + example.input.length + example.output.length, 0) +
     input.length +
     JSON.stringify(p.schema).length
   );

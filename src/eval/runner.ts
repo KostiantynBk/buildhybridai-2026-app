@@ -5,7 +5,8 @@ import { hiddenNow, safeErrorName } from '../ai/errorMetadata';
 import {
   extract,
   extractInput,
-  extractVersion,
+  extractionPrompts,
+  type ExtractVersion,
   type Item,
   type LocalRunner,
 } from '../pipeline/extract';
@@ -162,12 +163,15 @@ export async function runEvaluation(options: {
   runner: LocalRunner;
   warmupLatencyMs: number | null;
   onDeviceModel: string;
+  promptVersion: ExtractVersion;
   signal: AbortSignal;
   onUpdate?: (evaluation: Evaluation) => void;
   rest?: () => Promise<void>;
   chromeVersion?: string;
 }): Promise<Evaluation> {
-  const { mode, runner, signal } = options;
+  const { mode, runner, signal, promptVersion } = options;
+  if (!Object.hasOwn(extractionPrompts, promptVersion))
+    throw new Error('Unknown extraction prompt version.');
   const onDeviceModel = normalizeModelIdentity(options.onDeviceModel);
   if (!onDeviceModel) throw new Error('On-device model identity is required.');
   const notes = notesFile.notes;
@@ -212,7 +216,7 @@ export async function runEvaluation(options: {
           : (navigator.userAgent.match(/Chrome\/[^ ]+/)?.[0] ?? 'not detected')),
       sdkVersion: SDK_VERSION,
       onDeviceModel,
-      promptVersion: extractVersion,
+      promptVersion,
       setVersion: notesFile.version,
       warmupLatencyMs: options.warmupLatencyMs,
     },
@@ -244,8 +248,12 @@ export async function runEvaluation(options: {
     const row: EvaluationRow = {
       noteId: entry.note.id,
       repetition: entry.repetition,
-      promptVersion: extractVersion,
-      inputSize: sizeInCharacters('extract', extractInput(entry.note.title, entry.note.text)),
+      promptVersion,
+      inputSize: sizeInCharacters(
+        'extract',
+        extractInput(entry.note.title, entry.note.text),
+        promptVersion,
+      ),
       inputSizeUnit: 'characters',
       latencyMs: null,
       source: null,
@@ -267,7 +275,13 @@ export async function runEvaluation(options: {
       firstEvaluationAttemptAfterReload: first,
     };
     try {
-      const result = await extract(runner, entry.note.title, entry.note.text, signal);
+      const result = await extract(
+        runner,
+        entry.note.title,
+        entry.note.text,
+        signal,
+        promptVersion,
+      );
       Object.assign(row, {
         latencyMs: result.latencyMs,
         source: result.source,

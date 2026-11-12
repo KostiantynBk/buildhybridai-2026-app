@@ -12,6 +12,10 @@ This evaluation uses invented notes on the local model. No cloud inference is pa
 
 Select a prompt, practice note and profile. Edit the prefilled input if useful, then click **Run local practice**. The page shows the original JSON returned, source, latency and input size. Repeat for the five prompts and both profiles for the why-note. Practice outputs are not included in the scored export. Prompt files are built-in and versioned; changing any prompt, example or schema requires a new version, not an unrecorded edit.
 
+## v2 run
+
+Select **extract.v2** (the default). In Run 0 try extract.v2 on d1, d2 and d3; d3 is the empty practice note. Then run Run 1 and the latency gate/curve with the same extract.v2 selection, and export them together. The selector and model field lock when a measured run starts or is retained; export and reload to change versions. Report the previously measured extract.v1 results alongside v2; do not overwrite or omit them, and do not transfer results between models.
+
 ## Run 1 and latency curve
 
 1. Open `chrome://on-device-internals` → **Broker State** and copy the installed model component name and version into the required **On-device model** field on `/eval`. This value is self-reported: the API does not verify which model answered. The field is kept only in page memory and is included in each measured run's export, not sent to the model. If the installed model changes, export the current results, reload the page, enter the new name and version, and use a separate export; do not combine or transfer results across models.

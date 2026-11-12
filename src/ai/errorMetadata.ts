@@ -62,28 +62,36 @@ const aiCodes = new Set([
 export function safeErrorName(value: unknown): string {
   try {
     const root = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+    const causeValue = root.cause;
     const cause =
-      root.cause && typeof root.cause === 'object' ? (root.cause as Record<string, unknown>) : {};
-    for (const candidate of [cause, root]) {
-      if (
-        candidate.name === 'FirebaseError' &&
-        typeof candidate.code === 'string' &&
-        aiCodes.has(candidate.code) &&
-        candidate.code !== 'error'
-      )
-        return candidate.code;
+      causeValue && typeof causeValue === 'object' ? (causeValue as Record<string, unknown>) : null;
+    const snapshot = (candidate: Record<string, unknown>) => {
+      const name = candidate.name;
+      const code = candidate.code;
+      return { name, code };
+    };
+    const rootSnapshot = snapshot(root);
+    const causeSnapshot = cause === root ? rootSnapshot : cause ? snapshot(cause) : null;
+    const candidates = causeSnapshot ? [causeSnapshot, rootSnapshot] : [rootSnapshot];
+    const allowed = (list: Set<string>, captured: unknown) => {
+      if (typeof captured !== 'string') return undefined;
+      for (const entry of list) if (entry === captured) return entry;
+      return undefined;
+    };
+    for (const candidate of candidates) {
+      const code =
+        candidate.name === 'FirebaseError' ? allowed(aiCodes, candidate.code) : undefined;
+      if (code && code !== 'error') return code;
     }
-    for (const candidate of [cause, root]) {
-      if (
-        typeof candidate.name === 'string' &&
-        names.has(candidate.name) &&
-        candidate.name !== 'Error' &&
-        candidate.name !== 'LocalError'
-      )
-        return candidate.name;
+    for (const candidate of candidates) {
+      const name = allowed(names, candidate.name);
+      if (name && name !== 'Error' && name !== 'LocalError') return name;
     }
-    if (root.name === 'FirebaseError' && root.code === 'error') return 'error';
-    if (typeof root.name === 'string' && names.has(root.name)) return root.name;
+    if (rootSnapshot.name === 'FirebaseError' && allowed(aiCodes, rootSnapshot.code) === 'error') {
+      return 'error';
+    }
+    const rootName = allowed(names, rootSnapshot.name);
+    if (rootName) return rootName;
   } catch {
     // Invalid or throwing properties are not trusted.
   }

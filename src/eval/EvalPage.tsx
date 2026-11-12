@@ -6,6 +6,7 @@ import {
   examples,
   practiceInput,
   prompts,
+  promptFor,
   sizeInCharacters,
   type ProfileId,
   type PromptName,
@@ -21,8 +22,13 @@ import {
 import { LocalError } from '../ai/localModel';
 import { hiddenNow, safeErrorName } from '../ai/errorMetadata';
 import { formatFailureStatus } from './failureStatus';
-import { canStartMeasuredRun, normalizeModelIdentity } from './modelIdentity';
+import {
+  canStartMeasuredRun,
+  lockEvaluationIdentity,
+  normalizeModelIdentity,
+} from './modelIdentity';
 import { useRef } from 'react';
+import type { ExtractVersion } from '../pipeline/extract';
 
 export default function EvalPage() {
   const service = useMemo(createService, []);
@@ -36,6 +42,8 @@ export default function EvalPage() {
   const [runs, setRuns] = useState<Evaluation[]>([]);
   const [progress, setProgress] = useState('');
   const [modelIdentity, setModelIdentity] = useState('');
+  const [extractVersion, setExtractVersion] = useState<ExtractVersion>('extract.v2');
+  const identityLocked = lockEvaluationIdentity(running, runs.length);
   const controller = useRef<AbortController | null>(null);
   const foreground = useForeground();
   const measuredRunEnabled = canStartMeasuredRun({
@@ -61,7 +69,7 @@ export default function EvalPage() {
     setResult('Running locally…');
     const firstEvaluationAttemptAfterReload = markEvaluationCall();
     try {
-      const definition = prompts[prompt];
+      const definition = promptFor(prompt, extractVersion);
       const output = await service.runLocal<unknown>({
         prompt: input,
         schema: definition.schema,
@@ -78,7 +86,8 @@ export default function EvalPage() {
             rawJson: output.raw,
             latencyMs: output.latencyMs,
             source: output.source,
-            inputSize: sizeInCharacters(prompt, input),
+            inputSize: sizeInCharacters(prompt, input, extractVersion),
+            promptVersion: definition.version,
             unit: 'characters',
             firstEvaluationAttemptAfterReload,
           },
@@ -123,6 +132,7 @@ export default function EvalPage() {
         runner: (job) => service.runLocal(job),
         warmupLatencyMs: service.warmLatencyMs,
         onDeviceModel: normalizeModelIdentity(modelIdentity),
+        promptVersion: extractVersion,
         signal: current.signal,
         onUpdate: (evaluation) => {
           latest = evaluation;
@@ -174,6 +184,19 @@ export default function EvalPage() {
       <Notices configured={config !== null} state={service.state} />
       <main>
         <section className="panel">
+          <label htmlFor="extract-version">Extraction prompt version</label>{' '}
+          <select
+            id="extract-version"
+            value={extractVersion}
+            disabled={identityLocked}
+            onChange={(event) => setExtractVersion(event.target.value as ExtractVersion)}
+          >
+            <option value="extract.v2">extract.v2</option>
+            <option value="extract.v1">extract.v1</option>
+          </select>
+          <p>The version is fixed after the first measured run; export and reload to change it.</p>
+        </section>
+        <section className="panel" style={{ marginTop: 24 }}>
           <h2>Run 0 · practice prompts</h2>
           <p>Practice only; never scored. Output stays on this device.</p>
           <label>
@@ -184,7 +207,7 @@ export default function EvalPage() {
             >
               {Object.keys(prompts).map((name) => (
                 <option key={name} value={name}>
-                  {name}.v1
+                  {name === 'extract' ? extractVersion : `${name}.v1`}
                 </option>
               ))}
             </select>
@@ -210,8 +233,8 @@ export default function EvalPage() {
             </select>
           </label>
           <p>
-            Input can be edited. Size: {sizeInCharacters(prompt, input)} characters, including fixed
-            context and schema.
+            Input can be edited. Size: {sizeInCharacters(prompt, input, extractVersion)} characters,
+            including fixed context and schema.
           </p>
           <textarea
             aria-label="Prompt input"
@@ -241,7 +264,7 @@ export default function EvalPage() {
             maxLength={200}
             required
             value={modelIdentity}
-            disabled={running || runs.length > 0}
+            disabled={identityLocked}
             onChange={(event) => setModelIdentity(event.target.value)}
             placeholder="Component name and version"
           />

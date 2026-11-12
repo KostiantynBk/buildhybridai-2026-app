@@ -30,4 +30,6 @@ it('permits practice but blocks measured runs until the model identity is entere
   expect(html).toMatch(/<button disabled=""[^>]*>Start Run 1<\/button>/);
   expect(html).toMatch(/<button disabled=""[^>]*>Start latency gate and curve<\/button>/);
   expect(html).toContain('maxLength="200"');
+  expect(html).toContain('<option value="extract.v2" selected="">extract.v2</option>');
+  expect(html).toContain('<option value="extract.v1">extract.v1</option>');
 });

@@ -2,6 +2,10 @@ export function normalizeModelIdentity(value: string): string {
   return value.trim().slice(0, 200).trim();
 }
 
+export function lockEvaluationIdentity(running: boolean, measuredRunCount: number): boolean {
+  return running || measuredRunCount > 0;
+}
+
 export function canStartMeasuredRun(options: {
   configured: boolean;
   ready: boolean;

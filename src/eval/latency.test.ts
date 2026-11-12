@@ -76,6 +76,7 @@ it('keeps a prior practice call separate and begins the gate without another fir
   const evaluation = await tracker.runEvaluation({
     mode: 'latency',
     runner: fake,
+    promptVersion: 'extract.v1',
     onDeviceModel: 'synthetic-model 1.0',
     warmupLatencyMs: 100,
     signal: new AbortController().signal,
@@ -99,6 +100,7 @@ it('schedules a first evaluation separately, then twenty in-band gate calls and 
   const evaluation = await runEvaluation({
     mode: 'latency',
     runner: fake,
+    promptVersion: 'extract.v1',
     onDeviceModel: 'synthetic-model 1.0',
     warmupLatencyMs: 100,
     signal: new AbortController().signal,

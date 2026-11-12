@@ -30,6 +30,7 @@ it('runs the full scored harness using a fake local model and exports a summary'
   const evaluation = await runEvaluation({
     mode: 'run1',
     runner: (job) => service.runLocal(job),
+    promptVersion: 'extract.v1',
     onDeviceModel: '  synthetic-model 1.0  ',
     warmupLatencyMs: service.warmLatencyMs,
     signal: new AbortController().signal,
@@ -54,6 +55,7 @@ it('stops on a device error, retaining rows and incomplete status', async () => 
   const result = await runEvaluation({
     mode: 'run1',
     runner: (job) => service.runLocal(job),
+    promptVersion: 'extract.v1',
     onDeviceModel: 'synthetic-model 1.0',
     warmupLatencyMs: 0,
     signal: new AbortController().signal,
@@ -73,6 +75,7 @@ it('stops latency mode on a privacy fault without reading the response', async (
   const result = await runEvaluation({
     mode: 'latency',
     runner: (job) => service.runLocal(job),
+    promptVersion: 'extract.v1',
     onDeviceModel: 'synthetic-model 1.0',
     warmupLatencyMs: 0,
     signal: new AbortController().signal,
@@ -92,6 +95,7 @@ it('cancellation preserves partial rows without retrying', async () => {
   const result = await runEvaluation({
     mode: 'latency',
     runner: (job) => service.runLocal(job),
+    promptVersion: 'extract.v1',
     onDeviceModel: 'synthetic-model 1.0',
     warmupLatencyMs: 0,
     signal: controller.signal,
