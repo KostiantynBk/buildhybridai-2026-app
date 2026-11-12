@@ -1,0 +1,33 @@
+import { expect, it, vi } from 'vitest';
+import { renderToStaticMarkup } from 'react-dom/server';
+import EvalPage from './EvalPage';
+
+const service = {
+  state: { kind: 'ready' },
+  browserAvailability: 'available',
+  preparing: false,
+  warmLatencyMs: null,
+  privacyFaults: 0,
+  subscribe: () => () => {},
+  probe: async () => {},
+  prepare: async () => {},
+  runLocal: async () => {
+    throw new Error('not called');
+  },
+};
+vi.mock('../ui/App', () => ({
+  config: {},
+  createService: () => service,
+  useForeground: () => true,
+}));
+
+it('permits practice but blocks measured runs until the model identity is entered', () => {
+  const html = renderToStaticMarkup(<EvalPage />);
+  expect(html).toContain(
+    'On-device model (as read from chrome://on-device-internals → Broker State)',
+  );
+  expect(html).toMatch(/<button>Run local practice<\/button>/);
+  expect(html).toMatch(/<button disabled=""[^>]*>Start Run 1<\/button>/);
+  expect(html).toMatch(/<button disabled=""[^>]*>Start latency gate and curve<\/button>/);
+  expect(html).toContain('maxLength="200"');
+});

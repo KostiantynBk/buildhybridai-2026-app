@@ -30,15 +30,15 @@ The console setup steps and production App Check enforcement have not been verif
 
 ## Testing instructions
 
-Run `npm run typecheck`, `npm test`, and `npm run build`. The tests use fakes and do not call a real model. With absent or example-only configuration, preparation is disabled and private inference returns a typed `not-configured` error.
+Run `npm run typecheck`, `npm test`, and `npm run build`. The tests use fakes and do not call a real model. With absent or example-only configuration, preparation is disabled and private inference returns a typed `not-configured` error. The development-only evaluation route and its pre-run requirements are documented in [eval/RUNBOOK.md](eval/RUNBOOK.md).
 
 ## What was built during the hackathon
 
-This repository was started after the Submission Period began on 11 November 2026 at 13:30 Pacific Time. The current scaffold includes a locally saved notebook, placeholder panels, a readiness interface, guarded local Firebase AI Logic service, and tests. Further functionality is to be completed.
+This repository was started after the Submission Period began on 11 November 2026 at 13:30 Pacific Time. The current scaffold includes a locally saved notebook, placeholder panels, a readiness interface, guarded local Firebase AI Logic service, and tests. A development-only evaluation harness and synthetic scored set have been added; real evaluation is still to be performed. Further functionality is to be completed.
 
 ## History and disclosure
 
-TBD by the owner.
+TBD by the owner. The five v1 prompt texts and the synthetic profiles and practice examples were written 9–11 November 2026 before the submission period and copied from planning materials. The scored evaluation notes, labels, change pairs and evaluation code were written during the submission period. Additional disclosure is to be completed by the owner.
 
 ## Licence
 

@@ -1,0 +1,729 @@
+{
+  "version": "set-v1",
+  "notes": [
+    {
+      "id": "n01",
+      "title": "Hosting",
+      "text": "The first release will run on a shared hosting plan. I expect the hosting plan to stay responsive when fifty people visit at once. The main page contains a fairly large catalogue, and the search box will make a fresh request whenever a visitor types. I have not built a load test; the mock screens just use a handful of entries. I want to keep the first setup simple while I learn how people browse. I will first observe a small group using the catalogue and write down whether searches stay usable during their sessions. The mock catalogue contains entries with short titles as well as entries with much longer descriptions. Visitors may open several detail pages and return to their earlier searches. Some people use a keyboard to navigate, and others have a slower connection at home. I want the trial to include both first-time visitors and someone who already knows what they are looking for. A short observation sheet can capture confusion without asking anyone to provide personal details.",
+      "expected": [
+        {
+          "kind": "assumption",
+          "span": "I expect the hosting plan to stay responsive when fifty people visit at once",
+          "topics": [
+            "hosting",
+            "performance"
+          ]
+        },
+        {
+          "kind": "decision",
+          "span": "The first release will run on a shared hosting plan",
+          "topics": [
+            "hosting"
+          ]
+        },
+        {
+          "kind": "decision",
+          "span": "the search box will make a fresh request whenever a visitor types",
+          "topics": [
+            "backend",
+            "performance"
+          ]
+        }
+      ],
+      "blindSpots": [
+        {
+          "angle": "limits-operations",
+          "description": "Concurrent traffic and repeated searches may saturate the host.",
+          "questionKeywords": [
+            "concurrent requests",
+            "hosting capacity",
+            "load test"
+          ]
+        }
+      ],
+      "privateTokens": []
+    },
+    {
+      "id": "n02",
+      "title": "Sign-in",
+      "text": "For the pilot at Alder Vale Workshop, I will use one shared administrator account for everyone on the team. There are four helpers, and they cover different shifts. They need to update orders and correct mistakes when someone has already gone home. I am not sure whether the app should show a separate history of edits. A compact layout might be useful on a small laptop and easy to explain without a training session. Before inviting more helpers I want to walk through account removal and document who needs to change a shared credential.",
+      "expected": [
+        {
+          "kind": "decision",
+          "span": "I will use one shared administrator account for everyone on the team",
+          "topics": [
+            "auth",
+            "security"
+          ]
+        },
+        {
+          "kind": "open-question",
+          "span": "I am not sure whether the app should show a separate history of edits",
+          "topics": [
+            "auth",
+            "security"
+          ]
+        }
+      ],
+      "blindSpots": [
+        {
+          "angle": "security-privacy",
+          "description": "Shared access may make revocation and accountability difficult.",
+          "questionKeywords": [
+            "shared accounts",
+            "audit log",
+            "access revocation"
+          ]
+        }
+      ],
+      "privateTokens": [
+        "Alder Vale Workshop"
+      ]
+    },
+    {
+      "id": "n03",
+      "title": "Payments",
+      "text": "The first customer, Leora, requires the payment screen to accept cards from several countries. I believe the payment processor will automatically handle refunds in every currency. I will show one price on the sales page and let the payment screen handle currency conversion. I have never personally issued a cross-border refund. The pilot begins with a small group, and I can ask them to report confusing parts of the checkout. I should ask the pilot group about the currencies they actually use, then rehearse a refund before opening sales. A refund could happen after a person changes their mind or when an order is accidentally entered twice. The amount shown to a customer may differ from the amount the business receives after conversion. In the pilot, I can use test transactions and review each step with the participant rather than using anyone's actual card details. The wording should distinguish cancelling an order from requesting a refund, because those are different actions in the interface.",
+      "expected": [
+        {
+          "kind": "assumption",
+          "span": "I believe the payment processor will automatically handle refunds in every currency",
+          "topics": [
+            "payments"
+          ]
+        },
+        {
+          "kind": "constraint",
+          "span": "requires the payment screen to accept cards from several countries",
+          "topics": [
+            "payments"
+          ]
+        },
+        {
+          "kind": "decision",
+          "span": "I will show one price on the sales page and let the payment screen handle currency conversion",
+          "topics": [
+            "payments",
+            "pricing"
+          ]
+        }
+      ],
+      "blindSpots": [
+        {
+          "angle": "limits-operations",
+          "description": "Refund processing and supported currencies may need explicit handling.",
+          "questionKeywords": [
+            "currency refunds",
+            "cross-border payments",
+            "refund support"
+          ]
+        }
+      ],
+      "privateTokens": [
+        "Leora"
+      ]
+    },
+    {
+      "id": "n04",
+      "title": "Message delivery",
+      "text": "Notes for the mailing feature: send a confirmation after someone creates an account; send a second message when their report is ready. I assume the mail provider will deliver every message immediately. No messaging queue yet. The interface should let a user request a new confirmation if nothing arrives. I do not want the person waiting on a spinning page while a separate service is busy, though I have not decided what the waiting screen should say. A small delivery log might help me see whether reminders arrive, although I have not chosen what it should contain.",
+      "expected": [
+        {
+          "kind": "assumption",
+          "span": "I assume the mail provider will deliver every message immediately",
+          "topics": [
+            "messaging"
+          ]
+        }
+      ],
+      "blindSpots": [
+        {
+          "angle": "end-user",
+          "description": "Delays or spam filtering can interrupt a confirmation flow.",
+          "questionKeywords": [
+            "email delays",
+            "deliverability",
+            "spam"
+          ]
+        }
+      ],
+      "privateTokens": []
+    },
+    {
+      "id": "n05",
+      "title": "Backups",
+      "text": "For Mossbridge Archive I am keeping every uploaded record in a single managed database. I have set aside €620 for the first six months. The backup will be a manual export on the last Friday of each month. Several entries are handwritten descriptions copied in by volunteers, so reproducing a lost week would be awkward. I have only tried exporting an almost empty test table and have not tried restoring it to a fresh account. A trial restore with invented records would be more useful than simply checking that a download appeared on my computer. The volunteers have different levels of familiarity with spreadsheets. Some may add several records in one sitting, whereas others contribute a few descriptions at a time. A recovery exercise should include text with punctuation and accented characters, not just plain numbers. When the test is complete, the volunteers could compare the restored list with the original made-up records. I also need space in the project notes to record who performed the exercise and what they found confusing.",
+      "expected": [
+        {
+          "kind": "decision",
+          "span": "The backup will be a manual export on the last Friday of each month",
+          "topics": [
+            "data-storage",
+            "security"
+          ]
+        },
+        {
+          "kind": "constraint",
+          "span": "I have set aside €620 for the first six months",
+          "topics": [
+            "pricing"
+          ]
+        },
+        {
+          "kind": "decision",
+          "span": "I am keeping every uploaded record in a single managed database",
+          "topics": [
+            "data-storage"
+          ]
+        }
+      ],
+      "blindSpots": [
+        {
+          "angle": "limits-operations",
+          "description": "A monthly backup may create an unacceptable recovery gap.",
+          "questionKeywords": [
+            "backup frequency",
+            "restore",
+            "recovery point"
+          ]
+        }
+      ],
+      "privateTokens": [
+        "Mossbridge Archive",
+        "€620"
+      ]
+    },
+    {
+      "id": "n06",
+      "title": "Pricing",
+      "text": "I have decided to charge a simple monthly amount with no separate setup charge. I think most customers will keep paying even if they only use the tool once a month. The tool helps organise occasional inspections, so there may be long quiet periods between uses. I have not decided whether a pay-per-use option would be better than a subscription. I would rather test a clear offer than build a complicated billing screen before anyone signs up. I can show both offers to a few potential customers and ask what they would do in a quiet month.",
+      "expected": [
+        {
+          "kind": "assumption",
+          "span": "I think most customers will keep paying even if they only use the tool once a month",
+          "topics": [
+            "pricing",
+            "marketing"
+          ]
+        },
+        {
+          "kind": "decision",
+          "span": "I have decided to charge a simple monthly amount with no separate setup charge",
+          "topics": [
+            "pricing"
+          ]
+        },
+        {
+          "kind": "open-question",
+          "span": "I have not decided whether a pay-per-use option would be better than a subscription",
+          "topics": [
+            "pricing"
+          ]
+        }
+      ],
+      "blindSpots": [
+        {
+          "angle": "end-user",
+          "description": "Infrequent use may not support recurring willingness to pay.",
+          "questionKeywords": [
+            "subscription retention",
+            "infrequent use",
+            "usage pricing"
+          ]
+        }
+      ],
+      "privateTokens": []
+    },
+    {
+      "id": "n07",
+      "title": "Model usage",
+      "text": "For the pilot with Northmere Books, I will ask the language model to classify each incoming description separately. The cloud budget must stay below €85 per month. Some descriptions will be only a sentence; others may contain a long pasted document. I have not measured the length distribution. I also want a manual review screen for uncertain results, but I have not decided whether staff should review before or after a record is saved. I should measure a range of sample input sizes and compare them with the frequency the pilot might eventually produce.",
+      "expected": [
+        {
+          "kind": "constraint",
+          "span": "The cloud budget must stay below €85 per month",
+          "topics": [
+            "ai-api",
+            "pricing"
+          ]
+        },
+        {
+          "kind": "decision",
+          "span": "I will ask the language model to classify each incoming description separately",
+          "topics": [
+            "ai-api"
+          ]
+        },
+        {
+          "kind": "open-question",
+          "span": "I have not decided whether staff should review before or after a record is saved",
+          "topics": [
+            "ai-api",
+            "data-storage"
+          ]
+        }
+      ],
+      "blindSpots": [
+        {
+          "angle": "cost-at-scale",
+          "description": "Long inputs and repeated calls can affect total usage costs.",
+          "questionKeywords": [
+            "model usage",
+            "input length",
+            "API costs"
+          ]
+        }
+      ],
+      "privateTokens": [
+        "Northmere Books",
+        "€85"
+      ]
+    },
+    {
+      "id": "n08",
+      "title": "Web or mobile",
+      "text": "I have decided to ship a browser app before considering native mobile apps. A one-handed layout might help when a person holds a phone. A few people have asked for a home-screen shortcut. I do not know whether a home-screen shortcut is enough for their day-to-day work. The service must work in locations with weak connections. I should find out which tasks they need to finish while moving between locations. Talking through a field visit with someone who does the work may reveal what the browser version needs most. The proposed workflow starts with a person finding a location and reviewing a short list of tasks. Some tasks involve a photograph, while others only require a brief note. The people I spoke to use a mix of older and newer phones, and I have not seen all of those devices in use. A paper sketch might be enough to discuss the order of screens before choosing how a shortcut or offline state should look.",
+      "expected": [
+        {
+          "kind": "decision",
+          "span": "I have decided to ship a browser app before considering native mobile apps",
+          "topics": [
+            "frontend",
+            "mobile"
+          ]
+        },
+        {
+          "kind": "open-question",
+          "span": "I do not know whether a home-screen shortcut is enough for their day-to-day work",
+          "topics": [
+            "mobile",
+            "frontend"
+          ]
+        },
+        {
+          "kind": "constraint",
+          "span": "The service must work in locations with weak connections",
+          "topics": [
+            "mobile",
+            "performance"
+          ]
+        }
+      ],
+      "blindSpots": [
+        {
+          "angle": "end-user",
+          "description": "A browser-only approach may not satisfy offline field use.",
+          "questionKeywords": [
+            "offline use",
+            "mobile browser",
+            "field work"
+          ]
+        }
+      ],
+      "privateTokens": []
+    },
+    {
+      "id": "n09",
+      "title": "Launch",
+      "text": "For launch, I will put a sign-up form on a short landing page and invite ten people from a small forum. I may write down what they struggle with. I expect ten forum invitations to produce at least five trial users. I do not know whether that community permits invitations. It may be better to talk to members about the problem first. A short form might feel less demanding before the prototype exists. If invitations seem intrusive, I could write a short explanation and ask a moderator for feedback.",
+      "expected": [
+        {
+          "kind": "assumption",
+          "span": "I expect ten forum invitations to produce at least five trial users",
+          "topics": [
+            "marketing",
+            "analytics"
+          ]
+        },
+        {
+          "kind": "decision",
+          "span": "put a sign-up form on a short landing page",
+          "topics": [
+            "marketing"
+          ]
+        },
+        {
+          "kind": "decision",
+          "span": "invite ten people from a small forum",
+          "topics": [
+            "marketing"
+          ]
+        },
+        {
+          "kind": "open-question",
+          "span": "I do not know whether that community permits invitations",
+          "topics": [
+            "marketing"
+          ]
+        }
+      ],
+      "blindSpots": [
+        {
+          "angle": "end-user",
+          "description": "Invitations may not convert or may be unwelcome in the community.",
+          "questionKeywords": [
+            "invitation conversion",
+            "community rules",
+            "pilot users"
+          ]
+        }
+      ],
+      "privateTokens": []
+    },
+    {
+      "id": "n10",
+      "title": "Retention",
+      "text": "The test dataset for Dunmere Cooperative contains made-up contact records. I plan to keep submitted contact details indefinitely unless the user asks for deletion. The pilot participants need a way to see their own details and correct mistakes. I have not decided who should answer a deletion request when the small team is away. For the first version I would prefer a single clear data screen rather than several nested settings pages. The proposed settings screen should make it understandable which actions affect one record and which affect the entire account.",
+      "expected": [
+        {
+          "kind": "decision",
+          "span": "I plan to keep submitted contact details indefinitely unless the user asks for deletion",
+          "topics": [
+            "data-storage",
+            "legal-privacy"
+          ]
+        },
+        {
+          "kind": "constraint",
+          "span": "The pilot participants need a way to see their own details and correct mistakes",
+          "topics": [
+            "legal-privacy",
+            "data-storage"
+          ]
+        },
+        {
+          "kind": "open-question",
+          "span": "I have not decided who should answer a deletion request when the small team is away",
+          "topics": [
+            "legal-privacy",
+            "support"
+          ]
+        }
+      ],
+      "blindSpots": [
+        {
+          "angle": "security-privacy",
+          "description": "Indefinite retention may conflict with applicable privacy obligations.",
+          "questionKeywords": [
+            "data retention",
+            "deletion",
+            "privacy"
+          ]
+        }
+      ],
+      "privateTokens": [
+        "Dunmere Cooperative"
+      ]
+    },
+    {
+      "id": "n11",
+      "title": "Integration",
+      "text": "My draft integration asks the external calendar service for the whole schedule every minute. I think its API will allow that polling rate for each account. At launch there may only be a few accounts, but every person could connect more than one calendar. I do not know whether the provider offers change notifications or a way to fetch only entries that changed. I should also make the last successful sync visible when a connection is interrupted. A brief test with invented events could reveal how the sync behaves when a connection is interrupted and later restored. The sample schedule contains all-day entries as well as short appointments. Time zones and daylight-saving changes could affect how an event appears on screen even if the external service stores it correctly. For discussion I can create a small set of imaginary events that cross midnight and inspect the resulting display. A visible sync time would help users distinguish an outdated view from an empty schedule without requiring them to understand the integration.",
+      "expected": [
+        {
+          "kind": "assumption",
+          "span": "I think its API will allow that polling rate for each account",
+          "topics": [
+            "backend",
+            "performance"
+          ]
+        },
+        {
+          "kind": "decision",
+          "span": "asks the external calendar service for the whole schedule every minute",
+          "topics": [
+            "backend"
+          ]
+        },
+        {
+          "kind": "open-question",
+          "span": "I do not know whether the provider offers change notifications or a way to fetch only entries that changed",
+          "topics": [
+            "backend",
+            "performance"
+          ]
+        }
+      ],
+      "blindSpots": [
+        {
+          "angle": "limits-operations",
+          "description": "Polling can encounter account-wide quotas or rate limits.",
+          "questionKeywords": [
+            "calendar API",
+            "polling",
+            "rate limits"
+          ]
+        }
+      ],
+      "privateTokens": []
+    },
+    {
+      "id": "n12",
+      "title": "Support",
+      "text": "The pilot for Fen Hollow Club has only one support contact, Noor, and no backup. I can respond to support messages only on weekday evenings. People may be entering information at the weekend, and some mistakes might prevent them from completing the task. I have a draft help page but no automated recovery flow. I have not decided which problems need my direct access to the service. An offline checklist for common mistakes could be a useful starting point, though it cannot replace a person in every case.",
+      "expected": [
+        {
+          "kind": "constraint",
+          "span": "I can respond to support messages only on weekday evenings",
+          "topics": [
+            "support"
+          ]
+        },
+        {
+          "kind": "constraint",
+          "span": "has only one support contact, Noor, and no backup",
+          "topics": [
+            "support"
+          ]
+        },
+        {
+          "kind": "open-question",
+          "span": "I have not decided which problems need my direct access to the service",
+          "topics": [
+            "support",
+            "backend"
+          ]
+        }
+      ],
+      "blindSpots": [
+        {
+          "angle": "end-user",
+          "description": "Users may need help while the only support contact is unavailable.",
+          "questionKeywords": [
+            "support hours",
+            "weekend",
+            "self-service"
+          ]
+        }
+      ],
+      "privateTokens": [
+        "Fen Hollow Club",
+        "Noor"
+      ]
+    },
+    {
+      "id": "n13",
+      "title": "Access rules",
+      "text": "Members will sign in through individual accounts, but for now every signed-in member can view every shared document. The first group is a committee that already knows one another. Later they might invite outside reviewers for a single document, and I have not designed that invitation flow. I might add an account removal screen later. I also need to decide what happens to their previous comments. I should sketch the invitation and removal flows together, rather than treating them as unrelated settings screens.",
+      "expected": [
+        {
+          "kind": "decision",
+          "span": "every signed-in member can view every shared document",
+          "topics": [
+            "auth",
+            "security"
+          ]
+        },
+        {
+          "kind": "decision",
+          "span": "Members will sign in through individual accounts",
+          "topics": [
+            "auth"
+          ]
+        },
+        {
+          "kind": "open-question",
+          "span": "I also need to decide what happens to their previous comments",
+          "topics": [
+            "data-storage",
+            "auth"
+          ]
+        }
+      ],
+      "blindSpots": [
+        {
+          "angle": "security-privacy",
+          "description": "Broad document access may expose information to the wrong member.",
+          "questionKeywords": [
+            "document permissions",
+            "guest access",
+            "revocation"
+          ]
+        }
+      ],
+      "privateTokens": []
+    },
+    {
+      "id": "n14",
+      "title": "Reporting",
+      "text": "I want a weekly report showing how many unfinished forms remain. I assume a nightly batch will finish within ten minutes even when there are ten thousand forms. The table might have only a few columns at first, though the calculations may become more complicated later. The person reading the report needs to know when it was last refreshed. I have not chosen how to alert anyone if the batch stops halfway through. For a first measurement I can prepare invented records of several sizes and compare the run times on my laptop.",
+      "expected": [
+        {
+          "kind": "assumption",
+          "span": "I assume a nightly batch will finish within ten minutes even when there are ten thousand forms",
+          "topics": [
+            "backend",
+            "performance"
+          ]
+        },
+        {
+          "kind": "constraint",
+          "span": "The person reading the report needs to know when it was last refreshed",
+          "topics": [
+            "backend",
+            "support"
+          ]
+        },
+        {
+          "kind": "open-question",
+          "span": "I have not chosen how to alert anyone if the batch stops halfway through",
+          "topics": [
+            "backend",
+            "support"
+          ]
+        }
+      ],
+      "blindSpots": [
+        {
+          "angle": "limits-operations",
+          "description": "Processing time and failure recovery may change with dataset size.",
+          "questionKeywords": [
+            "batch processing",
+            "runtime",
+            "failure recovery"
+          ]
+        }
+      ],
+      "privateTokens": []
+    },
+    {
+      "id": "n15",
+      "title": "Import",
+      "text": "Celia at Windrow Guild offered a sample spreadsheet for an import trial. The receiving tool accepts uploaded dates in only one format. There might be empty cells and duplicate names, because several people maintain the sheet. I want to show a preview before saving anything, including which rows could not be read. It is not yet clear who should decide whether a duplicate is a mistake or a separate person. A small set of invented rows could help reveal confusing preview messages before anyone tries their own spreadsheet.",
+      "expected": [
+        {
+          "kind": "constraint",
+          "span": "The receiving tool accepts uploaded dates in only one format",
+          "topics": [
+            "data-storage",
+            "frontend"
+          ]
+        },
+        {
+          "kind": "open-question",
+          "span": "It is not yet clear who should decide whether a duplicate is a mistake or a separate person",
+          "topics": [
+            "data-storage",
+            "backend"
+          ]
+        }
+      ],
+      "blindSpots": [
+        {
+          "angle": "end-user",
+          "description": "Users may need to clean mixed formats before the import can work.",
+          "questionKeywords": [
+            "date formats",
+            "spreadsheet import",
+            "validation"
+          ]
+        }
+      ],
+      "privateTokens": [
+        "Celia",
+        "Windrow Guild"
+      ]
+    },
+    {
+      "id": "n16",
+      "title": "Search",
+      "text": "The catalogue needs a search box across descriptions and tags. I expect a simple substring search to remain useful when the catalogue reaches five thousand records. Some visitors may misspell a term or search in a different language. The first interface can show a small set of results with a count; I do not want to add a separate search service until there is a reason. I should keep a few invented examples to test whether relevant items are easy to find. I could keep a few misspelled sample queries alongside the catalogue so that different search approaches can be compared.",
+      "expected": [
+        {
+          "kind": "assumption",
+          "span": "I expect a simple substring search to remain useful when the catalogue reaches five thousand records",
+          "topics": [
+            "backend",
+            "performance"
+          ]
+        },
+        {
+          "kind": "decision",
+          "span": "I do not want to add a separate search service until there is a reason",
+          "topics": [
+            "backend"
+          ]
+        }
+      ],
+      "blindSpots": [
+        {
+          "angle": "end-user",
+          "description": "Substring search may miss relevant results with spelling or language variation.",
+          "questionKeywords": [
+            "search relevance",
+            "misspelling",
+            "substring"
+          ]
+        }
+      ],
+      "privateTokens": []
+    },
+    {
+      "id": "n17",
+      "title": "Contract schedule",
+      "text": "Ari from Larchmere Studio wants the handoff by 14 March. I can spend no more than twelve hours each week on the build. They require a demonstration of the preview and export for the handoff; they have not chosen the final colour palette. I should keep a list of decisions that block the handoff and avoid polishing the less important screens first. I might arrange a review with the pilot group if there is time. I will write out a short sequence of milestones and revisit it after the first review with the pilot group. The handoff discussion includes both the person who requested the tool and a colleague who will try it. They may use different words for the same export, so the demonstration might spell out what file appears and where it can be found. A brief written walkthrough would also help them repeat the steps afterward. I can gather their questions during the review and separate must-fix confusion from ideas for another iteration.",
+      "expected": [
+        {
+          "kind": "constraint",
+          "span": "I can spend no more than twelve hours each week on the build",
+          "topics": [
+            "other"
+          ]
+        },
+        {
+          "kind": "constraint",
+          "span": "wants the handoff by 14 March",
+          "topics": [
+            "other"
+          ]
+        },
+        {
+          "kind": "constraint",
+          "span": "They require a demonstration of the preview and export for the handoff",
+          "topics": [
+            "other"
+          ]
+        }
+      ],
+      "blindSpots": [
+        {
+          "angle": "limits-operations",
+          "description": "The limited schedule may leave too little time for integration and review.",
+          "questionKeywords": [
+            "limited hours",
+            "delivery schedule",
+            "review time"
+          ]
+        }
+      ],
+      "privateTokens": [
+        "Ari",
+        "Larchmere Studio"
+      ]
+    },
+    {
+      "id": "n18",
+      "title": "Shapes",
+      "text": "Maybe the home screen could feel like an open desk rather than a dashboard. A row of small cards, perhaps uneven in size, could suggest pieces of paper. There could be a little place for a doodle in the corner. I like muted greens, but a warm grey might work too. Other images to think about: pebbles, folded maps, a window seen from inside. No need to settle on a direction yet. I could gather a few unrelated textures and look at how they sit together before naming any of these ideas. Another page of sketches could explore the space between those objects: broad margins, narrow columns, or several small clusters with different amounts of breathing room. I keep imagining a tiny line drawing near an otherwise plain heading, but there might be too much decoration. A few rough pencil marks could show whether the page feels crowded or calm. For now these fragments are just visual impressions, not a decision about layout, materials or product behavior.",
+      "expected": [],
+      "blindSpots": [],
+      "privateTokens": []
+    },
+    {
+      "id": "n19",
+      "title": "Metaphors",
+      "text": "What if the navigation used the language of trails, or perhaps constellations? A trail suggests a path with a beginning, while stars feel more like points that can be connected in different ways. I might sketch both approaches on paper. There is also the image of a small bookshelf, with each object representing a different kind of work. None of this has to become a feature. These are just possible visual metaphors for a future design discussion, alongside some loose notes about rhythm and atmosphere.",
+      "expected": [],
+      "blindSpots": [],
+      "privateTokens": []
+    },
+    {
+      "id": "n20",
+      "title": "Voice and mood",
+      "text": "A few words for the writing style: gentle, direct, curious, quietly practical. I wonder whether headings could sound like a thoughtful question without becoming too cute. A short greeting on the empty page might be nice, or perhaps no greeting at all. Some sketches have long explanations; others leave a lot of open space. I like the second direction but want to keep both on the board for now. Think about tone alongside colour and layout, without choosing any wording yet.",
+      "expected": [],
+      "blindSpots": [],
+      "privateTokens": []
+    }
+  ]
+}

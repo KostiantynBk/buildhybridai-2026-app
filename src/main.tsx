@@ -2,4 +2,9 @@ import { createRoot } from 'react-dom/client';
 import App from './ui/App';
 import './ui/style.css';
 
-createRoot(document.getElementById('root')!).render(<App />);
+const root = createRoot(document.getElementById('root')!);
+if (import.meta.env.DEV && window.location.pathname === '/eval') {
+  void import('./eval/EvalPage').then(({ default: EvalPage }) => root.render(<EvalPage />));
+} else {
+  root.render(<App />);
+}

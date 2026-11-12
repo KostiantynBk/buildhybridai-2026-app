@@ -1,0 +1,47 @@
+{
+  "version": "changes-v1",
+  "changes": [
+    {
+      "noteId": "n01",
+      "editedText": "The first release will run on a shared hosting plan. I expect the hosting plan to stay responsive with no more than twenty people visiting at once. The main page contains a fairly large catalogue, and the search box will make a fresh request whenever a visitor types. I have not built a load test; the mock screens just use a handful of entries. I want to keep the first setup simple while I learn how people browse. I will first observe a small group using the catalogue and write down whether searches stay usable during their sessions. The mock catalogue contains entries with short titles as well as entries with much longer descriptions. Visitors may open several detail pages and return to their earlier searches. Some people use a keyboard to navigate, and others have a slower connection at home. I want the trial to include both first-time visitors and someone who already knows what they are looking for. A short observation sheet can capture confusion without asking anyone to provide personal details.",
+      "expectedChanged": true,
+      "targetSpan": "I expect the hosting plan to stay responsive when fifty people visit at once",
+      "changeDescription": "Changes the shared-host capacity premise from fifty visitors to twenty."
+    },
+    {
+      "noteId": "n03",
+      "editedText": "The first customer, Leora, requires the payment screen to accept cards from several countries. I will handle cross-currency refunds manually instead of relying on automatic processing. I will show one price on the sales page and let the payment screen handle currency conversion. I have never personally issued a cross-border refund. The pilot begins with a small group, and I can ask them to report confusing parts of the checkout. I should ask the pilot group about the currencies they actually use, then rehearse a refund before opening sales. A refund could happen after a person changes their mind or when an order is accidentally entered twice. The amount shown to a customer may differ from the amount the business receives after conversion. In the pilot, I can use test transactions and review each step with the participant rather than using anyone's actual card details. The wording should distinguish cancelling an order from requesting a refund, because those are different actions in the interface.",
+      "expectedChanged": true,
+      "targetSpan": "I believe the payment processor will automatically handle refunds in every currency",
+      "changeDescription": "Changes the automatic-refund assumption to manual handling."
+    },
+    {
+      "noteId": "n04",
+      "editedText": "Notes for the mailing feature: send a confirmation after someone creates an account; send a second message when their report is ready. I expect mail delivery to take several hours. No messaging queue yet. The interface should let a user request a new confirmation if nothing arrives. I do not want the person waiting on a spinning page while a separate service is busy, though I have not decided what the waiting screen should say. A small delivery log might help me see whether reminders arrive, although I have not chosen what it should contain.",
+      "expectedChanged": true,
+      "targetSpan": "I assume the mail provider will deliver every message immediately",
+      "changeDescription": "Changes the delivery timing assumption."
+    },
+    {
+      "noteId": "n06",
+      "editedText": "I have decided to charge a simple monthly amount with no separate setup charge. I think most customers will keep paying even if they only use the tool once a month. The tool helps organise occasional inspections, so there may be long quiet periods between uses. I have not decided whether a pay-per-use option would be better than a subscription. I would rather test a clear offer than build a complicated billing screen before anyone signs up. I can present both offers as a short written outline to a few potential customers and ask what they would do in a quiet month.",
+      "expectedChanged": false,
+      "targetSpan": "I think most customers will keep paying even if they only use the tool once a month",
+      "changeDescription": "Keeps the retention assumption and pricing decisions unchanged; changes only how offers are presented."
+    },
+    {
+      "noteId": "n09",
+      "editedText": "For launch, I will put a sign-up form on a short landing page and invite ten people from a small forum. I may sketch what they struggle with. I expect ten forum invitations to produce at least five trial users. I do not know whether that community permits invitations. It may be better to talk to members about the problem first. A short form might feel less demanding before the prototype exists. If invitations seem intrusive, I could write a short explanation and ask a moderator for feedback.",
+      "expectedChanged": false,
+      "targetSpan": "I expect ten forum invitations to produce at least five trial users",
+      "changeDescription": "Keeps the invitation assumption and launch decisions unchanged; changes an optional observation method."
+    },
+    {
+      "noteId": "n11",
+      "editedText": "My draft integration asks the external calendar service for the whole schedule every minute. I believe that polling rate is permitted for each account. At launch there may only be a few accounts, but every person could connect more than one calendar. I do not know whether the provider offers change notifications or a way to fetch only entries that changed. I should also make the last successful sync visible when a connection is interrupted. A brief test with invented events could reveal how the sync behaves when a connection is interrupted and later restored. The sample schedule contains all-day entries as well as short appointments. Time zones and daylight-saving changes could affect how an event appears on screen even if the external service stores it correctly. For discussion I can create a small set of imaginary events that cross midnight and inspect the resulting display. A visible sync time would help users distinguish an outdated view from an empty schedule without requiring them to understand the integration.",
+      "expectedChanged": false,
+      "targetSpan": "I think its API will allow that polling rate for each account",
+      "changeDescription": "Rewords the polling-rate assumption without changing its meaning."
+    }
+  ]
+}

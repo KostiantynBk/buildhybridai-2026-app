@@ -85,8 +85,10 @@ describe('configuration', () => {
     };
     expect(readConfig(env) !== null).toBe(allowed);
     expect(
-      readConfig({ ...env, VITE_RECAPTCHA_ENTERPRISE_SITE_KEY: 'YOUR_RECAPTCHA_ENTERPRISE_SITE_KEY' }) !==
-        null,
+      readConfig({
+        ...env,
+        VITE_RECAPTCHA_ENTERPRISE_SITE_KEY: 'YOUR_RECAPTCHA_ENTERPRISE_SITE_KEY',
+      }) !== null,
     ).toBe(allowed);
   });
   it('only enables debug when development and explicitly requested', () => {
@@ -147,7 +149,10 @@ describe('readiness and local inference', () => {
     await f.service.prepare();
     expect(f.service.state.kind).toBe('ready');
     expect(f.service.warmLatencyMs).toBe(0);
-    expect(await f.service.runLocal(task)).toMatchObject({ data: { ready: true }, source: 'on_device' });
+    expect(await f.service.runLocal(task)).toMatchObject({
+      data: { ready: true },
+      source: 'on_device',
+    });
   });
   it('rejects inference before readiness', async () => {
     const f = fixture();
@@ -324,6 +329,20 @@ describe('readiness and local inference', () => {
     f.setForeground(true);
     await preparation;
     expect(f.generate).toHaveBeenCalledTimes(1);
+  });
+  it('does not dispatch a cancelled job after the tab returns to the foreground', async () => {
+    const f = fixture();
+    await f.service.probe();
+    await f.service.prepare();
+    f.generate.mockClear();
+    f.setForeground(false);
+    const controller = new AbortController();
+    const job = f.service.runLocal({ ...task, signal: controller.signal });
+    await Promise.resolve();
+    controller.abort();
+    f.setForeground(true);
+    await expect(job).rejects.toMatchObject({ code: 'cancelled' });
+    expect(f.generate).not.toHaveBeenCalled();
   });
   it('serializes jobs in FIFO order and waits while hidden', async () => {
     const f = fixture();

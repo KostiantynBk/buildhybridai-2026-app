@@ -1,8 +1,12 @@
 import { initializeApp } from 'firebase/app';
-import { CustomProvider, initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check';
+import {
+  CustomProvider,
+  initializeAppCheck,
+  ReCaptchaEnterpriseProvider,
+} from 'firebase/app-check';
 import { getAI, getGenerativeModel, GoogleAIBackend, InferenceMode } from 'firebase/ai';
 import type { AppConfig } from '../config';
-import { languageOptions, LocalError, type Model } from './localModel';
+import { languageOptions, LocalError, type Model, type PromptContext } from './localModel';
 
 export type CloudPlaceholder = { status: 'not-implemented' };
 export const cloud: CloudPlaceholder = { status: 'not-implemented' };
@@ -29,8 +33,9 @@ export function makeFirebaseModel(config: AppConfig): Model {
       'thoughtpartner',
     );
     if (config.dev && config.debug) {
-      (self as typeof self & { FIREBASE_APPCHECK_DEBUG_TOKEN?: boolean }).FIREBASE_APPCHECK_DEBUG_TOKEN =
-        true;
+      (
+        self as typeof self & { FIREBASE_APPCHECK_DEBUG_TOKEN?: boolean }
+      ).FIREBASE_APPCHECK_DEBUG_TOKEN = true;
     }
     const provider =
       config.dev && config.debug
@@ -44,16 +49,35 @@ export function makeFirebaseModel(config: AppConfig): Model {
     instance = getAI(app, { backend: new GoogleAIBackend() });
   }
   const ai = instance;
-  function local(schema: object) {
+  function local(schema: object, instructions?: PromptContext) {
     if (!browserApi()) {
       throw new LocalError('unsupported', 'The local model API is unavailable.');
     }
-    const key = JSON.stringify(schema);
+    const key = JSON.stringify({ schema, instructions });
     let model = models.get(key);
     if (!model) {
+      const initialPrompts = instructions
+        ? [
+            {
+              role: 'system' as const,
+              content: [{ type: 'text' as const, value: instructions.system }],
+            },
+            {
+              role: 'user' as const,
+              content: [{ type: 'text' as const, value: instructions.exampleInput }],
+            },
+            {
+              role: 'assistant' as const,
+              content: [{ type: 'text' as const, value: instructions.exampleOutput }],
+            },
+          ]
+        : undefined;
       model = getGenerativeModel(ai, {
         mode: InferenceMode.ONLY_ON_DEVICE,
-        onDeviceParams: { createOptions: languageOptions, promptOptions: { responseConstraint: schema } },
+        onDeviceParams: {
+          createOptions: { ...languageOptions, initialPrompts },
+          promptOptions: { responseConstraint: schema },
+        },
       });
       models.set(key, model);
     }
@@ -64,8 +88,8 @@ export function makeFirebaseModel(config: AppConfig): Model {
       const emptySchema = { type: 'object', properties: {} };
       await local(emptySchema).initializeDeviceModel(progress);
     },
-    async generate(prompt, schema) {
-      const model = local(schema);
+    async generate(prompt, schema, instructions) {
+      const model = local(schema, instructions);
       // Recheck immediately before the SDK call; no preferred/cloud route exists here.
       if (!browserApi()) {
         throw new LocalError('unsupported', 'The local model API is unavailable.');

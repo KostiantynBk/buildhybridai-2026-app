@@ -14,24 +14,40 @@ export type FaultCode =
   | 'not-ready'
   | 'privacy-fault'
   | 'invalid-output'
-  | 'device-error';
+  | 'device-error'
+  | 'cancelled';
 export class LocalError extends Error {
   constructor(
     public readonly code: FaultCode,
     message: string,
+    public readonly diagnostics?: { source: string; latencyMs: number },
   ) {
     super(message);
     this.name = 'LocalError';
   }
 }
+export interface PromptContext {
+  system: string;
+  exampleInput: string;
+  exampleOutput: string;
+}
 export interface Job<T> {
   prompt: string;
   schema: object;
+  instructions?: PromptContext;
+  signal?: AbortSignal;
   validate?: (value: unknown) => value is T;
 }
 export interface Model {
   prepare(progress: (value: number) => void): Promise<void>;
-  generate(prompt: string, schema: object): Promise<{ source?: string; text: () => string }>;
+  generate(
+    prompt: string,
+    schema: object,
+    instructions?: PromptContext,
+  ): Promise<{
+    source?: string;
+    text: () => string;
+  }>;
 }
 export interface Dependencies {
   configured: boolean;
@@ -178,14 +194,22 @@ export class LocalModelService {
       throw new LocalError('device-error', 'Model preparation failed.');
     }
   }
-  async runLocal<T>(job: Job<T>): Promise<{ data: T; latencyMs: number; source: string }> {
+  async runLocal<T>(
+    job: Job<T>,
+  ): Promise<{ data: T; latencyMs: number; source: string; raw: string }> {
     this.guardConfigAndApi();
+    if (job.signal?.aborted) {
+      throw new LocalError('cancelled', 'Local job cancelled before dispatch.');
+    }
     if (this.state.kind !== 'ready') {
       throw new LocalError('not-ready', 'Prepare the local model first.');
     }
     return this.enqueue(async () => {
       while (!this.deps.isForeground()) {
         await this.waitForeground();
+      }
+      if (job.signal?.aborted) {
+        throw new LocalError('cancelled', 'Local job cancelled before dispatch.');
       }
       if (this.state.kind !== 'ready') {
         throw new LocalError('not-ready', 'The local model is not ready.');
@@ -199,34 +223,48 @@ export class LocalModelService {
           throw error;
         }
         await this.probe();
-        throw new LocalError('device-error', 'Local model request failed.');
+        throw new LocalError(
+          'device-error',
+          'Local model request failed.',
+          error instanceof LocalError ? error.diagnostics : undefined,
+        );
       }
     });
   }
   private async execute<T>(
     model: Model,
     job: Job<T>,
-  ): Promise<{ data: T; latencyMs: number; source: string }> {
+  ): Promise<{ data: T; latencyMs: number; source: string; raw: string }> {
     this.guardConfigAndApi();
     const start = this.deps.now();
-    const response = await model.generate(job.prompt, job.schema);
+    const response = await model.generate(job.prompt, job.schema, job.instructions);
     const latencyMs = this.deps.now() - start;
     if (response.source !== 'on_device') {
       this.privacyFaults++;
       this.listeners.forEach((listener) => listener());
-      throw new LocalError('privacy-fault', 'Local inference source was not verified; output discarded.');
+      throw new LocalError(
+        'privacy-fault',
+        'Local inference source was not verified; output discarded.',
+        { source: response.source ?? 'not reported', latencyMs },
+      );
     }
     let text: string;
     try {
       text = response.text();
     } catch {
-      throw new LocalError('device-error', 'Local model response failed.');
+      throw new LocalError('device-error', 'Local model response failed.', {
+        source: response.source,
+        latencyMs,
+      });
     }
     let data: unknown;
     try {
       data = JSON.parse(text);
     } catch {
-      throw new LocalError('invalid-output', 'Local output was not valid JSON.');
+      throw new LocalError('invalid-output', 'Local output was not valid JSON.', {
+        source: response.source,
+        latencyMs,
+      });
     }
     let valid = false;
     try {
@@ -235,8 +273,11 @@ export class LocalModelService {
       valid = false;
     }
     if (!valid) {
-      throw new LocalError('invalid-output', 'Local output did not match its schema.');
+      throw new LocalError('invalid-output', 'Local output did not match its schema.', {
+        source: response.source,
+        latencyMs,
+      });
     }
-    return { data: data as T, latencyMs, source: response.source };
+    return { data: data as T, latencyMs, source: response.source, raw: text };
   }
 }

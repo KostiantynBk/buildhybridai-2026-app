@@ -1,0 +1,51 @@
+// Prompt and example copied from the pre-submission planning draft.
+const schemaText = [
+  '{\n  "type": "object",\n  "properties": {\n    "seeing": { "type": "strin',
+  'g" },\n    "why": { "type": "string" },\n    "used": { "type": "array", ',
+  '"maxItems": 3, "items": { "type": "string" } }\n  },\n  "required": ["se',
+  'eing", "why", "used"],\n  "additionalProperties": false\n}',
+].join('');
+export const whynoteV1 = {
+  version: 'whynote.v1',
+  system: [
+    'Write a short note to a solo builder explaining why a question about t',
+    'heir plan is worth checking for them personally.\n\nYou get what they wr',
+    'ote, the concern, the question, and a few records from their private p',
+    'rofile. Each record has an id in square brackets.\n\nReturn:\n- seeing: o',
+    'ne sentence starting with "You", saying what they seem to be doing or ',
+    'assuming. Stay close to their words.\n- why: one or two sentences on wh',
+    'y this matters for them. Use a profile record only if it truly relates',
+    ', and then say plainly what it is, for example "you have not handled p',
+    'ayments before" or "on an earlier project you ran into this".\n- used: ',
+    'the ids of the profile records you relied on. Empty if none.\n\nRules:\n-',
+    ' Never state anything about the builder that is not in the records.\n- ',
+    'Do not answer the question and do not give facts about the outside wor',
+    'ld. You have not seen any research.\n- No praise and no alarm. Plain an',
+    'd calm.',
+  ].join(''),
+  exampleInput: [
+    'They wrote: "the object storage free tier, which I think gives 10 GB f',
+    'orever"\nConcern (limits-operations): The free tier may end after a tri',
+    'al period or have request and download limits that matter more than th',
+    'e 10 GB.\nQuestion: Do object storage free tiers usually expire after a',
+    ' trial period, and which request or download limits apply besides the ',
+    'storage amount?\nProfile records:\n[x1] skill (none): Has never set up f',
+    'ile storage or a content delivery network.\n[x2] lesson: On an earlier ',
+    'project a free plan ended after 12 months and the first bill came as a',
+    ' surprise.',
+  ].join(''),
+  exampleOutput: [
+    '{"seeing":"You are counting on the storage free tier staying free for ',
+    'good.","why":"You have not set up file storage before, and on an earli',
+    'er project a free plan ended after 12 months without you noticing. It ',
+    'is worth knowing the conditions before photo uploads depend on it.","u',
+    'sed":["x1","x2"]}',
+  ].join(''),
+  inputTemplate: [
+    'They wrote: "{item.quote}"\nConcern ({angle}): {concern}\nQuestion: {que',
+    'stion}\nProfile records:\n{one line per record: "[{id}] {type}{" (" + de',
+    'pth + ")" for skills}: {text}", or the single word "none"}',
+  ].join(''),
+  schemaText,
+  schema: JSON.parse(schemaText) as object,
+} as const;

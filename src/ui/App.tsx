@@ -7,8 +7,8 @@ import { Notices } from './Notices';
 import { PlaceholderPage } from './PlaceholderPage';
 import { StatusBar } from './StatusBar';
 
-const config = readConfig(import.meta.env);
-function createService() {
+export const config = readConfig(import.meta.env);
+export function createService() {
   return new LocalModelService({
     configured: config !== null,
     hasApi: () => typeof browserApi()?.availability === 'function',

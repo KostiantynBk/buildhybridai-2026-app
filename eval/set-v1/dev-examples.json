@@ -1,0 +1,47 @@
+{
+  "version": "dev-examples-v1",
+  "note": "Practice notes for Run 0 (the prompt playground). Invented. They are NOT part of the scored test set (eval/set-v1) and no scored note may reuse their text. The expected values are a guide for a human reading the output, not an automatic score.",
+  "examples": [
+    {
+      "id": "d1",
+      "style": "tidy",
+      "title": "Login",
+      "text": "Sign-in will be magic links only, no passwords. The email service I picked has a free plan with 100 emails a day, which is plenty since I expect about 30 sign-ins daily at launch. Sessions last 30 days.",
+      "expected": [
+        { "kind": "decision", "span": "Sign-in will be magic links only, no passwords", "topics": ["auth"] },
+        { "kind": "assumption", "span": "has a free plan with 100 emails a day", "topics": ["messaging", "pricing"] },
+        { "kind": "assumption", "span": "I expect about 30 sign-ins daily at launch", "topics": ["auth", "analytics"] }
+      ],
+      "blindSpots": [
+        { "angle": "limits-operations", "description": "magic links depend on email arriving quickly; delivery delays or spam filtering lock users out", "questionKeywords": ["magic link", "deliverability", "delay"] },
+        { "angle": "cost-at-scale", "description": "each sign-in costs one email, so the daily cap is also a sign-in cap", "questionKeywords": ["free plan", "daily limit", "email"] }
+      ],
+      "privateTokens": []
+    },
+    {
+      "id": "d2",
+      "style": "messy, with private details",
+      "title": "Pilot with first client",
+      "text": "ok so Brightmolar Clinic (Ines runs it) agreed to pilot for €250/mo. need SMS reminders - assume twilio or whatever is like 1 cent per text?? 3 reminders per appointment, ~600 appts a month. host on the cheapest VPS, I can move later if it gets slow",
+      "expected": [
+        { "kind": "assumption", "span": "assume twilio or whatever is like 1 cent per text", "topics": ["messaging", "pricing"] },
+        { "kind": "decision", "span": "host on the cheapest VPS", "topics": ["hosting"] },
+        { "kind": "assumption", "span": "I can move later if it gets slow", "topics": ["hosting"] }
+      ],
+      "blindSpots": [
+        { "angle": "cost-at-scale", "description": "SMS price per message varies by country and is often several cents; 1,800 messages a month may take a large share of the fee", "questionKeywords": ["SMS", "price per message", "cost"] },
+        { "angle": "security-privacy", "description": "appointment reminders for a clinic are health-related personal data", "questionKeywords": ["health data", "SMS", "privacy"] }
+      ],
+      "privateTokens": ["Brightmolar", "Ines", "€250", "250"]
+    },
+    {
+      "id": "d3",
+      "style": "pure brainstorm (tests restraint)",
+      "title": "Name and look",
+      "text": "Name ideas: Slotwise, Bookbird, Remindly. Kind of like the bird one. Could do a mascot. Colours - teal? Something calm. Think about a landing page vibe later.",
+      "expected": [],
+      "blindSpots": [],
+      "privateTokens": []
+    }
+  ]
+}

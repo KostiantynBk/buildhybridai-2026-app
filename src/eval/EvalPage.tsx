@@ -1,0 +1,266 @@
+import { useEffect, useMemo, useState } from 'react';
+import { config, createService, useForeground } from '../ui/App';
+import { Notices } from '../ui/Notices';
+import { StatusBar } from '../ui/StatusBar';
+import {
+  examples,
+  practiceInput,
+  prompts,
+  sizeInCharacters,
+  type ProfileId,
+  type PromptName,
+} from './playground';
+import {
+  firstEvaluationAfterReload,
+  markEvaluationCall,
+  recordFirstEvaluation,
+  runEvaluation,
+  type Evaluation,
+  type RunMode,
+} from './runner';
+import { LocalError } from '../ai/localModel';
+import { canStartMeasuredRun, normalizeModelIdentity } from './modelIdentity';
+import { useRef } from 'react';
+
+export default function EvalPage() {
+  const service = useMemo(createService, []);
+  const [, redraw] = useState(0);
+  const [prompt, setPrompt] = useState<PromptName>('extract');
+  const [example, setExample] = useState(examples[0].id);
+  const [profile, setProfile] = useState<ProfileId>('A');
+  const [input, setInput] = useState(() => practiceInput('extract', examples[0].id, 'A'));
+  const [result, setResult] = useState('');
+  const [running, setRunning] = useState(false);
+  const [runs, setRuns] = useState<Evaluation[]>([]);
+  const [progress, setProgress] = useState('');
+  const [modelIdentity, setModelIdentity] = useState('');
+  const controller = useRef<AbortController | null>(null);
+  const foreground = useForeground();
+  const measuredRunEnabled = canStartMeasuredRun({
+    configured: config !== null,
+    ready: service.state.kind === 'ready',
+    running,
+    foreground,
+    model: modelIdentity,
+  });
+  useEffect(() => {
+    const unsubscribe = service.subscribe(() => redraw((n) => n + 1));
+    void service.probe();
+    return unsubscribe;
+  }, [service]);
+  function select(nextPrompt: PromptName, nextExample: string, nextProfile: ProfileId) {
+    setPrompt(nextPrompt);
+    setExample(nextExample);
+    setProfile(nextProfile);
+    setInput(practiceInput(nextPrompt, nextExample, nextProfile));
+  }
+  async function run() {
+    setRunning(true);
+    setResult('Running locally…');
+    const firstEvaluationAttemptAfterReload = markEvaluationCall();
+    try {
+      const definition = prompts[prompt];
+      const output = await service.runLocal<unknown>({
+        prompt: input,
+        schema: definition.schema,
+        instructions: definition,
+      });
+      recordFirstEvaluation(firstEvaluationAttemptAfterReload, {
+        latencyMs: output.latencyMs,
+        source: output.source,
+        error: null,
+      });
+      setResult(
+        JSON.stringify(
+          {
+            rawJson: output.raw,
+            latencyMs: output.latencyMs,
+            source: output.source,
+            inputSize: sizeInCharacters(prompt, input),
+            unit: 'characters',
+            firstEvaluationAttemptAfterReload,
+          },
+          null,
+          2,
+        ),
+      );
+    } catch (error) {
+      recordFirstEvaluation(firstEvaluationAttemptAfterReload, {
+        latencyMs: error instanceof LocalError ? (error.diagnostics?.latencyMs ?? null) : null,
+        source: error instanceof LocalError ? (error.diagnostics?.source ?? null) : null,
+        error: error instanceof LocalError ? error.code : 'local-call-failed',
+      });
+      setResult(error instanceof Error ? `${error.name}: ${error.message}` : 'Local call failed.');
+    } finally {
+      setRunning(false);
+    }
+  }
+  async function startEvaluation(mode: RunMode) {
+    if (!measuredRunEnabled) return;
+    const current = new AbortController();
+    controller.current = current;
+    setRunning(true);
+    setProgress(`Starting ${mode}…`);
+    let latest: Evaluation | null = null;
+    try {
+      const complete = await runEvaluation({
+        mode,
+        runner: (job) => service.runLocal(job),
+        warmupLatencyMs: service.warmLatencyMs,
+        onDeviceModel: normalizeModelIdentity(modelIdentity),
+        signal: current.signal,
+        onUpdate: (evaluation) => {
+          latest = evaluation;
+          setProgress(
+            `${mode}: ${evaluation.rows.length}/${evaluation.total}` +
+              (evaluation.reason ? ` — ${evaluation.reason}` : ''),
+          );
+        },
+      });
+      setRuns((previous) => [...previous, complete]);
+    } catch {
+      if (latest) setRuns((previous) => [...previous, latest!]);
+      setProgress('Run stopped unexpectedly. Collected rows are retained if available.');
+    } finally {
+      controller.current = null;
+      setRunning(false);
+    }
+  }
+  function download() {
+    const file = new Blob(
+      [
+        JSON.stringify(
+          {
+            exportedAt: new Date().toISOString(),
+            firstEvaluationAfterReload: firstEvaluationAfterReload(),
+            runs,
+          },
+          null,
+          2,
+        ),
+      ],
+      { type: 'application/json' },
+    );
+    const url = URL.createObjectURL(file);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'thoughtpartner-evaluation.json';
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+  return (
+    <div className="app">
+      <header className="header">
+        <div>
+          <div className="eyebrow">Development only</div>
+          <h1>Evaluation playground</h1>
+        </div>
+        <a href="/">Back to notebook</a>
+      </header>
+      <Notices configured={config !== null} state={service.state} />
+      <main>
+        <section className="panel">
+          <h2>Run 0 · practice prompts</h2>
+          <p>Practice only; never scored. Output stays on this device.</p>
+          <label>
+            Prompt{' '}
+            <select
+              value={prompt}
+              onChange={(e) => select(e.target.value as PromptName, example, profile)}
+            >
+              {Object.keys(prompts).map((name) => (
+                <option key={name} value={name}>
+                  {name}.v1
+                </option>
+              ))}
+            </select>
+          </label>{' '}
+          <label>
+            Practice note{' '}
+            <select value={example} onChange={(e) => select(prompt, e.target.value, profile)}>
+              {examples.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.id}: {item.title}
+                </option>
+              ))}
+            </select>
+          </label>{' '}
+          <label>
+            Profile{' '}
+            <select
+              value={profile}
+              onChange={(e) => select(prompt, example, e.target.value as ProfileId)}
+            >
+              <option value="A">A</option>
+              <option value="B">B</option>
+            </select>
+          </label>
+          <p>
+            Input can be edited. Size: {sizeInCharacters(prompt, input)} characters, including fixed
+            context and schema.
+          </p>
+          <textarea
+            aria-label="Prompt input"
+            style={{ minHeight: 180 }}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+          />
+          <p>
+            <button
+              disabled={!config || service.state.kind !== 'ready' || running || !foreground}
+              onClick={run}
+            >
+              Run local practice
+            </button>
+          </p>
+          <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{result}</pre>
+        </section>
+        <section className="panel" style={{ marginTop: 24 }}>
+          <h2>Run 1 · scored extraction</h2>
+          <p>20 invented notes, three repeats, two seconds between calls. Keep this tab visible.</p>
+          <label htmlFor="model-identity">
+            On-device model (as read from chrome://on-device-internals → Broker State)
+          </label>
+          <input
+            id="model-identity"
+            type="text"
+            maxLength={200}
+            required
+            value={modelIdentity}
+            disabled={running || runs.length > 0}
+            onChange={(event) => setModelIdentity(event.target.value)}
+            placeholder="Component name and version"
+          />
+          <p>Self-reported, not verified by the API. Export and reload for a different model.</p>
+          <button disabled={!measuredRunEnabled} onClick={() => void startEvaluation('run1')}>
+            Start Run 1
+          </button>{' '}
+          <button disabled={!measuredRunEnabled} onClick={() => void startEvaluation('latency')}>
+            Start latency gate and curve
+          </button>{' '}
+          <button
+            disabled={!running || !controller.current}
+            onClick={() => controller.current?.abort()}
+          >
+            Cancel run
+          </button>{' '}
+          <button disabled={runs.length === 0} onClick={download}>
+            Export JSON
+          </button>
+          <p aria-live="polite">{progress}</p>
+          {runs.map((run, index) => (
+            <div key={index}>
+              <h3>
+                {run.mode}: {run.complete ? 'complete' : 'incomplete'}
+              </h3>
+              <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+                {JSON.stringify({ reason: run.reason, summary: run.summary }, null, 2)}
+              </pre>
+            </div>
+          ))}
+        </section>
+      </main>
+      <StatusBar service={service} configured={config !== null} foreground={foreground} />
+    </div>
+  );
+}
