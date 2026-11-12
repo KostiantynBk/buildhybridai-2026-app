@@ -1,6 +1,7 @@
 import { SDK_VERSION } from 'firebase/app';
 import notesFile from '../../eval/set-v1/notes.json';
 import { LocalError } from '../ai/localModel';
+import { hiddenNow, safeErrorName } from '../ai/errorMetadata';
 import {
   extract,
   extractInput,
@@ -29,6 +30,11 @@ export type EvaluationRow = {
   droppedBadQuotes: number;
   droppedDuplicates: number;
   error: string | null;
+  errorName: string | null;
+  errorClass: string | null;
+  availabilityAfter: string | null;
+  elapsedMs: number | null;
+  hidden: boolean | null;
   wordCount: number;
   sampleKind: 'run1' | 'first-evaluation' | 'gate' | 'curve';
   firstEvaluationAttemptAfterReload: boolean;
@@ -251,6 +257,11 @@ export async function runEvaluation(options: {
       droppedBadQuotes: 0,
       droppedDuplicates: 0,
       error: null,
+      errorName: null,
+      errorClass: null,
+      availabilityAfter: null,
+      elapsedMs: null,
+      hidden: null,
       wordCount: entry.note.text.trim().split(/\s+/).length,
       sampleKind: entry.sampleKind,
       firstEvaluationAttemptAfterReload: first,
@@ -270,9 +281,18 @@ export async function runEvaluation(options: {
       });
     } catch (error) {
       row.error = error instanceof LocalError ? error.code : 'local-call-failed';
+      row.errorClass = row.error;
+      row.errorName =
+        error instanceof LocalError
+          ? (error.diagnostics?.errorName ?? safeErrorName(error))
+          : safeErrorName(error);
+      row.hidden =
+        error instanceof LocalError ? (error.diagnostics?.hidden ?? hiddenNow()) : hiddenNow();
       if (error instanceof LocalError && error.diagnostics) {
-        row.source = error.diagnostics.source;
-        row.latencyMs = error.diagnostics.latencyMs;
+        row.source = error.diagnostics.source ?? null;
+        row.latencyMs = error.diagnostics.latencyMs ?? null;
+        row.availabilityAfter = error.diagnostics.availabilityAfter ?? null;
+        row.elapsedMs = error.diagnostics.elapsedMs ?? null;
       }
       if (row.error === 'cancelled') evaluation.reason = 'Cancelled by user.';
       else if (row.error !== 'invalid-output') evaluation.reason = `Stopped: ${row.error}.`;

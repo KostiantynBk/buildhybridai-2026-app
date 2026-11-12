@@ -19,6 +19,8 @@ import {
   type RunMode,
 } from './runner';
 import { LocalError } from '../ai/localModel';
+import { hiddenNow, safeErrorName } from '../ai/errorMetadata';
+import { formatFailureStatus } from './failureStatus';
 import { canStartMeasuredRun, normalizeModelIdentity } from './modelIdentity';
 import { useRef } from 'react';
 
@@ -90,7 +92,20 @@ export default function EvalPage() {
         source: error instanceof LocalError ? (error.diagnostics?.source ?? null) : null,
         error: error instanceof LocalError ? error.code : 'local-call-failed',
       });
-      setResult(error instanceof Error ? `${error.name}: ${error.message}` : 'Local call failed.');
+      setResult(
+        formatFailureStatus({
+          errorName:
+            error instanceof LocalError
+              ? (error.diagnostics?.errorName ?? safeErrorName(error))
+              : safeErrorName(error),
+          errorClass: error instanceof LocalError ? error.code : 'local-call-failed',
+          availabilityAfter:
+            error instanceof LocalError ? (error.diagnostics?.availabilityAfter ?? null) : null,
+          elapsedMs: error instanceof LocalError ? (error.diagnostics?.elapsedMs ?? null) : null,
+          hidden:
+            error instanceof LocalError ? (error.diagnostics?.hidden ?? hiddenNow()) : hiddenNow(),
+        }),
+      );
     } finally {
       setRunning(false);
     }
@@ -111,10 +126,9 @@ export default function EvalPage() {
         signal: current.signal,
         onUpdate: (evaluation) => {
           latest = evaluation;
-          setProgress(
-            `${mode}: ${evaluation.rows.length}/${evaluation.total}` +
-              (evaluation.reason ? ` — ${evaluation.reason}` : ''),
-          );
+          const last = evaluation.rows.at(-1);
+          const detail = last?.error ? ` — ${formatFailureStatus(last)}` : '';
+          setProgress(`${mode}: ${evaluation.rows.length}/${evaluation.total}${detail}`);
         },
       });
       setRuns((previous) => [...previous, complete]);

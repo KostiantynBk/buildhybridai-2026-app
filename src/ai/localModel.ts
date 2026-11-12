@@ -1,4 +1,5 @@
 import Ajv from 'ajv';
+import { hiddenNow, safeAvailability, safeErrorName } from './errorMetadata';
 
 export const languageOptions = {
   expectedInputs: [{ type: 'text' as const, languages: ['en'] }],
@@ -16,11 +17,19 @@ export type FaultCode =
   | 'invalid-output'
   | 'device-error'
   | 'cancelled';
+export interface ErrorDiagnostics {
+  source?: string;
+  latencyMs?: number;
+  errorName?: string;
+  availabilityAfter?: string | null;
+  elapsedMs?: number | null;
+  hidden?: boolean | null;
+}
 export class LocalError extends Error {
   constructor(
     public readonly code: FaultCode,
     message: string,
-    public readonly diagnostics?: { source: string; latencyMs: number },
+    public readonly diagnostics?: ErrorDiagnostics,
   ) {
     super(message);
     this.name = 'LocalError';
@@ -57,6 +66,7 @@ export interface Dependencies {
   isForeground(): boolean;
   onForeground(callback: () => void): () => void;
   now(): number;
+  isHidden?(): boolean;
 }
 const warmSchema = {
   type: 'object',
@@ -215,19 +225,32 @@ export class LocalModelService {
         throw new LocalError('not-ready', 'The local model is not ready.');
       }
       this.guardConfigAndApi();
+      const dispatchStart = this.deps.now();
       try {
         const model = this.deps.createModel();
         return await this.execute<T>(model, job);
       } catch (error) {
+        const elapsedMs = Math.max(0, this.deps.now() - dispatchStart);
+        const hidden = this.deps.isHidden ? this.deps.isHidden() : hiddenNow();
+        const previous = error instanceof LocalError ? error.diagnostics : undefined;
+        const errorName = previous?.errorName ?? safeErrorName(error);
         if (error instanceof LocalError && error.code !== 'device-error') {
-          throw error;
+          throw new LocalError(error.code, error.message, {
+            ...previous,
+            errorName,
+            availabilityAfter: null,
+            elapsedMs,
+            hidden,
+          });
         }
         await this.probe();
-        throw new LocalError(
-          'device-error',
-          'Local model request failed.',
-          error instanceof LocalError ? error.diagnostics : undefined,
-        );
+        throw new LocalError('device-error', 'Local model request failed.', {
+          ...previous,
+          errorName,
+          availabilityAfter: safeAvailability(this.browserAvailability),
+          elapsedMs,
+          hidden,
+        });
       }
     });
   }
@@ -251,19 +274,22 @@ export class LocalModelService {
     let text: string;
     try {
       text = response.text();
-    } catch {
+    } catch (error) {
       throw new LocalError('device-error', 'Local model response failed.', {
         source: response.source,
         latencyMs,
+        errorName: safeErrorName(error),
+        hidden: this.deps.isHidden ? this.deps.isHidden() : hiddenNow(),
       });
     }
     let data: unknown;
     try {
       data = JSON.parse(text);
-    } catch {
+    } catch (error) {
       throw new LocalError('invalid-output', 'Local output was not valid JSON.', {
         source: response.source,
         latencyMs,
+        errorName: safeErrorName(error),
       });
     }
     let valid = false;
