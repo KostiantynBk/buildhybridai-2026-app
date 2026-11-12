@@ -177,6 +177,9 @@ describe('versioned synthetic set', () => {
     expect(
       notesFile.notes.filter((note) => note.privateTokens.length > 0).length,
     ).toBeGreaterThanOrEqual(8);
+    const allLabels = notesFile.notes.flatMap((note) => note.expected);
+    expect(allLabels).toHaveLength(51);
+    expect(allLabels.filter((item) => item.kind === 'decision')).toHaveLength(20);
     const kinds = ['assumption', 'decision', 'constraint', 'open-question'];
     for (const kind of kinds) {
       expect(
@@ -203,6 +206,10 @@ describe('versioned synthetic set', () => {
     }
     expect(changesFile.changes.filter((change) => change.expectedChanged)).toHaveLength(3);
     expect(new Set(changesFile.changes.map((change) => change.noteId)).size).toBe(6);
+    const n04 = notesFile.notes.find((note) => note.id === 'n04')!;
+    const n04Decision = n04.expected.find((item) => item.kind === 'decision')!;
+    const n04Change = changesFile.changes.find((change) => change.noteId === 'n04')!;
+    expect(n04Change.editedText).toContain(n04Decision.span);
     for (const change of changesFile.changes) {
       expect(ids).toContain(change.noteId);
       const original = notesFile.notes.find((note) => note.id === change.noteId)!;
@@ -215,5 +222,46 @@ describe('versioned synthetic set', () => {
         expect(change.editedText).not.toContain(change.targetSpan);
       }
     }
+  });
+
+  it('audits want, wants, wanted and rather intent with explicit exemptions', () => {
+    const exemptions: Record<string, string> = {
+      'n01:I want to keep the first setup simple while I learn how people browse.': 'Vague aim',
+      ['n01:I want the trial to include both first-time visitors ' +
+      'and someone who already knows what they are looking for.']: 'Trial design',
+      ['n02:Before inviting more helpers I want to walk through account removal ' +
+      'and document who needs to change a shared credential.']: 'Rehearsal',
+      ['n06:I would rather test a clear offer than build a complicated billing screen ' +
+      'before anyone signs up.']: 'Test preference',
+      'n20:I like the second direction but want to keep both on the board for now.': 'Brainstorm',
+    };
+    const intent = /\bwant(?:s|ed)?\b|\bwould\s+rather\b|['’]d\s+rather\b/i;
+    for (const phrase of ['want', 'wants', 'wanted', 'would rather', "I'd rather", "don't want"]) {
+      expect(intent.test(phrase)).toBe(true);
+    }
+    const seen = new Set<string>();
+    for (const note of notesFile.notes) {
+      const sentences = note.text.match(/[^.!?]+[.!?]*/g) ?? [];
+      for (const raw of sentences) {
+        const sentence = raw.trim();
+        if (!intent.test(sentence)) continue;
+        const key = `${note.id}:${sentence}`;
+        if (key in exemptions) {
+          expect(exemptions[key].length).toBeGreaterThan(0);
+          expect(note.expected.some((item) => sentence.includes(item.span))).toBe(false);
+          seen.add(key);
+        } else {
+          expect(
+            note.expected.some((item) => sentence.includes(item.span) && intent.test(item.span)),
+          ).toBe(true);
+        }
+      }
+    }
+    expect([...seen].sort()).toEqual(Object.keys(exemptions).sort());
+    expect(notesFile.notes.find((note) => note.id === 'n04')?.expected).toContainEqual({
+      kind: 'decision',
+      span: 'I do not want the person waiting on a spinning page while a separate service is busy',
+      topics: ['frontend', 'performance'],
+    });
   });
 });

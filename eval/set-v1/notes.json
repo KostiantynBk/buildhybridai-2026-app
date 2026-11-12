@@ -134,6 +134,14 @@
           "topics": [
             "messaging"
           ]
+        },
+        {
+          "kind": "decision",
+          "span": "I do not want the person waiting on a spinning page while a separate service is busy",
+          "topics": [
+            "frontend",
+            "performance"
+          ]
         }
       ],
       "blindSpots": [
@@ -260,6 +268,14 @@
           "topics": [
             "ai-api",
             "data-storage"
+          ]
+        },
+        {
+          "kind": "decision",
+          "span": "I also want a manual review screen for uncertain results",
+          "topics": [
+            "ai-api",
+            "frontend"
           ]
         }
       ],
@@ -571,6 +587,14 @@
             "backend",
             "support"
           ]
+        },
+        {
+          "kind": "decision",
+          "span": "I want a weekly report showing how many unfinished forms remain",
+          "topics": [
+            "analytics",
+            "backend"
+          ]
         }
       ],
       "blindSpots": [
@@ -605,6 +629,14 @@
           "topics": [
             "data-storage",
             "backend"
+          ]
+        },
+        {
+          "kind": "decision",
+          "span": "I want to show a preview before saving anything",
+          "topics": [
+            "frontend",
+            "data-storage"
           ]
         }
       ],
