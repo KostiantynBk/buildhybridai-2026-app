@@ -62,9 +62,10 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
               <p>{item.text}</p><blockquote>“{item.quote}”</blockquote>
               {head?.status === 'changed' && !head.needsConfirmation && head.paragraphVersion === paragraph.version &&
                 <p>Changed: was “{previous?.text ?? 'earlier statement'}”</p>}
-              {head?.needsConfirmation && <p>May have changed; please confirm.</p>}
-              {head?.needsConfirmation && head.newQuote && containsQuote(paragraph.text, head.newQuote) &&
-                <p>Now: “{head.newQuote}”</p>}
+              {head?.needsConfirmation && <p>{head.conflictingEvidence
+                ? 'May have changed or been removed; please check.' : 'May have changed; please confirm.'}</p>}
+              {head?.needsConfirmation && !head.conflictingEvidence && head.newQuote &&
+                containsQuote(paragraph.text, head.newQuote) && <p>Now: “{head.newQuote}”</p>}
               {head?.unchecked && <p>Change not checked; the earlier statement is retained.</p>}
             </article>;
           })}

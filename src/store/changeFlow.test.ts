@@ -342,7 +342,7 @@ it('does not attach the same merged successor to two changed lineages', async ()
   const snapshot = await store.snapshot();
   expect(snapshot.items.find(item => item.text === 'Combined')?.lineageId).toBe(first.lineageId);
   const uncertain = snapshot.lineages!.find(lineage => lineage.lineageId === second.lineageId && lineage.version === 2);
-  expect(uncertain).toMatchObject({ needsConfirmation: true, newQuote: q2 });
+  expect(uncertain).toMatchObject({ needsConfirmation: true, conflictingEvidence: false, newQuote: q2 });
   expect(snapshot.items.find(item => item.id === uncertain?.itemId)?.text).toBe('Ten pound budget');
   expect((await store.staleness('budget')).reasons[0].kind).toBe('needsConfirmation');
 });

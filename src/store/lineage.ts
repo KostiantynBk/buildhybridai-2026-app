@@ -43,3 +43,31 @@ export function matchSuccessors(paragraph: string, old: PriorLineage[], candidat
   }
   return assigned;
 }
+
+export function assignmentsWithConflicts(paragraph: string, old: PriorLineage[], candidates: StoredItem[],
+  decisions: Record<string, Decision>): { assignments: Map<string, string>; conflicts: Set<string> } {
+  const conflicts = new Set<string>();
+  const changed = old.flatMap(prior => {
+    const decision = decisions[prior.lineage.lineageId];
+    return decision?.status === 'changed' && decision.newQuoteFound
+      ? [{ id: prior.lineage.lineageId, quote: decision.newQuote }] : [];
+  });
+  for (const entry of changed) {
+    if (old.some(other => other.lineage.lineageId !== entry.id &&
+      overlaps(paragraph, entry.quote, comparisonBaseline(other).quote))) conflicts.add(entry.id);
+  }
+  for (let i = 0; i < changed.length; i++) {
+    for (let j = i + 1; j < changed.length; j++) {
+      if (overlaps(paragraph, changed[i].quote, changed[j].quote)) {
+        conflicts.add(changed[i].id);
+        conflicts.add(changed[j].id);
+      }
+    }
+  }
+  const eligible = { ...decisions };
+  for (const id of conflicts) {
+    const decision = eligible[id];
+    if (decision?.status === 'changed') eligible[id] = { ...decision, newQuoteFound: false };
+  }
+  return { assignments: matchSuccessors(paragraph, old, candidates, eligible), conflicts };
+}

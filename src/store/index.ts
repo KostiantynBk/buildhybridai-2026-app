@@ -3,7 +3,8 @@ import { matchParagraphs, type Paragraph } from './matcher';
 import { safeErrorName } from '../ai/errorMetadata';
 import { calculateStaleness } from './staleness';
 import { containsQuote, type Comparison } from '../pipeline/compare';
-import { comparisonBaseline, lineageHeads, matchSuccessors, type Decision, type PriorLineage } from './lineage';
+import { assignmentsWithConflicts, comparisonBaseline, lineageHeads, type Decision, type PriorLineage }
+  from './lineage';
 
 export type ProfileType = 'skill' | 'project' | 'lesson' | 'preference';
 export type Depth = 'new' | 'some' | 'deep';
@@ -18,7 +19,8 @@ export interface StoredItem {
 export interface LineageVersion {
   lineageId: string; version: number; itemId: string; paragraphId: string; paragraphVersion: number;
   status: 'current' | 'changed' | 'removed'; changedFrom?: string; needsConfirmation?: boolean;
-  unchecked?: boolean; uncheckedReason?: string; newQuote?: string; createdAt?: number; order?: number;
+  unchecked?: boolean; uncheckedReason?: string; newQuote?: string; conflictingEvidence?: boolean;
+  createdAt?: number; order?: number;
 }
 export interface Dependency { consumerId: string; lineageId: string; version: number }
 export interface StoredJob {
@@ -318,7 +320,8 @@ export class LocalStore {
         await tx.done; return false;
       }
       if (batch.old.some(entry => !batch.decisions[entry.lineage.lineageId])) { await tx.done; return false; }
-      const assignments = matchSuccessors(paragraph.text, batch.old, batch.items, batch.decisions);
+      const { assignments, conflicts } = assignmentsWithConflicts(paragraph.text, batch.old, batch.items,
+        batch.decisions);
       const used = new Set<string>();
       for (const { lineage, item } of batch.old) {
         const decision = batch.decisions[lineage.lineageId];
@@ -340,9 +343,12 @@ export class LocalStore {
           version: lineage.version + (changed ? 1 : 0), paragraphVersion: paragraph.version,
           status: changed ? 'changed' : 'current', changedFrom: changed ? item.id : lineage.changedFrom,
           needsConfirmation: changed ? Boolean(decision.needsConfirmation || !assigned ||
-            !containsQuote(paragraph.text, decision.newQuote)) : assigned ? false : lineage.needsConfirmation,
-          newQuote: changed ? (containsQuote(paragraph.text, decision.newQuote) ? decision.newQuote : undefined)
-            : lineage.newQuote,
+            conflicts.has(lineage.lineageId) || !containsQuote(paragraph.text, decision.newQuote))
+            : assigned ? false : lineage.needsConfirmation,
+          newQuote: changed && !conflicts.has(lineage.lineageId)
+            ? (containsQuote(paragraph.text, decision.newQuote) ? decision.newQuote : undefined) : lineage.newQuote,
+          conflictingEvidence: changed ? conflicts.has(lineage.lineageId)
+            : assigned ? false : lineage.conflictingEvidence,
           unchecked: decision.status === 'unchecked',
           uncheckedReason: decision.status === 'unchecked' ? decision.reason : undefined });
       }

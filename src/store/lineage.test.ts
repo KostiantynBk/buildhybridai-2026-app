@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
-import { comparisonBaseline, matchSuccessors, type Decision, type PriorLineage } from './lineage';
+import { assignmentsWithConflicts, comparisonBaseline, matchSuccessors, type Decision, type PriorLineage }
+  from './lineage';
 import type { StoredItem } from './index';
 const item = (id: string, quote: string, kind = 'assumption'): StoredItem => ({ id, quote, kind, text: id,
   topics: ['other'], paragraphId: 'p', paragraphVersion: 1, status: 'current', promptVersion: 'extract.v2',
@@ -37,6 +38,34 @@ it('never reads an obsolete display quote when verified head evidence exists', (
   const present = 'Here are new verified evidence in the paragraph';
   expect([...matchSuccessors(present, [prior], [item('right', 'new verified evidence')], { a: unchanged })])
     .toEqual([['a', 'right']]);
+});
+it('marks every lineage with contested changed evidence, regardless of extracted items', () => {
+  const paragraph = 'The combined plan is operational.';
+  const previous = [old('owner', 'The older hosting method'), old('other', 'The earlier payment method')];
+  const decision = changed('The combined plan is operational');
+  for (const next of [[], [item('new', 'The combined plan is operational')]]) {
+    const result = assignmentsWithConflicts(paragraph, previous, next, { owner: decision, other: decision });
+    expect([...result.assignments]).toEqual([]);
+    expect([...result.conflicts].sort()).toEqual(['other', 'owner']);
+  }
+});
+it('produces the same conflict outcome across lineage and decision-order permutations', () => {
+  const paragraph = 'The combined plan is operational. Another distinct claim remains intact.';
+  const previous = [old('a', 'Old hosting'), old('b', 'Old payments'),
+    old('c', 'Another distinct claim remains intact')];
+  const next = [item('new', 'The combined plan is operational'), item('keep', 'Another distinct claim remains intact')];
+  const entries: Array<[string, Decision]> = [['a', changed('The combined plan is operational')],
+    ['b', changed('The combined plan is operational')], ['c', unchanged]];
+  const permutations = <T,>(values: T[]): T[][] => values.length < 2 ? [values] :
+    values.flatMap((value, index) => permutations(values.filter((_, i) => i !== index))
+      .map(rest => [value, ...rest]));
+  for (const prior of permutations(previous)) for (const ordered of permutations(entries)) {
+    const before = JSON.stringify({ prior, ordered, next });
+    const result = assignmentsWithConflicts(paragraph, prior, next, Object.fromEntries(ordered));
+    expect([...result.conflicts].sort()).toEqual(['a', 'b']);
+    expect([...result.assignments].sort()).toEqual([['c', 'keep']]);
+    expect(JSON.stringify({ prior, ordered, next })).toBe(before);
+  }
 });
 it('ranks eligible matches globally, then breaks equal scores by old order', () => {
   const paragraph = 'abcd efgh';
