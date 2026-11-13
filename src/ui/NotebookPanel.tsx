@@ -1,4 +1,6 @@
 import { MIN_WORDS, wordCount, type Snapshot } from '../store';
+import { lineageHeads } from '../store/lineage';
+import { containsQuote } from '../pipeline/compare';
 
 export function emptyReason(snapshot: Snapshot, configured: boolean, ready: boolean): string {
   if (!snapshot.paragraphs.length) return 'Start writing a plan to see what it relies on.';
@@ -21,10 +23,17 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
   text: string; save: (value: string) => void; storageStatus: 'loading' | 'saving' | 'saved' | 'error';
   snapshot: Snapshot; configured: boolean; ready: boolean;
 }) {
+  const heads = lineageHeads(snapshot.lineages ?? []);
+  const removed = heads.filter(lineage => lineage.status === 'removed' &&
+    (!snapshot.paragraphs.some(p => p.id === lineage.paragraphId) || snapshot.paragraphs.some(p =>
+      p.id === lineage.paragraphId && p.version === lineage.paragraphVersion)));
   const groups = snapshot.paragraphs.map(paragraph => ({ paragraph, items: snapshot.items.filter(item =>
     item.status === 'current' && item.paragraphId === paragraph.id && item.paragraphVersion === paragraph.version) }));
   const visibleGroups = storageStatus === 'saved' ? groups.filter(group => group.items.length > 0) : [];
-  const hasItems = visibleGroups.length > 0;
+  const unchecked = heads.filter(lineage => lineage.unchecked && !groups.some(group =>
+    group.items.some(item => item.lineageId === lineage.lineageId)));
+  const hasItems = visibleGroups.length > 0 ||
+    (storageStatus === 'saved' && (removed.length > 0 || unchecked.length > 0));
   return (
     <div className="workspace">
       <section className="panel notebook">
@@ -45,11 +54,33 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
             ? 'Cannot check unsaved changes.' : emptyReason(snapshot, configured, ready)}</p></div>}
         {visibleGroups.map(({ paragraph, items }) => <section key={paragraph.id}>
           <h3>Paragraph {paragraph.order + 1}</h3>
-          {items.map(item => <article className="item-card" key={item.id}>
-            <div><strong>{item.kind}</strong> · <span className="muted">on device</span></div>
-            <p>{item.text}</p><blockquote>“{item.quote}”</blockquote>
-          </article>)}
+          {items.map(item => {
+            const head = heads.find(lineage => lineage.lineageId === item.lineageId);
+            const previous = snapshot.items.find(candidate => candidate.id === head?.changedFrom);
+            return <article className="item-card" key={item.id}>
+              <div><strong>{item.kind}</strong> · <span className="muted">on device</span></div>
+              <p>{item.text}</p><blockquote>“{item.quote}”</blockquote>
+              {head?.status === 'changed' && !head.needsConfirmation && head.paragraphVersion === paragraph.version &&
+                <p>Changed: was “{previous?.text ?? 'earlier statement'}”</p>}
+              {head?.needsConfirmation && <p>May have changed; please confirm.</p>}
+              {head?.needsConfirmation && head.newQuote && containsQuote(paragraph.text, head.newQuote) &&
+                <p>Now: “{head.newQuote}”</p>}
+              {head?.unchecked && <p>Change not checked; the earlier statement is retained.</p>}
+            </article>;
+          })}
         </section>)}
+        {storageStatus === 'saved' && unchecked.map(lineage => {
+          const item = snapshot.items.find(value => value.id === lineage.itemId);
+          return item && <article className="item-card" key={lineage.lineageId}>
+            <p>{item.text}</p><p>Change not checked; the earlier statement is retained.</p>
+          </article>;
+        })}
+        {storageStatus === 'saved' && removed.map(lineage => {
+          const item = snapshot.items.find(value => value.id === lineage.itemId);
+          return item && <article className="item-card" key={lineage.lineageId}>
+            <p><s>{item.text}</s> · no longer in your plan</p>
+          </article>;
+        })}
       </aside>
     </div>
   );

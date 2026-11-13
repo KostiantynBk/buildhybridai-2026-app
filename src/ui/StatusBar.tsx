@@ -34,6 +34,17 @@ export function canPrepare(
   );
 }
 
+export function showPrepare(state: State, availability: string, retryRequired = false): boolean {
+  return state.kind === 'error' || (retryRequired && ['downloadable', 'unavailable'].includes(state.kind)) ||
+    ((state.kind === 'downloadable' || state.kind === 'downloading') && availability !== 'available');
+}
+export function prepareDisabledReason(configured: boolean, foreground: boolean, preparing: boolean): string {
+  if (!configured) return 'Firebase is not configured.';
+  if (!foreground) return 'Return to this tab before preparing the model.';
+  if (preparing) return 'Model preparation is already in progress.';
+  return '';
+}
+
 export function settingsLabel(settings: SettingsSnapshot): string {
   const hasRemote = Object.values(settings.sources).includes('remote');
   const rejected = Object.values(settings.sources).includes('remote-rejected');
@@ -64,16 +75,14 @@ export function StatusBar({
         <span className="separator">·</span>
         Settings: {settingsLabel(settings)}
       </div>
-      <button
-        disabled={!canPrepare(configured, foreground, service.preparing, service.state)}
-        onClick={() => {
-          void service.prepare().catch(() => undefined);
-        }}
-      >
-        {service.state.kind === 'error' || service.state.kind === 'unavailable'
-          ? 'Retry model'
-          : 'Prepare model'}
-      </button>
+      {showPrepare(service.state, service.browserAvailability, service.retryRequired) && <div>
+        <button
+          disabled={!canPrepare(configured, foreground, service.preparing, service.state)}
+          onClick={() => { void service.prepare().catch(() => undefined); }}
+        >{service.state.kind === 'error' || service.retryRequired ? 'Retry model' : 'Prepare model'}</button>
+        {!canPrepare(configured, foreground, service.preparing, service.state) &&
+          <p role="status">{prepareDisabledReason(configured, foreground, service.preparing)}</p>}
+      </div>}
     </footer>
   );
 }

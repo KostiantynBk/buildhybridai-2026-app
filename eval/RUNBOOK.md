@@ -6,7 +6,7 @@ This evaluation uses invented notes on the local model. No cloud inference is pa
 
 1. Use compatible desktop Chrome and the target laptop, plugged in. Close other heavy workloads and keep the evaluation tab visible. Check model version and availability in `chrome://on-device-internals` if desired.
 2. In the project folder run `npm ci` and `npm run dev`; open the local server's `/eval` URL. Use the existing private `.env.local` setup; never place actual configuration or debug tokens in the exported JSON or a public issue. If no valid configuration is present, the notice appears and run buttons stay disabled.
-3. Click **Prepare model**. Wait for **Local model: ready**; the prerequisite synthetic warm-up latency appears in the status bar. If preparation fails, resolve the cause and use **Retry model**. The SDK's browser console debug output may contain sensitive values: keep it private.
+3. An already available model is prepared automatically while the tab is foregrounded; if a download is needed, click **Prepare model**. Wait for **Local model: ready**; the prerequisite synthetic warm-up latency appears in the status bar. If preparation fails, resolve the cause and use **Retry model**. The SDK's browser console debug output may contain sensitive values: keep it private.
 
 ## Run 0: unscored practice
 
@@ -23,6 +23,12 @@ Select **extract.v2** (the default). In Run 0 try extract.v2 on d1, d2 and d3; d
 3. Click **Start latency gate and curve**. After the first evaluation call since reload, the gate runs a synthetic 200-word paragraph 20 times. The code checks and records that its paragraph-only whitespace-split word count is 150–250. The unscored trend then runs five repetitions at each of 100, 250, 500, 1,000 and 2,000 words. If no evaluation call has occurred since reload, a separate first evaluation call runs before the 20 gate calls. The same extraction prompt/schema is used and runs are sequential with pauses.
 4. Click **Export JSON** after the runs finish or stop. One file contains all runs retained on this page, each with environment, rows, summary, version, and completion/reason fields. Review before sharing. Reloading the page clears these in-memory runs.
 5. Give the file to the Navigator for review with the fixed Gate 1 thresholds, including the user spot-check of five note labels and Reviewer checks. The page reports counts and rates, not an automatic gate verdict. Zero-denominator rates are `null`; incomplete runs cannot establish a pass. A privacy fault stops the run. Device or readiness errors stop the run without automatically preparing the model again; collected rows remain exportable. Failed rows contain only bounded diagnostic metadata: error name or Firebase AI code, error class, post-failure availability if rechecked, dispatch-to-failure elapsed time when available, and whether the tab was hidden. Error messages, stacks, prompts and SDK error objects are not exported.
+
+## Run 2: change detection
+
+After approval, enter the user-reported model component and version and select **Start Run 2 · change detection**. The harness runs the six frozen change pairs three times each through the same code-shortcut/`compare.v1` path as the product. Each pair's frozen target span is used as both the earlier statement and earlier quote. Quotes still present after case/whitespace normalization use code without a model call; those rows show `source: code`, not `on_device`. Other rows report the local service's source, status, replacement-quote-found result, latency, prompt version and bounded error metadata. Export with **Export JSON** and give it to the Navigator. The page reports counts only; incomplete runs receive no verdict, and a changed-quote rate with no changed rows is null/N/A.
+
+The fixed Run 2 table is: real changes flagged of nine ≥8 PASS, 6–7 NARROW, ≤5 STOP; unrelated/reworded edits wrongly flagged of nine ≤1 PASS, 2–3 NARROW, ≥4 STOP; replacement quotes found among changed rows ≥80% PASS, otherwise NARROW. NARROW on either flagging row calls for a softer “did this change?” banner; NARROW on quote finding calls for a banner without new wording. The Navigator applies the table, not the app.
 
 ## Fixed Gate 1 thresholds
 

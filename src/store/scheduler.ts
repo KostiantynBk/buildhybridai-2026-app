@@ -1,7 +1,9 @@
 import { LocalError, type Job } from '../ai/localModel';
 import { safeErrorName } from '../ai/errorMetadata';
 import { extract, type ExtractVersion } from '../pipeline/extract';
-import { type LocalStore } from './index';
+import { compare } from '../pipeline/compare';
+import { type LocalStore, type StoredJob } from './index';
+import { matchParagraphs, type Paragraph } from './matcher';
 
 export interface LocalService {
   state: { kind: string };
@@ -17,6 +19,7 @@ export class Scheduler {
   private timer: ReturnType<typeof setInterval> | undefined;
   private unsubscribe: (() => void) | undefined;
   private active: AbortController | undefined;
+  private activeJob: { job: StoredJob; paragraph: Paragraph } | undefined;
   constructor(private readonly store: LocalStore, private readonly service: LocalService,
     private readonly version: () => ExtractVersion, private readonly changed: () => void,
     private readonly now: () => number = Date.now, private readonly failed: () => void = () => {}) {}
@@ -35,10 +38,23 @@ export class Scheduler {
     if (this.timer) clearInterval(this.timer);
     this.unsubscribe?.();
   }
-  edited(): void {
+  edited(nextText?: string, previous?: Paragraph[]): void {
     this.paused = true;
-    this.generation++;
-    this.active?.abort();
+    let unchangedCompare = false;
+    if (nextText !== undefined && previous && this.activeJob?.job.step === 'compare') {
+      const { job, paragraph } = this.activeJob;
+      const original = previous.find(value => value.id === job.paragraphId);
+      if (original?.version === job.paragraphVersion && original.text === paragraph.text) {
+        let sequence = 0;
+        const matched = matchParagraphs(previous, nextText, 0, () => `__unsaved_new_${sequence++}`)
+          .find(value => value.id === job.paragraphId);
+        unchangedCompare = matched?.version === job.paragraphVersion && matched.text === paragraph.text;
+      }
+    }
+    if (!unchangedCompare) {
+      this.generation++;
+      this.active?.abort();
+    }
   }
   saved(): void {
     this.paused = false;
@@ -49,23 +65,43 @@ export class Scheduler {
     this.busy = true;
     const generation = this.generation;
     try {
+      await this.store.finalizeReady();
       await this.store.enqueueSettled(this.now(), this.version());
       if (this.stopped || this.paused || this.blocked || this.service.state.kind !== 'ready' ||
           generation !== this.generation) return;
       const claimed = await this.store.claim(this.now());
       if (!claimed) return;
       const controller = new AbortController();
+      let dispatched = false;
       this.active = controller;
+      this.activeJob = claimed;
       if (this.stopped || generation !== this.generation) controller.abort();
       try {
         if (controller.signal.aborted) throw new LocalError('cancelled', 'Cancelled before dispatch.');
-        const result = await extract(job => this.service.runLocal(job), 'My plan', claimed.paragraph.text,
-          controller.signal, claimed.job.promptVersion);
-        if (this.stopped || controller.signal.aborted || generation !== this.generation) {
-          await this.store.fail(claimed.job, 'AbortError', true, this.now());
+        if (claimed.job.step === 'extract') {
+          if (claimed.job.promptVersion === 'compare.v1') throw new Error('Invalid extract prompt version.');
+          const result = await extract(job => this.service.runLocal(job), 'My plan', claimed.paragraph.text,
+            controller.signal, claimed.job.promptVersion);
+          if (this.stopped || controller.signal.aborted || generation !== this.generation) {
+            await this.store.fail(claimed.job, 'AbortError', true, this.now());
+          } else {
+            await this.store.complete(claimed.job, result.items, this.now());
+          }
         } else {
-          await this.store.complete(claimed.job, result.items, this.now());
+          const prior = await this.store.comparisonInput(claimed.job);
+          if (!prior) throw new Error('Comparison input unavailable.');
+          if (controller.signal.aborted || generation !== this.generation) {
+            throw new LocalError('cancelled', 'Cancelled before dispatch.');
+          }
+          const result = await compare(job => this.service.runLocal(job), prior.item, claimed.paragraph.text,
+            controller.signal, () => { dispatched = true; });
+          if (this.stopped || controller.signal.aborted || generation !== this.generation) {
+            await this.store.fail(claimed.job, 'AbortError', true, this.now(), false, dispatched);
+          } else {
+            await this.store.completeComparison(claimed.job, result);
+          }
         }
+        await this.store.finalizeReady();
       } catch (error) {
         const cancelled = controller.signal.aborted || (error instanceof LocalError && error.code === 'cancelled');
         const name = error instanceof LocalError && error.diagnostics?.errorName
@@ -73,9 +109,10 @@ export class Scheduler {
         const fatal = error instanceof LocalError &&
           ['privacy-fault', 'not-configured', 'unsupported'].includes(error.code);
         if (error instanceof LocalError && error.code === 'privacy-fault') this.blocked = true;
-        await this.store.fail(claimed.job, name, cancelled, this.now(), fatal);
+        await this.store.fail(claimed.job, name, cancelled, this.now(), fatal,
+          claimed.job.step === 'compare' && dispatched);
       } finally {
-        if (this.active === controller) this.active = undefined;
+        if (this.active === controller) { this.active = undefined; this.activeJob = undefined; }
       }
     } catch {
       this.failed();

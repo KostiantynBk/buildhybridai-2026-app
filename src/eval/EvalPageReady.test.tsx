@@ -29,6 +29,9 @@ it('permits practice but blocks measured runs until the model identity is entere
   expect(html).toMatch(/<button>Run local practice<\/button>/);
   expect(html).toMatch(/<button disabled=""[^>]*>Start Run 1<\/button>/);
   expect(html).toMatch(/<button disabled=""[^>]*>Start latency gate and curve<\/button>/);
+  expect(html).toContain('Enter the on-device model name and version.');
+  expect(html).toContain('No measured run is active to cancel.');
+  expect(html).toContain('Complete or stop a measured run before exporting.');
   expect(html).toContain('maxLength="200"');
   expect(html).toContain('<option value="extract.v2" selected="">extract.v2</option>');
   expect(html).toContain('<option value="extract.v1">extract.v1</option>');

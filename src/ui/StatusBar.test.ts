@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { canPrepare, modelLabel, settingsLabel } from './StatusBar';
+import { canPrepare, modelLabel, prepareDisabledReason, settingsLabel, showPrepare } from './StatusBar';
 import { builtInSettings } from '../settings/defaults';
 
 it('uses clear local readiness labels rather than raw state names', () => {
@@ -17,6 +17,20 @@ it('shows built-in, validated remote and rejected-source settings plainly', () =
   expect(settingsLabel(snapshot)).toContain('from Firebase');
   snapshot.sources.prompt_set = 'remote-rejected';
   expect(settingsLabel(snapshot)).toContain('some values rejected');
+});
+
+it('shows preparation only for downloads or errors and explains disabled controls', () => {
+  expect(showPrepare({ kind: 'downloadable' }, 'available')).toBe(false);
+  expect(showPrepare({ kind: 'downloadable' }, 'available', true)).toBe(true);
+  expect(showPrepare({ kind: 'downloadable' }, 'downloadable')).toBe(true);
+  expect(showPrepare({ kind: 'downloading', progress: 0 }, 'downloading')).toBe(true);
+  expect(showPrepare({ kind: 'error', reason: 'failed' }, 'available')).toBe(true);
+  expect(showPrepare({ kind: 'unavailable' }, 'unavailable')).toBe(false);
+  expect(showPrepare({ kind: 'unavailable' }, 'unavailable', true)).toBe(true);
+  expect(showPrepare({ kind: 'ready' }, 'available')).toBe(false);
+  expect(prepareDisabledReason(false, true, false)).toContain('not configured');
+  expect(prepareDisabledReason(true, false, false)).toContain('Return');
+  expect(prepareDisabledReason(true, true, true)).toContain('progress');
 });
 
 it('enables retry only when configured, visible and not already preparing', () => {

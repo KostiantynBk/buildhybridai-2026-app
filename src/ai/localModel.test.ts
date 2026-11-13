@@ -240,6 +240,18 @@ describe('readiness and local inference', () => {
     await f.service.prepare();
     expect(f.service.state.kind).toBe('ready');
   });
+  it('requires an explicit retry when a device error reprobes as available', async () => {
+    const f = fixture({ available: 'available' });
+    await f.service.probe();
+    await f.service.prepare();
+    f.generate.mockRejectedValueOnce(new Error('device failure'));
+    await expect(f.service.runLocal(task)).rejects.toMatchObject({ code: 'device-error' });
+    expect(f.service.state.kind).toBe('downloadable');
+    expect(f.service.retryRequired).toBe(true);
+    await f.service.prepare();
+    expect(f.service.retryRequired).toBe(false);
+    expect(f.service.state.kind).toBe('ready');
+  });
   it('preserves readiness after schema rejection', async () => {
     const f = fixture();
     await f.service.probe();

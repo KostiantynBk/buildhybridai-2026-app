@@ -4,7 +4,7 @@ import { loadSettings } from '../settings/remoteSettings';
 import { openLocalStore, type LocalStore, type ProfileRecord, type Snapshot } from '../store';
 import { Scheduler } from '../store/scheduler';
 import { ProfilePanel } from '../profile/ProfilePanel';
-import { config, createService, useForeground } from './service';
+import { config, createService, startReadiness, useForeground } from './service';
 import { NotebookPanel } from './NotebookPanel';
 import { Notices } from './Notices';
 import { PlaceholderPage } from './PlaceholderPage';
@@ -18,6 +18,7 @@ export default function App() {
   const [text, setText] = useState('');
   const [storageStatus, setStorageStatus] = useState<'loading' | 'saving' | 'saved' | 'error'>('loading');
   const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
+  const snapshotRef = useRef(snapshot);
   const [settings, setSettings] = useState(builtInSettings);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
@@ -30,8 +31,8 @@ export default function App() {
   const foreground = useForeground();
   useEffect(() => {
     const unsubscribe = service.subscribe(() => refresh(n => n + 1));
-    void service.probe();
-    return unsubscribe;
+    const stopReadiness = startReadiness(service);
+    return () => { stopReadiness(); unsubscribe(); };
   }, [service]);
   useEffect(() => {
     let active = true;
@@ -44,7 +45,9 @@ export default function App() {
     let scheduler: Scheduler | null = null;
     const update = () => {
       if (!opened) return;
-      void opened.snapshot().then(value => { if (mounted.current) setSnapshot(value); })
+      void opened.snapshot().then(value => {
+        if (mounted.current) { snapshotRef.current = value; setSnapshot(value); }
+      })
         .catch(() => { if (mounted.current) setStorageStatus('error'); });
     };
     void (async () => {
@@ -55,6 +58,7 @@ export default function App() {
         const initial = await opened.snapshot();
         if (!mounted.current) { opened.close(); return; }
         storeRef.current = opened;
+        snapshotRef.current = initial;
         setSnapshot(initial);
         setText(initial.paragraphs.map(p => p.text).join('\n\n'));
         setStorageStatus('saved');
@@ -74,13 +78,13 @@ export default function App() {
     const store = storeRef.current;
     if (!store) throw new Error('Local storage unavailable.');
     const next = await store.snapshot();
-    if (mounted.current) setSnapshot(next);
+    if (mounted.current) { snapshotRef.current = next; setSnapshot(next); }
   };
   const save = (value: string) => {
     if (clearing.current) return;
     setText(value);
     const sequence = ++revision.current;
-    schedulerRef.current?.edited();
+    schedulerRef.current?.edited(value, snapshotRef.current.paragraphs);
     setStorageStatus('saving');
     writes.current = writes.current.catch(() => undefined).then(async () => {
       const store = storeRef.current;

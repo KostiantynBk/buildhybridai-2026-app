@@ -93,6 +93,7 @@ export function ProfilePanel({ records, save, remove, replace, clearAll }: Props
       <form onSubmit={event => { event.preventDefault(); void submit(); }}>
         <h3>{editing ? 'Edit record' : 'Add a record'}</h3>
         {draftDirty && <p role="status">Unsaved profile draft.</p>}
+        {saving && <p id="profile-saving" role="status">Saving the previous profile record.</p>}
         <label>Type <select value={type} onChange={event => { changed(); setType(event.target.value as ProfileType); }}>
           {(['skill', 'project', 'lesson', 'preference'] as const).map(value => <option key={value}>{value}</option>)}
         </select></label>
@@ -111,7 +112,8 @@ export function ProfilePanel({ records, save, remove, replace, clearAll }: Props
         <label>Tags (up to five, comma-separated) <input value={tags}
           onChange={event => { changed(); setTags(event.target.value); }} />
         </label>
-        <div><button type="submit" disabled={saving}>{editing ? 'Save changes' : 'Add record'}</button>{' '}
+        <div><button type="submit" disabled={saving} aria-describedby={saving ? 'profile-saving' : undefined}>
+          {editing ? 'Save changes' : 'Add record'}</button>{' '}
           {editing && <button type="button" onClick={reset}>Cancel edit</button>}</div>
       </form>
       {error && <p role="alert">{error}</p>}

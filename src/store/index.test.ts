@@ -11,7 +11,7 @@ afterEach(() => store.close());
 
 describe('local store', () => {
   it('creates an empty schema and migrates legacy text once after commit', async () => {
-    expect(await store.snapshot()).toEqual({ paragraphs: [], items: [], profile: [], jobs: [] });
+    expect(await store.snapshot()).toEqual({ paragraphs: [], items: [], profile: [], jobs: [], lineages: [] });
     data.set(LEGACY_KEY, `${long}\n\nanother paragraph`);
     await store.migrate(legacy);
     expect(data.has(LEGACY_KEY)).toBe(false);
@@ -144,7 +144,7 @@ describe('local store', () => {
     expect((await store.snapshot()).jobs[0].status).toBe('pending');
     data.set(LEGACY_KEY, 'also remove this');
     await store.clearAll(legacy);
-    expect(await store.snapshot()).toEqual({ paragraphs: [], items: [], profile: [], jobs: [] });
+    expect(await store.snapshot()).toEqual({ paragraphs: [], items: [], profile: [], jobs: [], lineages: [] });
     expect(await store.versions()).toEqual([]);
     expect(data.has(LEGACY_KEY)).toBe(false);
     await store.saveNotebook(long);

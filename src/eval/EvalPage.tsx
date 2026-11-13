@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { config, createService, useForeground } from '../ui/service';
+import { config, createService, startReadiness, useForeground } from '../ui/service';
 import { Notices } from '../ui/Notices';
 import { StatusBar } from '../ui/StatusBar';
 import {
@@ -29,6 +29,7 @@ import {
 } from './modelIdentity';
 import { useRef } from 'react';
 import type { ExtractVersion } from '../pipeline/extract';
+import { runChangeEvaluation, type Run2Evaluation } from './run2';
 
 export default function EvalPage() {
   const service = useMemo(createService, []);
@@ -39,7 +40,7 @@ export default function EvalPage() {
   const [input, setInput] = useState(() => practiceInput('extract', examples[0].id, 'A'));
   const [result, setResult] = useState('');
   const [running, setRunning] = useState(false);
-  const [runs, setRuns] = useState<Evaluation[]>([]);
+  const [runs, setRuns] = useState<Array<Evaluation | Run2Evaluation>>([]);
   const [progress, setProgress] = useState('');
   const [modelIdentity, setModelIdentity] = useState('');
   const [extractVersion, setExtractVersion] = useState<ExtractVersion>('extract.v2');
@@ -53,10 +54,14 @@ export default function EvalPage() {
     foreground,
     model: modelIdentity,
   });
+  const practiceReason = !config ? 'Firebase is not configured.' : !foreground ? 'Return to this tab first.' :
+    running ? 'A run is already in progress.' : service.state.kind !== 'ready' ? 'Prepare the model first.' : '';
+  const measuredReason = practiceReason || (!normalizeModelIdentity(modelIdentity)
+    ? 'Enter the on-device model name and version.' : '');
   useEffect(() => {
     const unsubscribe = service.subscribe(() => redraw((n) => n + 1));
-    void service.probe();
-    return unsubscribe;
+    const stopReadiness = startReadiness(service);
+    return () => { stopReadiness(); unsubscribe(); };
   }, [service]);
   function select(nextPrompt: PromptName, nextExample: string, nextProfile: ProfileId) {
     setPrompt(nextPrompt);
@@ -148,6 +153,27 @@ export default function EvalPage() {
     } finally {
       controller.current = null;
       setRunning(false);
+    }
+  }
+  async function startChangeEvaluation() {
+    if (!measuredRunEnabled) return;
+    const current = new AbortController();
+    controller.current = current;
+    setRunning(true); setProgress('Starting run2…');
+    let latest: Run2Evaluation | null = null;
+    try {
+      const complete = await runChangeEvaluation({ runner: job => service.runLocal(job),
+        warmupLatencyMs: service.warmLatencyMs, onDeviceModel: normalizeModelIdentity(modelIdentity),
+        signal: current.signal, onUpdate: evaluation => {
+          latest = evaluation;
+          setProgress(`run2: ${evaluation.rows.length}/${evaluation.total}`);
+        } });
+      setRuns(previous => [...previous, complete]);
+    } catch {
+      if (latest) setRuns(previous => [...previous, latest!]);
+      setProgress('Run stopped unexpectedly. Collected rows are retained if available.');
+    } finally {
+      controller.current = null; setRunning(false);
     }
   }
   function download() {
@@ -244,12 +270,14 @@ export default function EvalPage() {
           />
           <p>
             <button
-              disabled={!config || service.state.kind !== 'ready' || running || !foreground}
+              disabled={Boolean(practiceReason)}
+              aria-describedby={practiceReason ? 'practice-reason' : undefined}
               onClick={run}
             >
               Run local practice
             </button>
           </p>
+          {practiceReason && <p id="practice-reason">{practiceReason}</p>}
           <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{result}</pre>
         </section>
         <section className="panel" style={{ marginTop: 24 }}>
@@ -269,21 +297,32 @@ export default function EvalPage() {
             placeholder="Component name and version"
           />
           <p>Self-reported, not verified by the API. Export and reload for a different model.</p>
-          <button disabled={!measuredRunEnabled} onClick={() => void startEvaluation('run1')}>
+          <button disabled={!measuredRunEnabled} aria-describedby={measuredReason ? 'measured-reason' : undefined}
+            onClick={() => void startEvaluation('run1')}>
             Start Run 1
           </button>{' '}
-          <button disabled={!measuredRunEnabled} onClick={() => void startEvaluation('latency')}>
+          <button disabled={!measuredRunEnabled} aria-describedby={measuredReason ? 'measured-reason' : undefined}
+            onClick={() => void startEvaluation('latency')}>
             Start latency gate and curve
           </button>{' '}
+          <button disabled={!measuredRunEnabled} aria-describedby={measuredReason ? 'measured-reason' : undefined}
+            onClick={() => void startChangeEvaluation()}>Start Run 2 · change detection</button>{' '}
           <button
             disabled={!running || !controller.current}
+            aria-describedby={!running || !controller.current ? 'cancel-reason' : undefined}
             onClick={() => controller.current?.abort()}
           >
             Cancel run
           </button>{' '}
-          <button disabled={runs.length === 0} onClick={download}>
+          <button disabled={runs.length === 0} aria-describedby={runs.length === 0 ? 'export-reason' : undefined}
+            onClick={download}>
             Export JSON
           </button>
+          <p>Run 2 uses the frozen target span as both earlier statement and quote;
+            code shortcuts need no model call.</p>
+          {measuredReason && <p id="measured-reason">{measuredReason}</p>}
+          {(!running || !controller.current) && <p id="cancel-reason">No measured run is active to cancel.</p>}
+          {runs.length === 0 && <p id="export-reason">Complete or stop a measured run before exporting.</p>}
           <p aria-live="polite">{progress}</p>
           {runs.map((run, index) => (
             <div key={index}>

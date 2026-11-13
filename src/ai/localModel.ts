@@ -46,6 +46,7 @@ export interface Job<T> {
   schema: object;
   instructions?: PromptContext;
   signal?: AbortSignal;
+  onDispatch?: () => void;
   validate?: (value: unknown) => value is T;
 }
 export interface Model {
@@ -82,6 +83,7 @@ export class LocalModelService {
   privacyFaults = 0;
   browserAvailability = 'not checked';
   preparing = false;
+  retryRequired = false;
   warmLatencyMs: number | null = null;
   private listeners = new Set<() => void>();
   private tail: Promise<unknown> = Promise.resolve();
@@ -153,7 +155,7 @@ export class LocalModelService {
   }
   async prepare(): Promise<void> {
     this.guardConfigAndApi();
-    const retry = this.state.kind === 'error' || this.state.kind === 'unavailable';
+    const retry = this.retryRequired || this.state.kind === 'error' || this.state.kind === 'unavailable';
     if (
       this.preparing ||
       (!retry && this.state.kind !== 'downloadable' && this.state.kind !== 'downloading')
@@ -192,6 +194,7 @@ export class LocalModelService {
         this.warmLatencyMs = result.latencyMs;
       });
       this.preparing = false;
+      this.retryRequired = false;
       this.setState({ kind: 'ready' });
     } catch (error) {
       this.preparing = false;
@@ -244,6 +247,7 @@ export class LocalModelService {
             hidden,
           });
         }
+        this.retryRequired = true;
         await this.probe();
         throw new LocalError('device-error', 'Local model request failed.', {
           ...previous,
@@ -261,6 +265,7 @@ export class LocalModelService {
   ): Promise<{ data: T; latencyMs: number; source: string; raw: string }> {
     this.guardConfigAndApi();
     const start = this.deps.now();
+    job.onDispatch?.();
     const response = await model.generate(job.prompt, job.schema, job.instructions);
     const latencyMs = this.deps.now() - start;
     if (response.source !== 'on_device') {

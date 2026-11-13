@@ -1,5 +1,6 @@
 /// <reference types="node" />
 import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
 import { build } from 'vite';
 import { expect, it } from 'vitest';
 
@@ -18,6 +19,13 @@ it('keeps store, notebook and profile modules free of Firebase imports', async (
   expect(modules.some(path => path.includes('/store/index.ts'))).toBe(true);
   expect(modules.filter(path => /node_modules\/(?:@firebase|firebase)\//i.test(path))).toEqual([]);
 }, 30000);
+it('keeps lineage and dependency primitives free of network APIs', () => {
+  for (const path of ['./index.ts', './staleness.ts', './lineage.ts', '../pipeline/compare.ts',
+    '../pipeline/overlap.ts']) {
+    const source = readFileSync(new URL(path, import.meta.url), 'utf8');
+    expect(source).not.toMatch(/\b(?:fetch|XMLHttpRequest|WebSocket|EventSource)\s*\(/);
+  }
+});
 it('keeps the profile out of the extraction scheduler prompt graph', async () => {
   const modules = await graph(['./scheduler.ts']);
   expect(modules.some(path => path.includes('/pipeline/extract.ts'))).toBe(true);
