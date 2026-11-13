@@ -1,4 +1,5 @@
 import type { LocalModelService, State } from '../ai/localModel';
+import { builtInSettings, type SettingsSnapshot } from '../settings/defaults';
 
 export function modelLabel(state: State): string {
   switch (state.kind) {
@@ -33,14 +34,23 @@ export function canPrepare(
   );
 }
 
+export function settingsLabel(settings: SettingsSnapshot): string {
+  const hasRemote = Object.values(settings.sources).includes('remote');
+  const rejected = Object.values(settings.sources).includes('remote-rejected');
+  const time = settings.fetchTime === null ? '' : `, fetched ${new Date(settings.fetchTime).toLocaleTimeString()}`;
+  return `${hasRemote ? 'from Firebase' : 'built-in'}${time}${rejected ? ' (some values rejected)' : ''}`;
+}
+
 export function StatusBar({
   service,
   configured,
   foreground,
+  settings = builtInSettings(),
 }: {
   service: LocalModelService;
   configured: boolean;
   foreground: boolean;
+  settings?: SettingsSnapshot;
 }) {
   return (
     <footer className="status" aria-live="polite">
@@ -51,6 +61,8 @@ export function StatusBar({
         {service.warmLatencyMs !== null && ` · Warm-up ${Math.round(service.warmLatencyMs)} ms`}
         {!foreground && ' · Paused while away'}
         {service.privacyFaults > 0 && ` · Privacy faults: ${service.privacyFaults}`}
+        <span className="separator">·</span>
+        Settings: {settingsLabel(settings)}
       </div>
       <button
         disabled={!canPrepare(configured, foreground, service.preparing, service.state)}

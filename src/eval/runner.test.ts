@@ -1,6 +1,8 @@
 import { expect, it, vi } from 'vitest';
 import { LocalModelService, type Model } from '../ai/localModel';
 import { runEvaluation } from './runner';
+import { builtInSettings } from '../settings/defaults';
+import { validateRemote } from '../settings/remoteSettings';
 
 function fakeService() {
   const generate = vi.fn(
@@ -37,7 +39,12 @@ it('runs the full scored harness using a fake local model and exports a summary'
     rest,
     chromeVersion: 'synthetic browser',
   });
+  const remote = validateRemote({ entries: { cloud_enabled: { source: 'remote', value: 'false' },
+    prompt_set: { source: 'remote', value: 'v1' }, daily_cloud_budget: { source: 'remote', value: '0' } },
+    fetchTime: 1234 });
+  expect(remote.values.cloud_enabled).toBe(false);
   const exported = JSON.parse(JSON.stringify({ runs: [evaluation] }));
+  expect(exported.runs[0].environment.settings).toEqual(builtInSettings());
   expect(evaluation.complete).toBe(true);
   expect(exported.runs[0].environment.onDeviceModel).toBe('synthetic-model 1.0');
   expect(exported.runs[0].rows).toHaveLength(60);

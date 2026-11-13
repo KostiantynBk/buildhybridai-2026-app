@@ -13,6 +13,7 @@ import {
 import { sizeInCharacters } from './playground';
 import { summarize } from './scoring';
 import { normalizeModelIdentity } from './modelIdentity';
+import { builtInSettings, type SettingsSnapshot } from '../settings/defaults';
 
 export type RunMode = 'run1' | 'latency';
 export type EvaluationRow = {
@@ -49,6 +50,7 @@ export type Evaluation = {
     promptVersion: string;
     setVersion: string;
     warmupLatencyMs: number | null;
+    settings: SettingsSnapshot;
   };
   mode: RunMode;
   total: number;
@@ -219,6 +221,7 @@ export async function runEvaluation(options: {
       promptVersion,
       setVersion: notesFile.version,
       warmupLatencyMs: options.warmupLatencyMs,
+      settings: builtInSettings(),
     },
     mode,
     total: schedule.length,

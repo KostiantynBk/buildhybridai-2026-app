@@ -15,7 +15,7 @@ const service = {
     throw new Error('blocked');
   },
 };
-vi.mock('../ui/App', () => ({
+vi.mock('../ui/service', () => ({
   config: null,
   createService: () => service,
   useForeground: () => true,

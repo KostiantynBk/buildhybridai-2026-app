@@ -15,7 +15,7 @@ const service = {
     throw new Error('not called');
   },
 };
-vi.mock('../ui/App', () => ({
+vi.mock('../ui/service', () => ({
   config: {},
   createService: () => service,
   useForeground: () => true,

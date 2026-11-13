@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { config, createService, useForeground } from '../ui/App';
+import { config, createService, useForeground } from '../ui/service';
 import { Notices } from '../ui/Notices';
 import { StatusBar } from '../ui/StatusBar';
 import {

@@ -1,41 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { readConfig } from '../config';
-import { browserApi, makeFirebaseModel } from '../ai/firebase';
-import { languageOptions, LocalModelService } from '../ai/localModel';
+import { builtInSettings } from '../settings/defaults';
+import { loadSettings } from '../settings/remoteSettings';
+import { config, createService, useForeground } from './service';
 import { NotebookPanel } from './NotebookPanel';
 import { Notices } from './Notices';
 import { PlaceholderPage } from './PlaceholderPage';
 import { StatusBar } from './StatusBar';
 
-export const config = readConfig(import.meta.env);
-export function createService() {
-  return new LocalModelService({
-    configured: config !== null,
-    hasApi: () => typeof browserApi()?.availability === 'function',
-    availability: () => browserApi()!.availability(languageOptions),
-    createModel: () => {
-      if (!config) {
-        throw new Error('Firebase is not configured.');
-      }
-      return makeFirebaseModel(config);
-    },
-    isForeground: () => document.visibilityState === 'visible',
-    onForeground: (callback) => {
-      document.addEventListener('visibilitychange', callback);
-      return () => document.removeEventListener('visibilitychange', callback);
-    },
-    now: () => performance.now(),
-  });
-}
-export function useForeground() {
-  const [isForeground, setForeground] = useState(() => document.visibilityState === 'visible');
-  useEffect(() => {
-    const update = () => setForeground(document.visibilityState === 'visible');
-    document.addEventListener('visibilitychange', update);
-    return () => document.removeEventListener('visibilitychange', update);
-  }, []);
-  return isForeground;
-}
 export default function App() {
   const service = useMemo(createService, []);
   const [, refresh] = useState(0);
@@ -48,12 +19,20 @@ export default function App() {
     }
   });
   const [storageError, setStorageError] = useState(false);
+  const [settings, setSettings] = useState(builtInSettings);
   const foreground = useForeground();
   useEffect(() => {
     const unsubscribe = service.subscribe(() => refresh((n) => n + 1));
     void service.probe();
     return unsubscribe;
   }, [service]);
+  useEffect(() => {
+    let active = true;
+    void loadSettings(config).then((snapshot) => {
+      if (active) setSettings(snapshot);
+    });
+    return () => { active = false; };
+  }, []);
   const save = (value: string) => {
     setText(value);
     try {
@@ -90,7 +69,7 @@ export default function App() {
           <PlaceholderPage page={page} />
         )}
       </main>
-      <StatusBar service={service} configured={config !== null} foreground={foreground} />
+      <StatusBar service={service} configured={config !== null} foreground={foreground} settings={settings} />
     </div>
   );
 }

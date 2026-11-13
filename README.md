@@ -10,7 +10,9 @@ The scaffold uses Firebase AI Logic's web hybrid interface for model preparation
 
 - The notebook text stays in this browser's local storage. The availability check runs in the browser; the synthetic warm-up and future guarded local inference run on-device through Firebase AI Logic.
 - When you press Prepare, the app initializes Firebase and App Check. App Check may contact Google, and Chrome may download the local model from Google.
-- This scaffold makes no cloud inference call. A successful source check is not a guarantee that all other app activity is offline.
+- Firebase Remote Config is the second Firebase product. On normal notebook startup, when Firebase is configured, it may contact Firebase Installations to register an installation or obtain an installation auth token, then Firebase Remote Config to fetch settings. The SDK creates a pseudonymous Firebase installation ID and sends it with app/SDK identifiers and browser language; the network provider also receives the connection's IP address. No notebook text or profile is passed to this SDK.
+- Remote Config controls only the cloud-enabled flag, an allow-listed cloud-model ID, the bundled prompt-set ID and a daily cloud budget capped at 20. Invalid or unavailable values fall back to the built-in defaults. It cannot change local inference mode or guards, source checks, Outbox approval or App Check. These cloud settings are scaffolding for later tickets; this version makes no cloud inference call. Evaluation runs use built-in settings and their own prompt selector, never fetched values.
+- This app does not initialize Analytics or set user properties, custom signals, personalization or A/B tests. Do not configure those features for the project. A successful local source check is not a guarantee that all other app activity is offline.
 
 ## Requirements
 
@@ -26,7 +28,9 @@ The scaffold uses Firebase AI Logic's web hybrid interface for model preparation
 4. For private development only, optionally set `VITE_APPCHECK_DEBUG=true` and register the generated App Check debug token privately using the [Firebase debug guide](https://firebase.google.com/docs/app-check/web/debug-provider). The SDK itself may print the token and project/app identifiers to the browser console; keep the console private and never copy these values into an issue or submission. Production builds do not enable the debug provider and require a registered Enterprise site key.
 5. Open desktop Chrome, check the status bar and press **Prepare model**. The browser may download a model. The app runs a synthetic local warm-up before marking the model ready; the first run on the target hardware is still to be verified. If preparation fails or the model becomes unavailable, use **Retry model** after resolving the cause.
 
-The console setup steps and production App Check enforcement have not been verified in this scaffold. No deployment or billing setup is included.
+Remote Config parameters are optional: the app works with no parameters defined. If desired, the project owner may configure `cloud_enabled`, `cloud_model`, `prompt_set` and `daily_cloud_budget` in the Firebase console; only supported, narrowing values are used. The application fetches once per startup with an eight-second SDK timeout and a ten-second application deadline, using a one-hour minimum fetch interval. A timeout returns built-in defaults; the underlying SDK may still finish an already-started operation. No real-time listener is used.
+
+The console setup steps, Remote Config behavior against a real project and production App Check enforcement have not been verified in this scaffold. No deployment or billing setup is included.
 
 ## Testing instructions
 
@@ -34,7 +38,7 @@ Run `npm run typecheck`, `npm test`, and `npm run build`. The tests use fakes an
 
 ## What was built during the hackathon
 
-This repository was started after the Submission Period began on 11 November 2026 at 13:30 Pacific Time. The current scaffold includes a locally saved notebook, placeholder panels, a readiness interface, guarded local Firebase AI Logic service, and tests. A development-only evaluation harness and synthetic scored set have been added; real evaluation is still to be performed. Further functionality is to be completed.
+This repository was started after the Submission Period began on 11 November 2026 at 13:30 Pacific Time. The current scaffold includes a locally saved notebook, placeholder panels, a readiness interface, guarded local Firebase AI Logic service, and tests. A development-only evaluation harness and synthetic scored set have been added; extract prompts have been evaluated on one laptop, while product integration remains to be completed. Further functionality is to be completed.
 
 ## History and disclosure
 
