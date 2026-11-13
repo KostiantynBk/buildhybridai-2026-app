@@ -15,7 +15,9 @@ body {
   margin: 0;
 }
 button,
-textarea {
+textarea,
+input,
+select {
   font: inherit;
 }
 button {
@@ -149,6 +151,16 @@ textarea::placeholder {
 .placeholder {
   min-height: 500px;
 }
+.profile { max-width: 900px; }
+.profile-actions, .profile form { display: flex; flex-wrap: wrap; gap: 12px; margin: 18px 0; }
+.profile form { flex-direction: column; }
+.profile form label { display: block; }
+.profile-text { display: block; min-height: 100px; margin: 8px 0; border: 1px solid var(--line); padding: 8px; }
+.profile-records { padding-left: 20px; }
+.profile-records li { margin: 16px 0; }
+.topic-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 6px; }
+.item-card { border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin: 12px 0; }
+.item-card blockquote { margin: 8px 0 0; color: var(--subtle); font-size: 14px; }
 .status {
   background: #fff;
   border-top: 1px solid var(--line);

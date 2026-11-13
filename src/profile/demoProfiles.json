@@ -1,0 +1,71 @@
+{
+  "version": "profiles-v1",
+  "note": "Everything here is invented for testing. Any match with a real person, company or product is coincidental. Public product names (Supabase, Stripe, Gumroad, Firebase, Clerk) are used as ordinary public references.",
+  "topics": [
+    "hosting", "backend", "frontend", "mobile", "auth", "payments", "messaging",
+    "data-storage", "ai-api", "pricing", "marketing", "legal-privacy", "security",
+    "performance", "support", "analytics", "other"
+  ],
+  "recordTypes": ["skill", "project", "lesson", "preference"],
+  "depthValues": ["none", "some", "strong"],
+  "profiles": {
+    "A": {
+      "summary": "Frontend-strong builder. Has never handled payments or messaging at volume.",
+      "privateTokens": ["Calder & Finch", "Tiltshift", "€30", "40 sales"],
+      "records": [
+        { "id": "A-s1", "type": "skill", "depth": "strong", "topics": ["frontend", "performance"],
+          "text": "Frontend: React and TypeScript for 6 years. Comfortable with design systems, accessibility and browser performance." },
+        { "id": "A-s2", "type": "skill", "depth": "some", "topics": ["backend", "data-storage", "hosting"],
+          "text": "Backend: has written small Node.js APIs and used Firebase and Supabase. Has never run a production server or a database migration alone." },
+        { "id": "A-s3", "type": "skill", "depth": "none", "topics": ["payments", "legal-privacy"],
+          "text": "Payments: has never integrated a payment provider or handled invoices, refunds or VAT." },
+        { "id": "A-s4", "type": "skill", "depth": "none", "topics": ["messaging"],
+          "text": "Email and SMS at volume: has only sent email through a form plugin. Knows nothing about deliverability, sending-domain setup or sending limits." },
+        { "id": "A-s5", "type": "skill", "depth": "some", "topics": ["auth", "security"],
+          "text": "Sign-in: has used ready-made login (Firebase Auth, Clerk). Has never built roles or permissions." },
+        { "id": "A-p1", "type": "project", "topics": ["frontend", "messaging", "data-storage"],
+          "text": "Booking widget for Calder & Finch Dental (freelance, 2025): React front end on Supabase. It shipped late because appointment reminders were added at the end." },
+        { "id": "A-p2", "type": "project", "topics": ["frontend", "payments", "marketing"],
+          "text": "Tiltshift, a photo-portfolio template sold on Gumroad: about 40 sales. Gumroad handled all payments and tax." },
+        { "id": "A-l1", "type": "lesson", "topics": ["messaging"],
+          "text": "On the Calder & Finch project, reminder emails landed in spam for a week because the sending domain was not set up. The client noticed before I did." },
+        { "id": "A-l2", "type": "lesson", "topics": ["backend", "hosting"],
+          "text": "I tend to design every screen before checking what the backend service actually allows." },
+        { "id": "A-pr1", "type": "preference", "topics": ["pricing", "hosting"],
+          "text": "Wants running costs under €30 a month until there are paying users." },
+        { "id": "A-pr2", "type": "preference", "topics": ["hosting", "backend"],
+          "text": "Prefers managed services to running own servers." }
+      ]
+    },
+    "B": {
+      "summary": "Backend and cloud-experienced builder. New to mobile and to marketing.",
+      "privateTokens": ["Harrowby Telecom", "Harrowby", "Ledgerline", "€1,200", "2 million minutes"],
+      "records": [
+        { "id": "B-s1", "type": "skill", "depth": "strong", "topics": ["backend", "data-storage"],
+          "text": "Backend: Python and FastAPI for 5 years. PostgreSQL, background jobs and REST APIs in production." },
+        { "id": "B-s2", "type": "skill", "depth": "strong", "topics": ["hosting", "performance", "security"],
+          "text": "Cloud and operations: Docker, Linux servers, CI/CD and monitoring. Has been on call." },
+        { "id": "B-s3", "type": "skill", "depth": "some", "topics": ["payments"],
+          "text": "Payments: integrated Stripe subscriptions once for a business tool, including webhooks. Has never handled consumer refunds or app-store billing." },
+        { "id": "B-s4", "type": "skill", "depth": "none", "topics": ["mobile"],
+          "text": "Mobile: has never shipped an iOS or Android app or been through app-store review." },
+        { "id": "B-s5", "type": "skill", "depth": "none", "topics": ["marketing"],
+          "text": "Marketing and launch: has never run a launch, a waiting list or paid ads. Has no audience." },
+        { "id": "B-s6", "type": "skill", "depth": "some", "topics": ["frontend"],
+          "text": "Frontend: can build plain React pages. Weak at design and accessibility." },
+        { "id": "B-p1", "type": "project", "topics": ["backend", "ai-api", "performance"],
+          "text": "Call-summary service at Harrowby Telecom (employee, 2024 to 2026): a speech-to-text pipeline handling 2 million minutes a month." },
+        { "id": "B-p2", "type": "project", "topics": ["backend", "payments", "marketing"],
+          "text": "Ledgerline, a side project for freelancers' invoices: built for 4 months, reached 3 users, then stopped." },
+        { "id": "B-l1", "type": "lesson", "topics": ["marketing"],
+          "text": "Ledgerline was a finished product with nobody to show it to. I started talking to users only after building." },
+        { "id": "B-l2", "type": "lesson", "topics": ["ai-api", "hosting"],
+          "text": "At Harrowby an AI provider changed its rate limits with two weeks' notice and our batch jobs failed. I now check limits and deprecation dates first." },
+        { "id": "B-pr1", "type": "preference", "topics": ["pricing"],
+          "text": "Budget for the first six months is €1,200 in total, own money." },
+        { "id": "B-pr2", "type": "preference", "topics": ["hosting", "backend"],
+          "text": "Prefers boring, well-documented technology. Self-hosts when it is cheaper." }
+      ]
+    }
+  }
+}
