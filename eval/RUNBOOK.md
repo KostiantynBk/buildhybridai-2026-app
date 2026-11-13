@@ -30,6 +30,16 @@ After approval, enter the user-reported model component and version and select *
 
 The fixed Run 2 table is: real changes flagged of nine ≥8 PASS, 6–7 NARROW, ≤5 STOP; unrelated/reworded edits wrongly flagged of nine ≤1 PASS, 2–3 NARROW, ≥4 STOP; replacement quotes found among changed rows ≥80% PASS, otherwise NARROW. NARROW on either flagging row calls for a softer “did this change?” banner; NARROW on quote finding calls for a banner without new wording. The Navigator applies the table, not the app.
 
+## S1 rehearsal (`/dev`)
+
+Starting S1 adds its invented private terms, plus the chosen demo profile's invented terms, to Never send after confirmation; at Finish or Cancel, use the offered button to remove only terms added for that play. Removal does not restore a replaced profile or withdrawn Outbox entries. The player uses the normal notebook and list-change paths; S2/S3 remain held back. Its export is local-only.
+
+## Run 3: Gate 2 triage (local synthetic evaluation)
+
+Run 3 uses 17 labelled notes. The baseline is repetition 1; n01, n03, n07, n11 and n14 have two further repetitions, for 27 note passes total. Gate 2 counts and rates use baseline rows only; repeats 2–3 are reported separately as variance. Angles runs once per pass, selection runs for A and B, and question generation runs once per distinct selected item-version and model concern across both profiles. Each why-note uses its own profile's selected concern and corresponding shared question. The profile-derived `track-record` display label is not inserted into the profile-independent question prompt.
+
+Brief score-zero mentions also get a filtered question and pending Outbox equivalent, but no why-note. First-tag latency runs from the start of extraction to completion of profile A's first pick's question; if A has no pick, use B's first. If neither has a pick, latency is N/A. All distinct generated questions count in private-token metrics. Rating samples use deterministic Fisher–Yates selection with seed `0x53696465` and successive seeds for questions, A why-notes and B why-notes; insufficient samples stay short rather than being invented. Run 3 exports are **local-only** and may contain synthetic profile-derived why-notes; inspect before sharing. The page reports counts, not a gate verdict.
+
 ## Fixed Gate 1 thresholds
 
 | Metric | Pass | Narrow | Stop |

@@ -2,6 +2,8 @@ import { LocalError, type Job } from '../ai/localModel';
 import { safeErrorName } from '../ai/errorMetadata';
 import { extract, type ExtractVersion } from '../pipeline/extract';
 import { compare } from '../pipeline/compare';
+import { chooseProfileRecords, runAngles, runQuestion, runWhyNote } from '../pipeline/triage';
+import { fingerprintRecords } from './fingerprint';
 import { type LocalStore, type StoredJob } from './index';
 import { matchParagraphs, type Paragraph } from './matcher';
 
@@ -20,6 +22,7 @@ export class Scheduler {
   private unsubscribe: (() => void) | undefined;
   private active: AbortController | undefined;
   private activeJob: { job: StoredJob; paragraph: Paragraph } | undefined;
+  private readonly sessionId = crypto.randomUUID();
   constructor(private readonly store: LocalStore, private readonly service: LocalService,
     private readonly version: () => ExtractVersion, private readonly changed: () => void,
     private readonly now: () => number = Date.now, private readonly failed: () => void = () => {}) {}
@@ -66,7 +69,10 @@ export class Scheduler {
     const generation = this.generation;
     try {
       await this.store.finalizeReady();
+      await this.store.reconcileOutbox();
+      await this.store.reconcileWhyNotes();
       await this.store.enqueueSettled(this.now(), this.version());
+      await this.store.enqueueAngles(this.now());
       if (this.stopped || this.paused || this.blocked || this.service.state.kind !== 'ready' ||
           generation !== this.generation) return;
       const claimed = await this.store.claim(this.now());
@@ -79,7 +85,9 @@ export class Scheduler {
       try {
         if (controller.signal.aborted) throw new LocalError('cancelled', 'Cancelled before dispatch.');
         if (claimed.job.step === 'extract') {
-          if (claimed.job.promptVersion === 'compare.v1') throw new Error('Invalid extract prompt version.');
+          if (claimed.job.promptVersion !== 'extract.v1' && claimed.job.promptVersion !== 'extract.v2') {
+            throw new Error('Invalid extract prompt version.');
+          }
           const result = await extract(job => this.service.runLocal(job), 'My plan', claimed.paragraph.text,
             controller.signal, claimed.job.promptVersion);
           if (this.stopped || controller.signal.aborted || generation !== this.generation) {
@@ -87,7 +95,7 @@ export class Scheduler {
           } else {
             await this.store.complete(claimed.job, result.items, this.now());
           }
-        } else {
+        } else if (claimed.job.step === 'compare') {
           const prior = await this.store.comparisonInput(claimed.job);
           if (!prior) throw new Error('Comparison input unavailable.');
           if (controller.signal.aborted || generation !== this.generation) {
@@ -100,8 +108,49 @@ export class Scheduler {
           } else {
             await this.store.completeComparison(claimed.job, result);
           }
+        } else if (claimed.job.step === 'angles') {
+          const input = await this.store.anglesInput(claimed.job);
+          if (!input) { await this.store.supersedeJob(claimed.job); return; }
+          const result = await runAngles(job => this.service.runLocal(job), input.paragraph, input.items,
+            controller.signal, () => { dispatched = true; });
+          if (this.stopped || controller.signal.aborted || generation !== this.generation) {
+            await this.store.fail(claimed.job, 'AbortError', true, this.now(), false, dispatched);
+          } else {
+            await this.store.completeAngles(claimed.job, input, result.concerns, this.sessionId, this.now());
+          }
+        } else if (claimed.job.step === 'question') {
+          const input = await this.store.questionInput(claimed.job);
+          if (!input) { await this.store.supersedeJob(claimed.job); return; }
+          const card = input.card;
+          const result = await runQuestion(job => this.service.runLocal(job),
+            { text: card.itemText, quote: card.itemQuote }, card.sourceAngle, card.concern, input.neverSend, [],
+            controller.signal, () => { dispatched = true; });
+          if (this.stopped || controller.signal.aborted || generation !== this.generation) {
+            await this.store.fail(claimed.job, 'AbortError', true, this.now(), false, dispatched);
+          } else {
+            await this.store.completeQuestion(claimed.job, result.question, result.keptOut, result.leak.passed,
+              this.now());
+          }
+        } else if (claimed.job.step === 'whynote') {
+          const input = await this.store.whyInput(claimed.job);
+          if (!input) { await this.store.supersedeJob(claimed.job); return; }
+          const card = input.card;
+          const supplied = chooseProfileRecords(card.topics, input.profile,
+            card.angle === 'track-record' ? card.lessonId : undefined);
+          const fingerprints = await fingerprintRecords(supplied);
+          const result = await runWhyNote(job => this.service.runLocal(job), card.itemQuote, card.angle,
+            card.concern, input.question, card.topics, supplied, controller.signal, card.lessonId,
+            () => { dispatched = true; });
+          if (this.stopped || controller.signal.aborted || generation !== this.generation) {
+            await this.store.fail(claimed.job, 'AbortError', true, this.now(), false, dispatched);
+          } else {
+            await this.store.completeWhy(claimed.job, result.note, supplied, fingerprints);
+          }
+        } else {
+          throw new Error('Unsupported job step.');
         }
         await this.store.finalizeReady();
+        await this.store.reconcileOutbox();
       } catch (error) {
         const cancelled = controller.signal.aborted || (error instanceof LocalError && error.code === 'cancelled');
         const name = error instanceof LocalError && error.diagnostics?.errorName
@@ -110,7 +159,9 @@ export class Scheduler {
           ['privacy-fault', 'not-configured', 'unsupported'].includes(error.code);
         if (error instanceof LocalError && error.code === 'privacy-fault') this.blocked = true;
         await this.store.fail(claimed.job, name, cancelled, this.now(), fatal,
-          claimed.job.step === 'compare' && dispatched);
+          claimed.job.step !== 'extract' && dispatched);
+        await this.store.finalizeReady();
+        await this.store.reconcileOutbox();
       } finally {
         if (this.active === controller) { this.active = undefined; this.activeJob = undefined; }
       }

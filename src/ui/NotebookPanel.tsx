@@ -1,7 +1,28 @@
-import { MIN_WORDS, wordCount, type Snapshot } from '../store';
+import { useEffect, useState } from 'react';
+import { MIN_WORDS, wordCount, type ProfileRecord, type Snapshot } from '../store';
+import { fingerprintsMatch } from '../store/fingerprint';
+import type { ThoughtCard } from '../store/triageTypes';
 import { lineageHeads } from '../store/lineage';
 import { containsQuote } from '../pipeline/compare';
+import { calculateStaleness } from '../store/staleness';
+import type { Feedback } from '../store/triageTypes';
 
+function FreshWhy({ card, profile }: { card: ThoughtCard; profile: ProfileRecord[] }) {
+  const [checked, setChecked] = useState('');
+  const signature = JSON.stringify([card.whyFingerprints, (card.whyFingerprints ?? []).map(fingerprint => {
+    const record = profile.find(value => value.id === fingerprint.id);
+    return record ? [record.id, record.type, record.text, record.depth, [...record.topics].sort()] : null;
+  })]);
+  useEffect(() => {
+    let active = true;
+    if (!card.whyFingerprints) { setChecked(''); return () => { active = false; }; }
+    void fingerprintsMatch(card.whyFingerprints, profile).then(valid => {
+      if (active) setChecked(valid ? signature : '');
+    }).catch(() => { if (active) setChecked(''); });
+    return () => { active = false; };
+  }, [signature]);
+  return card.why && checked === signature ? <p>{card.why.seeing} {card.why.why}</p> : null;
+}
 export function emptyReason(snapshot: Snapshot, configured: boolean, ready: boolean): string {
   if (!snapshot.paragraphs.length) return 'Start writing a plan to see what it relies on.';
   if (snapshot.paragraphs.every(p => wordCount(p.text) < MIN_WORDS)) {
@@ -9,7 +30,10 @@ export function emptyReason(snapshot: Snapshot, configured: boolean, ready: bool
   }
   if (!configured) return 'Waiting: Firebase is not configured. Your notebook stays local.';
   if (!ready) return 'Waiting for the on-device model. Prepare the model to continue.';
-  if (snapshot.jobs.some(job => job.status === 'failed')) return 'An extraction stopped after bounded retries.';
+  if (snapshot.jobs.some(job => job.step === 'extract' && job.status === 'failed' &&
+      snapshot.paragraphs.some(p => p.id === job.paragraphId && p.version === job.paragraphVersion))) {
+    return 'An extraction stopped after bounded retries.';
+  }
   if (snapshot.jobs.some(job => job.status === 'pending' || job.status === 'running')) {
     return 'Checking settled paragraphs on device.';
   }
@@ -19,9 +43,10 @@ export function emptyReason(snapshot: Snapshot, configured: boolean, ready: bool
   }
   return 'Nothing found in the current paragraphs.';
 }
-export function NotebookPanel({ text, save, storageStatus, snapshot, configured, ready }: {
+export function NotebookPanel({ text, save, storageStatus, snapshot, configured, ready, feedback }: {
   text: string; save: (value: string) => void; storageStatus: 'loading' | 'saving' | 'saved' | 'error';
   snapshot: Snapshot; configured: boolean; ready: boolean;
+  feedback?: (cardId: string, value: Feedback) => void;
 }) {
   const heads = lineageHeads(snapshot.lineages ?? []);
   const removed = heads.filter(lineage => lineage.status === 'removed' &&
@@ -32,8 +57,12 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
   const visibleGroups = storageStatus === 'saved' ? groups.filter(group => group.items.length > 0) : [];
   const unchecked = heads.filter(lineage => lineage.unchecked && !groups.some(group =>
     group.items.some(item => item.lineageId === lineage.lineageId)));
-  const hasItems = visibleGroups.length > 0 ||
-    (storageStatus === 'saved' && (removed.length > 0 || unchecked.length > 0));
+  const visibleCards = (snapshot.cards ?? []).filter(card => card.questionStatus !== 'waiting');
+  const currentExtractionFailed = storageStatus === 'saved' && snapshot.jobs.some(job => job.step === 'extract' &&
+    job.status === 'failed' && snapshot.paragraphs.some(p => p.id === job.paragraphId &&
+      p.version === job.paragraphVersion));
+  const hasItems = visibleGroups.length > 0 || visibleCards.length > 0 || (storageStatus === 'saved' &&
+    [...removed, ...unchecked].some(lineage => snapshot.items.some(item => item.id === lineage.itemId)));
   return (
     <div className="workspace">
       <section className="panel notebook">
@@ -49,7 +78,8 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
       </section>
       <aside className="panel thoughts"><span className="eyebrow">Alongside your work</span>
         <h2>What your plan relies on</h2>
-        {!hasItems && <div className="empty" role="status"><p>{storageStatus === 'saving'
+        {currentExtractionFailed && <p role="status">An extraction stopped after bounded retries.</p>}
+        {!hasItems && !currentExtractionFailed && <div className="empty" role="status"><p>{storageStatus === 'saving'
           ? 'Saving changes before checking this plan.' : storageStatus === 'error'
             ? 'Cannot check unsaved changes.' : emptyReason(snapshot, configured, ready)}</p></div>}
         {visibleGroups.map(({ paragraph, items }) => <section key={paragraph.id}>
@@ -70,6 +100,35 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
             </article>;
           })}
         </section>)}
+        {visibleCards.map(card => {
+          const stale = calculateStaleness(card.id, snapshot.dependencies ?? [], snapshot.lineages ?? []);
+          const outbox = snapshot.outbox?.find(entry => entry.id === card.outboxId);
+          const paragraph = snapshot.paragraphs.find(value => value.id === card.paragraphId);
+          const head = heads.find(value => value.lineageId === card.itemLineageId);
+          const failedCheckVisible = card.recheckFailedVersion !== undefined && paragraph &&
+            (paragraph.version === card.recheckFailedVersion || head?.paragraphVersion !== paragraph.version);
+          const questionStatus = card.questionStatus === 'blocked' ? card.questionReason === 'private detail'
+            ? 'question held back: private detail' : card.questionReason === 'stale'
+              ? 'question unavailable: the statement changed' : card.questionReason === 'revalidation-failed'
+                ? 'question unavailable: an earlier check stopped' : 'question unavailable after local error'
+            : outbox?.status ?? 'preparing';
+          return <article className="item-card" key={card.id}>
+            {failedCheckVisible && <p role="status">May have changed: couldn't re-check your edit.</p>}
+            {stale.stale && <p role="status">Depends on “{card.itemQuote}” — {stale.reasons.map(reason =>
+              reason.kind === 'needsConfirmation' ? 'may have changed' :
+                reason.kind === 'removed' ? 'no longer in your plan' : 'changed').join(', ')}</p>}
+            {card.brief ? <p><strong>{card.angle}:</strong> {card.concern} · {questionStatus}</p> : <>
+              <div><strong>{card.angle}</strong> · <span className="muted">on device</span></div>
+              <blockquote>“{card.itemQuote}”</blockquote><p>{card.concern}</p>
+              <FreshWhy card={card} profile={snapshot.profile} />
+              <p>{outbox ? `${outbox.question} · ${outbox.status}` : questionStatus}</p>
+              <p>Research comes in a later version.</p>
+              {feedback && <div>{(['useful', 'already knew', 'not relevant', 'wrong'] as Feedback[]).map(value =>
+                <button key={value} aria-pressed={card.feedback === value}
+                  onClick={() => feedback(card.id, value)}>{value}</button>)}</div>}
+            </>}
+          </article>;
+        })}
         {storageStatus === 'saved' && unchecked.map(lineage => {
           const item = snapshot.items.find(value => value.id === lineage.itemId);
           return item && <article className="item-card" key={lineage.lineageId}>

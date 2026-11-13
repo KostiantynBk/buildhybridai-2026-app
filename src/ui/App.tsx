@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { builtInSettings } from '../settings/defaults';
 import { loadSettings } from '../settings/remoteSettings';
 import { openLocalStore, type LocalStore, type ProfileRecord, type Snapshot } from '../store';
@@ -6,12 +6,14 @@ import { Scheduler } from '../store/scheduler';
 import { ProfilePanel } from '../profile/ProfilePanel';
 import { config, createService, startReadiness, useForeground } from './service';
 import { NotebookPanel } from './NotebookPanel';
+import { OutboxPage } from './OutboxPage';
 import { Notices } from './Notices';
 import { PlaceholderPage } from './PlaceholderPage';
 import { StatusBar } from './StatusBar';
 
 const emptySnapshot = (): Snapshot => ({ paragraphs: [], items: [], profile: [], jobs: [] });
-export default function App() {
+const DevSessionPlayer = import.meta.env.DEV ? lazy(() => import('../eval/SessionPlayerPanel')) : null;
+export default function App({ developerPlayer = false }: { developerPlayer?: boolean } = {}) {
   const service = useMemo(createService, []);
   const [, refresh] = useState(0);
   const [page, setPage] = useState('Notebook');
@@ -134,12 +136,36 @@ export default function App() {
           </button>))}</nav></header>
       <Notices configured={config !== null} state={service.state} />
       <main>{page === 'Notebook' ? <NotebookPanel text={text} save={save} storageStatus={storageStatus}
-        snapshot={snapshot} configured={config !== null} ready={service.state.kind === 'ready'} /> :
+        snapshot={snapshot} configured={config !== null} ready={service.state.kind === 'ready'}
+        feedback={(cardId, value) => {
+          void changeProfile(async store => { await store.setFeedback(cardId, value); })
+            .catch(() => setStorageStatus('error'));
+        }} /> :
         page === 'Profile' ? <ProfilePanel records={snapshot.profile}
           save={(record: ProfileRecord) => changeProfile(store => store.putProfile(record))}
           remove={id => changeProfile(store => store.deleteProfile(id))}
-          replace={records => changeProfile(store => store.replaceProfile(records))} clearAll={clearAll} /> :
-          <PlaceholderPage page={page} />}</main>
+          replace={(records, terms) => changeProfile(store => store.replaceProfile(records, terms))}
+          neverSend={snapshot.neverSend ?? []}
+          saveNeverSend={terms => changeProfile(store => store.putNeverSend(terms))} clearAll={clearAll} /> :
+          page === 'Outbox' ? <OutboxPage entries={snapshot.outbox ?? []} snapshot={snapshot}
+            saving={storageStatus !== 'saved'} decide={async (id, value) => {
+            const store = storeRef.current;
+            if (!store) throw new Error('Local storage unavailable.');
+            const result = await store.decideOutbox(id, value);
+            await refreshData();
+            return result;
+          }} remove={id => changeProfile(store => store.deleteOutbox(id))} /> :
+          <PlaceholderPage page={page} />}
+        {developerPlayer && DevSessionPlayer && <Suspense fallback={<p>Loading rehearsal player…</p>}>
+          <DevSessionPlayer text={text} save={save} snapshot={snapshot} storageStatus={storageStatus}
+            readTerms={() => snapshotRef.current.neverSend ?? []}
+            writeTerms={terms => changeProfile(store => store.putNeverSend(terms))}
+            writeProfile={records => changeProfile(store => store.replaceProfile(records))}
+            readFunnel={() => {
+              if (!storeRef.current) throw new Error('Local storage unavailable.');
+              return storeRef.current.funnel();
+            }} />
+        </Suspense>}</main>
       <StatusBar service={service} configured={config !== null} foreground={foreground} settings={settings} />
     </div>
   );

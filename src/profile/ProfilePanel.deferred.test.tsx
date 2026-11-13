@@ -88,7 +88,7 @@ describe('deferred profile save', () => {
     await flush();
     const tree = ui.render();
     expect(element(tree, 'textarea').props?.value).toBe('Existing project');
-    expect(element(tree, 'h3').props?.children).toBe('Edit record');
+    expect(element(tree, 'h3', node => node.props?.children === 'Edit record')).toBeDefined();
     expect(element(tree, 'p', node => node.props?.role === 'status')).toBeDefined();
   });
   it('keeps newer typing and reports failure if the earlier save rejects', async () => {

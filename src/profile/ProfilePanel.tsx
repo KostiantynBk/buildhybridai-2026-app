@@ -1,21 +1,26 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Depth, ProfileRecord, ProfileType } from '../store';
-import { demoProfile, exportProfile, importProfile, profileWarnings, TOPICS, validateRecord } from './profile';
+import { demoNeverSend, demoProfile, exportProfile, importProfileBundle, profileWarnings, TOPICS, validateRecord }
+  from './profile';
+import { validateNeverSend } from '../privacy/terms';
 
 type Props = {
   records: ProfileRecord[];
   save(record: ProfileRecord): Promise<void>;
   remove(id: string): Promise<void>;
-  replace(records: ProfileRecord[]): Promise<void>;
+  replace(records: ProfileRecord[], neverSend: string[]): Promise<void>;
+  neverSend?: string[];
+  saveNeverSend?(terms: string[]): Promise<void>;
   clearAll(): Promise<void>;
 };
-export function ProfilePanel({ records, save, remove, replace, clearAll }: Props) {
+export function ProfilePanel({ records, save, remove, replace, neverSend = [], saveNeverSend, clearAll }: Props) {
   const [editing, setEditing] = useState<string | null>(null);
   const [type, setType] = useState<ProfileType>('skill');
   const [depth, setDepth] = useState<Depth>('some');
   const [text, setText] = useState('');
   const [topics, setTopics] = useState<string[]>([]);
   const [tags, setTags] = useState('');
+  const [term, setTerm] = useState('');
   const [error, setError] = useState('');
   const [draftDirty, setDraftDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -50,12 +55,19 @@ export function ProfilePanel({ records, save, remove, replace, clearAll }: Props
       savingRef.current = false; setSaving(false);
     }
   };
-  const overwrite = async (next: ProfileRecord[]) => {
-    if (records.length && !window.confirm('Replace the existing local profile?')) return;
-    await replace(next); reset(); setError('');
+  const overwrite = async (next: ProfileRecord[], terms: string[]) => {
+    if ((records.length || neverSend.length) && !window.confirm('Replace the existing local profile and terms?')) {
+      return;
+    }
+    await replace(next, terms); reset(); setTerm(''); setError('');
+  };
+  const updateTerms = async (terms: string[]) => {
+    if (!saveNeverSend) throw new Error('Local privacy settings unavailable.');
+    await saveNeverSend(validateNeverSend(terms));
+    setTerm(''); setError('');
   };
   const download = () => {
-    const url = URL.createObjectURL(new Blob([exportProfile(records)], { type: 'application/json' }));
+    const url = URL.createObjectURL(new Blob([exportProfile(records, neverSend)], { type: 'application/json' }));
     const link = document.createElement('a'); link.href = url; link.download = 'thoughtpartner-profile.json';
     link.click(); URL.revokeObjectURL(url);
   };
@@ -63,7 +75,9 @@ export function ProfilePanel({ records, save, remove, replace, clearAll }: Props
     <section className="panel profile">
       <span className="eyebrow">Only in this browser</span>
       <h2>Builder profile</h2>
-      <p>Skills, projects, lessons and preferences stay local. They are not sent to the model in this version.</p>
+      <p>Skills, projects, lessons and preferences stay local. Selected records may be read by the on-device
+        why-note model only. They are never put in the public question or any cloud prompt, and they stay on
+        this device.</p>
       {profileWarnings(records).map(warning => <p role="status" key={warning}>{warning}</p>)}
       <div className="profile-actions">
         <button onClick={download}>Export profile JSON</button>
@@ -72,14 +86,39 @@ export function ProfilePanel({ records, save, remove, replace, clearAll }: Props
           event.currentTarget.value = '';
           const epoch = operationEpoch.current;
           if (file) void file.text().then(content => {
-            if (epoch === operationEpoch.current) return overwrite(importProfile(content));
+            if (epoch === operationEpoch.current) {
+              const bundle = importProfileBundle(content);
+              return overwrite(bundle.records, bundle.neverSend);
+            }
           }).catch(() => setError('Profile import failed; no records were changed.'));
         }} /></label>
         {(['A', 'B'] as const).map(which => <button key={which} onClick={() => {
-          void overwrite(demoProfile(which)).catch(() => setError('Could not load demo profile.'));
+          void overwrite(demoProfile(which), demoNeverSend(which))
+            .catch(() => setError('Could not load demo profile.'));
         }}>Load demo {which}</button>)}
       </div>
-      <p>Loading a demo or importing replaces the current profile after confirmation.</p>
+      <p>Loading a demo or importing replaces the current profile and terms after confirmation.
+        Profile exports include your private never-send list.</p>
+      <section aria-labelledby="never-send-title">
+        <h3 id="never-send-title">Never send</h3>
+        <p>Names inside your profile text aren't detected automatically — add them here.</p>
+        <label>Private name or term <input value={term} onChange={event => setTerm(event.target.value)} />
+        </label>{' '}
+        <button type="button" onClick={() => {
+          void updateTerms([...neverSend, term]).catch(() =>
+            setError('Cannot save: use at most 200 terms and 100 characters per term.'));
+        }}>Add term</button>
+        {(term.trim().length > 0 && term.trim().length < 4 || neverSend.some(value => value.length < 4)) &&
+          <p role="status">Short terms may hold back many questions.</p>}
+        <ul>{neverSend.map(value => <li key={value}>{value}{' '}
+          <button type="button" onClick={() => {
+            if (window.confirm('Remove this privacy term? Future questions may contain it.')) {
+              void updateTerms(neverSend.filter(existing => existing !== value))
+                .catch(() => setError('Could not remove the privacy term.'));
+            }
+          }}>Remove</button>
+        </li>)}</ul>
+      </section>
       <ul className="profile-records">{records.map(record => <li key={record.id}>
         <strong>{record.type}{record.depth ? ` · ${record.depth}` : ''}</strong> — {record.text}
         <div className="muted">{[...record.topics, ...record.tags].join(', ')}</div>
@@ -121,7 +160,7 @@ export function ProfilePanel({ records, save, remove, replace, clearAll }: Props
       <button onClick={() => {
         if (window.confirm('Delete all local notebook, profile, jobs and items? This cannot be undone.')) {
           operationEpoch.current++;
-          void clearAll().then(() => { reset(); setError(''); })
+          void clearAll().then(() => { reset(); setTerm(''); setError(''); })
             .catch(() => setError('Could not delete all local data.'));
         }
       }}>Delete all local data</button>

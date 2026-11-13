@@ -1,5 +1,13 @@
 # Scaffold notes
 
+Revalidation in progress defers dependents without withdrawal; terminal failure or an unchecked outcome marks them uncertain, ends retained work and withdraws affected pending/approved questions as stale. A later edit requires new proof and does not restore withdrawn entries.
+
+An edit between claim and dispatch may count an attempt that never reached the model; at worst a job gets one fewer retry. The 3-attempt bound is never exceeded.
+
+Why-notes fingerprint every profile record supplied to the model, not just records it cites. A semantic edit or deletion hides the note and queues at most one persisted refresh; if that refresh races again, the note stays hidden. New records alone do not invalidate an existing note. Hashes remain local metadata, never question/Outbox content.
+
+The `/dev` S1 rehearsal adds its invented private terms to Never send only after confirmation; use its Finish/Cancel cleanup button to remove terms added for that play. This does not restore replaced profile records or withdrawn Outbox entries.
+
 ## Verified SDK facts
 
 This project pins `firebase` 13.3.0, containing `@firebase/ai` 3.1.0. The installed `node_modules/@firebase/ai/dist/ai-public.d.ts` declares `getAI`, `GoogleAIBackend`, `getGenerativeModel`, `HybridParams`, `InferenceMode.ONLY_ON_DEVICE`, `OnDeviceParams.createOptions` / `.promptOptions`, `initializeDeviceModel(progress)` and optional `response.inferenceSource`. The on-device source string is `on_device`. `node_modules/@firebase/app-check/dist/app-check-public.d.ts` declares `initializeAppCheck` and `ReCaptchaEnterpriseProvider`.
@@ -57,6 +65,14 @@ The unchanged D-019 `src/eval/scoring.ts::overlaps` is the eligibility check for
 When a changed comparison gives a verified replacement quote but no eligible extracted successor, the previous item remains the lineage content, the lineage advances as `needsConfirmation`, and its dependents are stale for that reason. The panel says it may have changed and shows the verified wording unless the evidence conflicts with another lineage. On later paragraph versions, a head's verified replacement evidence, whenever present, is its sole authoritative baseline for presence, comparison and successor matching; otherwise the item's quote is the baseline. If evidence is still present, code shortcuts to unchanged; if absent, it is used as both comparison text and quote, and an unchanged result carries the old item without falling back to obsolete displayed wording. A baseline-overlapping extracted item can link and clear `needsConfirmation`. Dependents of the older version remain stale, now with reason `changed` rather than `needsConfirmation`.
 
 Before matching, a changed quote is conflicting if it overlaps another lineage's authoritative baseline present in the paragraph, or if it overlaps another changed decision's verified quote. All contenders are flagged without choosing a winner. Code keeps each previous baseline/content, marks the changed lineage `conflictingEvidence` and `needsConfirmation`, and hides the proposed wording; matching runs once with conflicting evidence excluded. This deliberately conservative rule can flag a legitimate merged sentence that expresses both claims. It operates on new batches only. Records written before T05 rev 4 may carry conflicting evidence; clear local data using Profile → Delete all local data after updating. This permanently removes the app's locally stored notebook, profile, items, history and jobs.
+
+## T06 selection and local privacy interpretation
+
+README §4's no-repeat rule is applied conservatively to both the model's source angle and the emitted angle. A profile change cannot bypass a previous source-angle pairing by relabelling it `track-record`, and at most one `track-record` card may be selected per item version. Session counts and tie-breaks use the effective emitted label. The Navigator accepted this interpretation before Run 3. Skill depths map `new/some/deep` to `2/1/0`; the strongest matching skill is selected independently per topic, and the item receives its highest topic score.
+
+For a `track-record` selection, the triggering lesson (most shared topics, then lowest ID) is reserved in slot 1 of the why-note; remaining slots follow shared-topic count, lesson before skill, then ID. This is the Navigator's pre-Run-3 resolution giving README §4 precedence over the ticket's unqualified top-three ordering.
+
+The question filter checks currency, emails, URLs, the user's explicitly listed terms and synthetic private tokens; it is not a general private-detail detector. Profile-text names are not automatically detected and must be added to the local never-send list. The URL check can conservatively hold back library names with TLD-like suffixes such as `socket.io` or `ASP.NET`, and text missing a space after a full stop; these are false positives, not leaks. The list is included in local profile exports but must not appear in shareable exports, prompts or the Outbox.
 
 ## Readiness recovery
 

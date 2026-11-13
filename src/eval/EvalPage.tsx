@@ -30,6 +30,7 @@ import {
 import { useRef } from 'react';
 import type { ExtractVersion } from '../pipeline/extract';
 import { runChangeEvaluation, type Run2Evaluation } from './run2';
+import { runGate2, type Run3Evaluation } from './run3';
 
 export default function EvalPage() {
   const service = useMemo(createService, []);
@@ -40,7 +41,7 @@ export default function EvalPage() {
   const [input, setInput] = useState(() => practiceInput('extract', examples[0].id, 'A'));
   const [result, setResult] = useState('');
   const [running, setRunning] = useState(false);
-  const [runs, setRuns] = useState<Array<Evaluation | Run2Evaluation>>([]);
+  const [runs, setRuns] = useState<Array<Evaluation | Run2Evaluation | Run3Evaluation>>([]);
   const [progress, setProgress] = useState('');
   const [modelIdentity, setModelIdentity] = useState('');
   const [extractVersion, setExtractVersion] = useState<ExtractVersion>('extract.v2');
@@ -167,6 +168,26 @@ export default function EvalPage() {
         signal: current.signal, onUpdate: evaluation => {
           latest = evaluation;
           setProgress(`run2: ${evaluation.rows.length}/${evaluation.total}`);
+        } });
+      setRuns(previous => [...previous, complete]);
+    } catch {
+      if (latest) setRuns(previous => [...previous, latest!]);
+      setProgress('Run stopped unexpectedly. Collected rows are retained if available.');
+    } finally {
+      controller.current = null; setRunning(false);
+    }
+  }
+  async function startGate2() {
+    if (!measuredRunEnabled) return;
+    const current = new AbortController();
+    controller.current = current;
+    setRunning(true); setProgress('Starting run3…');
+    let latest: Run3Evaluation | null = null;
+    try {
+      const complete = await runGate2({ runner: job => service.runLocal(job), warmupLatencyMs: service.warmLatencyMs,
+        onDeviceModel: normalizeModelIdentity(modelIdentity), signal: current.signal, onUpdate: evaluation => {
+          latest = evaluation;
+          setProgress(`run3: ${evaluation.rows.length}/${evaluation.total}`);
         } });
       setRuns(previous => [...previous, complete]);
     } catch {
@@ -307,6 +328,8 @@ export default function EvalPage() {
           </button>{' '}
           <button disabled={!measuredRunEnabled} aria-describedby={measuredReason ? 'measured-reason' : undefined}
             onClick={() => void startChangeEvaluation()}>Start Run 2 · change detection</button>{' '}
+          <button disabled={!measuredRunEnabled} aria-describedby={measuredReason ? 'measured-reason' : undefined}
+            onClick={() => void startGate2()}>Start Run 3 · Gate 2</button>{' '}
           <button
             disabled={!running || !controller.current}
             aria-describedby={!running || !controller.current ? 'cancel-reason' : undefined}
@@ -320,6 +343,7 @@ export default function EvalPage() {
           </button>
           <p>Run 2 uses the frozen target span as both earlier statement and quote;
             code shortcuts need no model call.</p>
+          <p>Run 3 uses 27 synthetic note passes. Its export is local-only and can contain profile-derived text.</p>
           {measuredReason && <p id="measured-reason">{measuredReason}</p>}
           {(!running || !controller.current) && <p id="cancel-reason">No measured run is active to cancel.</p>}
           {runs.length === 0 && <p id="export-reason">Complete or stop a measured run before exporting.</p>}

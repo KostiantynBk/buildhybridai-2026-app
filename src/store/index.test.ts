@@ -11,7 +11,9 @@ afterEach(() => store.close());
 
 describe('local store', () => {
   it('creates an empty schema and migrates legacy text once after commit', async () => {
-    expect(await store.snapshot()).toEqual({ paragraphs: [], items: [], profile: [], jobs: [], lineages: [] });
+    expect(await store.snapshot()).toEqual({ paragraphs: [], items: [], profile: [], jobs: [], lineages: [],
+      neverSend: [], cards: [], outbox: [],
+      dependencies: [] });
     data.set(LEGACY_KEY, `${long}\n\nanother paragraph`);
     await store.migrate(legacy);
     expect(data.has(LEGACY_KEY)).toBe(false);
@@ -136,7 +138,10 @@ describe('local store', () => {
     expect((await store.snapshot()).profile[0].text).toBe('TypeScript');
     await store.deleteProfile(profile.id);
     expect((await store.snapshot()).profile).toHaveLength(0);
-    await store.replaceProfile([profile]);
+    await store.replaceProfile([profile], ['secret']);
+    await expect(store.replaceProfile([], ['x'.repeat(101)])).rejects.toThrow();
+    expect((await store.snapshot()).profile).toEqual([profile]);
+    expect((await store.snapshot()).neverSend).toEqual(['secret']);
     await store.saveNotebook(long, 0);
     await store.enqueueSettled(SETTLE_MS, 'extract.v2');
     await store.claim(SETTLE_MS);
@@ -144,7 +149,9 @@ describe('local store', () => {
     expect((await store.snapshot()).jobs[0].status).toBe('pending');
     data.set(LEGACY_KEY, 'also remove this');
     await store.clearAll(legacy);
-    expect(await store.snapshot()).toEqual({ paragraphs: [], items: [], profile: [], jobs: [], lineages: [] });
+    expect(await store.snapshot()).toEqual({ paragraphs: [], items: [], profile: [], jobs: [], lineages: [],
+      neverSend: [], cards: [], outbox: [],
+      dependencies: [] });
     expect(await store.versions()).toEqual([]);
     expect(data.has(LEGACY_KEY)).toBe(false);
     await store.saveNotebook(long);

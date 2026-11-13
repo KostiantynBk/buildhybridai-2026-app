@@ -1,5 +1,6 @@
 import demos from './demoProfiles.json';
 import type { Depth, ProfileRecord, ProfileType } from '../store';
+import { validateNeverSend } from '../privacy/terms';
 
 export const TOPICS = ['hosting', 'backend', 'frontend', 'mobile', 'auth', 'payments', 'messaging',
   'data-storage', 'ai-api', 'pricing', 'marketing', 'legal-privacy', 'security', 'performance',
@@ -35,7 +36,7 @@ export function profileWarnings(records: ProfileRecord[]): string[] {
   }
   return warnings;
 }
-export function importProfile(text: string): ProfileRecord[] {
+export function importProfileBundle(text: string): { records: ProfileRecord[]; neverSend: string[] } {
   let parsed: unknown;
   try { parsed = JSON.parse(text); } catch { throw new Error('Invalid profile JSON.'); }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid profile JSON.');
@@ -43,10 +44,14 @@ export function importProfile(text: string): ProfileRecord[] {
   if (data.version !== 1 || !Array.isArray(data.records)) throw new Error('Unsupported profile format.');
   const records = data.records.map(record => validateRecord(record));
   if (new Set(records.map(record => record.id)).size !== records.length) throw new Error('Duplicate record IDs.');
-  return records;
+  return { records, neverSend: validateNeverSend(data.neverSend ?? []) };
 }
-export function exportProfile(records: ProfileRecord[]): string {
-  return JSON.stringify({ version: 1, records }, null, 2);
+export function importProfile(text: string): ProfileRecord[] { return importProfileBundle(text).records; }
+export function exportProfile(records: ProfileRecord[], neverSend: string[] = []): string {
+  return JSON.stringify({ version: 1, records, neverSend: validateNeverSend(neverSend) }, null, 2);
+}
+export function demoNeverSend(which: 'A' | 'B'): string[] {
+  return validateNeverSend(demos.profiles[which].privateTokens);
 }
 export function demoProfile(which: 'A' | 'B', now = Date.now()): ProfileRecord[] {
   return demos.profiles[which].records.map(record => {

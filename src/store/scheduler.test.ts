@@ -9,7 +9,7 @@ const result = { data: { items: [{ kind: 'assumption', text: 'test', quote: 'one
   latencyMs: 1, source: 'on_device', raw: '{}' };
 let store: LocalStore;
 let scheduler: Scheduler | undefined;
-const flush = async () => { for (let i = 0; i < 15; i++) await new Promise<void>(resolve => setImmediate(resolve)); };
+const flush = async () => { for (let i = 0; i < 120; i++) await new Promise<void>(resolve => setImmediate(resolve)); };
 function fakeService(run = vi.fn(async () => result)) {
   const service = { state: { kind: 'ready' }, subscribe: () => () => {}, runLocal: run };
   return { service: service as unknown as LocalService, run, state: service.state };
@@ -32,11 +32,10 @@ describe('durable scheduler', () => {
     expect(run).not.toHaveBeenCalled();
     vi.setSystemTime(14000);
     await scheduler.tick();
-    await scheduler.tick();
     expect(run).toHaveBeenCalledTimes(1);
     const snapshot = await store.snapshot();
-    expect(snapshot.jobs).toHaveLength(1);
-    expect(snapshot.jobs[0].status).toBe('done');
+    expect(snapshot.jobs.filter(job => job.step === 'extract')).toHaveLength(1);
+    expect(snapshot.jobs.find(job => job.step === 'extract')?.status).toBe('done');
     expect(snapshot.items[0]).toMatchObject({ promptVersion: 'extract.v2', quote: 'one two' });
   });
   it('automatically wakes on the timer after the settle interval', async () => {

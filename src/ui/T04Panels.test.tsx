@@ -30,4 +30,8 @@ it('renders the local profile form, import/export and deletion controls', () => 
   expect(html).toContain('Load demo A');
   expect(html).toContain('Import profile JSON');
   expect(html).toContain('Delete all local data');
+  expect(html).toContain('Names inside your profile text');
+  const short = renderToStaticMarkup(<ProfilePanel records={[]} neverSend={['AI']} save={async () => {}}
+    remove={async () => {}} replace={async () => {}} clearAll={async () => {}} />);
+  expect(short).toContain('Short terms may hold back many questions.');
 });

@@ -21,7 +21,8 @@ it('keeps store, notebook and profile modules free of Firebase imports', async (
 }, 30000);
 it('keeps lineage and dependency primitives free of network APIs', () => {
   for (const path of ['./index.ts', './staleness.ts', './lineage.ts', '../pipeline/compare.ts',
-    '../pipeline/overlap.ts']) {
+    '../pipeline/overlap.ts', '../pipeline/triage.ts', '../pipeline/selectConcerns.ts', '../pipeline/leakFilter.ts',
+    '../privacy/terms.ts']) {
     const source = readFileSync(new URL(path, import.meta.url), 'utf8');
     expect(source).not.toMatch(/\b(?:fetch|XMLHttpRequest|WebSocket|EventSource)\s*\(/);
   }

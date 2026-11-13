@@ -1,0 +1,399 @@
+{
+  "version": "sessions-v1",
+  "note": "Simulated working sessions. Everything is invented for testing; any match with a real person, company or product is coincidental. Public product names (Stripe, Gmail, App Store, Product Hunt, Hetzner, Postgres, React, Instagram, Facebook) are ordinary public references. The 'thought' texts describe what a good side thought would ask about. They are questions to check, not verified facts.",
+  "sessions": [
+    {
+      "id": "S1",
+      "name": "Tablekeep",
+      "status": "open",
+      "writtenAs": "A",
+      "plays": [
+        { "profile": "A", "mode": "full" },
+        { "profile": "B", "mode": "on-device" }
+      ],
+      "story": "A frontend developer plans a booking page with deposits for small restaurants, starting with one restaurant they know. Over the session they add email confirmations, a way to win more restaurants and a plan for the deposit money, and they change their mind once about how email is sent.",
+      "privateTokens": ["Tablekeep", "Osteria Lunetta", "Lunetta", "Paolo", "€60"],
+      "steps": [
+        {
+          "n": 1,
+          "action": "write",
+          "title": "What it is",
+          "text": "Small restaurants lose money on no-shows. Tablekeep is a booking page they link from Instagram: the guest picks a time, pays a €10 deposit per person and gets it back off the bill. First restaurant is Osteria Lunetta. Paolo said he'd pay €60 a month if no-shows drop. I'll build the page in React this month and worry about the rest after.",
+          "items": [
+            { "id": "S1-i1", "kind": "decision", "span": "pays a €10 deposit per person and gets it back off the bill", "topics": ["payments"] },
+            { "id": "S1-i2", "kind": "assumption", "span": "Paolo said he'd pay €60 a month if no-shows drop", "topics": ["pricing"], "onlyBuilderCanAnswer": true },
+            { "id": "S1-i3", "kind": "decision", "span": "build the page in React this month and worry about the rest after", "topics": ["frontend", "backend"] }
+          ],
+          "plants": [
+            { "id": "S1-p1", "item": "S1-i1", "angle": "limits-operations", "thought": "Whether a payment provider lets a small third-party app take deposits for restaurants and give them back later, and what a returned deposit costs in fees.", "keywords": ["deposit", "refund", "payment provider", "fee"] },
+            { "id": "S1-p2", "item": "S1-i1", "angle": "end-user", "thought": "Whether asking guests for a deposit makes many of them give up on booking.", "keywords": ["deposit", "booking", "abandon", "conversion"] },
+            { "id": "S1-p3", "item": "S1-i3", "angle": "limits-operations", "thought": "The parts left for later (payments, email, the restaurant's side) may decide what the page is able to do at all.", "keywords": ["backend", "payments", "limits", "service"] }
+          ],
+          "notes": ["S1-i2 can only be answered by the builder and Paolo. It should be held back, not researched."]
+        },
+        {
+          "n": 2,
+          "action": "write",
+          "title": "Confirmations",
+          "text": "After booking, the guest gets a confirmation email with a cancel link, and a reminder on the morning of the booking. I'll send from the restaurant's own address so it looks personal, through whichever free email API has the nicest docs. Cancelling more than 24 hours ahead refunds the deposit automatically.",
+          "items": [
+            { "id": "S1-i4", "kind": "decision", "span": "send from the restaurant's own address so it looks personal", "topics": ["messaging"] },
+            { "id": "S1-i5", "kind": "assumption", "span": "whichever free email API has the nicest docs", "topics": ["messaging", "pricing"] },
+            { "id": "S1-i6", "kind": "decision", "span": "Cancelling more than 24 hours ahead refunds the deposit automatically", "topics": ["payments"] }
+          ],
+          "plants": [
+            { "id": "S1-p4", "item": "S1-i4", "angle": "limits-operations", "thought": "Sending from each restaurant's own address needs that restaurant's domain to be set up for the email service; without it mail may be rejected or land in spam.", "keywords": ["sending domain", "SPF", "DKIM", "spam", "deliverability"] },
+            { "id": "S1-p5", "item": "S1-i5", "angle": "limits-operations", "thought": "Free email plans have daily caps and rules that may not fit booking confirmations for several restaurants.", "keywords": ["free plan", "daily limit", "email"] },
+            { "id": "S1-p6", "item": "S1-i6", "angle": "cost-at-scale", "thought": "A refund may not return the provider's fee, so every cancelled booking could cost money.", "keywords": ["refund", "fee", "deposit"] }
+          ],
+          "notes": ["Profile A has a lesson about exactly this (A-l1: reminder emails in spam because the sending domain was not set up). The why-note for A should say so."]
+        },
+        {
+          "n": 3,
+          "action": "write",
+          "title": "Getting restaurants",
+          "text": "Plan: get Osteria Lunetta live, then walk into the other places on the same street with a demo on my phone. Restaurants on the big booking platforms hate the per-cover fees, so they'll switch quickly. I'll invoice each restaurant by hand at the end of the month until there are twenty of them.",
+          "items": [
+            { "id": "S1-i7", "kind": "decision", "span": "walk into the other places on the same street with a demo on my phone", "topics": ["marketing"] },
+            { "id": "S1-i8", "kind": "decision", "span": "invoice each restaurant by hand at the end of the month", "topics": ["payments", "legal-privacy"] },
+            { "id": "S1-i9", "kind": "assumption", "span": "Restaurants on the big booking platforms hate the per-cover fees, so they'll switch quickly", "topics": ["marketing"] }
+          ],
+          "plants": [
+            { "id": "S1-p7", "item": "S1-i9", "angle": "end-user", "thought": "What keeps restaurants on the large booking platforms (contracts, guests who find them there) and how hard switching is in practice.", "keywords": ["booking platform", "switch", "contract", "restaurants"] },
+            { "id": "S1-p8", "item": "S1-i8", "angle": "security-privacy", "thought": "What an invoice to a business has to contain and whether tax must be charged from the first invoice.", "keywords": ["invoice", "VAT", "requirements", "tax"] },
+            { "id": "S1-p9", "item": "S1-i7", "angle": "alternatives", "thought": "How other small tools for restaurants found their first customers.", "keywords": ["restaurants", "first customers", "sales"] }
+          ],
+          "notes": ["This is a contrast step: profile A should be pointed at invoicing, profile B at winning customers (B-l1: a finished product with nobody to show it to)."]
+        },
+        {
+          "n": 4,
+          "action": "write",
+          "title": "Extras for later",
+          "quiet": true,
+          "text": "Extras for later: a waiting list when the evening is full, gift vouchers, a field for special requests, maybe a floor plan where you pick your table. None of this goes into the first version.",
+          "items": [],
+          "plants": [],
+          "notes": ["Feature wishes only. Nothing should be raised."]
+        },
+        {
+          "n": 5,
+          "action": "edit",
+          "replacesStep": 2,
+          "editKind": "real-change",
+          "title": "Confirmations",
+          "text": "After booking, the guest gets a confirmation email with a cancel link, and a reminder on the morning of the booking. All mail goes out from one Tablekeep address with the restaurant's name in the sender line, through whichever free email API has the nicest docs. Cancelling more than 24 hours ahead refunds the deposit automatically.",
+          "changes": [
+            { "item": "S1-i4", "expect": "changed", "path": "model" },
+            { "item": "S1-i5", "expect": "unchanged", "path": "code" },
+            { "item": "S1-i6", "expect": "unchanged", "path": "code" }
+          ],
+          "items": [
+            { "id": "S1-i4b", "kind": "decision", "span": "All mail goes out from one Tablekeep address with the restaurant's name in the sender line", "topics": ["messaging"] }
+          ],
+          "plants": [
+            { "id": "S1-p10", "item": "S1-i4b", "angle": "limits-operations", "thought": "A new sending address has no reputation yet, and guests' replies must still reach the restaurant.", "keywords": ["sender reputation", "reply-to", "new domain", "deliverability"] }
+          ],
+          "notes": ["The builder changed how email is sent. Every card that depended on S1-i4 should get the banner. Cards about S1-i5 and S1-i6 should not, and they should not be raised a second time."]
+        },
+        {
+          "n": 6,
+          "action": "edit",
+          "replacesStep": 1,
+          "editKind": "unrelated",
+          "title": "What it is",
+          "text": "Small restaurants lose money when people book and don't turn up. Tablekeep is a booking page they link from Instagram: the guest picks a time, pays a €10 deposit per person and gets it back off the bill. First restaurant is Osteria Lunetta. Paolo said he'd pay €60 a month if no-shows drop. I'll build the page in React this month and worry about the rest after.",
+          "changes": [
+            { "item": "S1-i1", "expect": "unchanged", "path": "code" },
+            { "item": "S1-i2", "expect": "unchanged", "path": "code" },
+            { "item": "S1-i3", "expect": "unchanged", "path": "code" }
+          ],
+          "items": [],
+          "plants": [],
+          "notes": ["Only the first sentence was reworded. No banner and no new card."]
+        },
+        {
+          "n": 7,
+          "action": "write",
+          "title": "Where the deposit money goes",
+          "text": "Simplest version: all deposits land in my own Stripe account and I pay each restaurant out by bank transfer every Friday, minus my €60. Paolo is fine with weekly. If a guest doesn't show up, the restaurant keeps the deposit and I take nothing extra.",
+          "items": [
+            { "id": "S1-i10", "kind": "decision", "span": "all deposits land in my own Stripe account and I pay each restaurant out by bank transfer every Friday", "topics": ["payments", "legal-privacy"] },
+            { "id": "S1-i11", "kind": "decision", "span": "If a guest doesn't show up, the restaurant keeps the deposit", "topics": ["payments", "legal-privacy"] }
+          ],
+          "plants": [
+            { "id": "S1-p11", "item": "S1-i10", "angle": "security-privacy", "thought": "Whether collecting guests' money into your own account and passing it on to restaurants is allowed by the payment provider's terms, or needs its marketplace product or a licence.", "keywords": ["marketplace", "payouts", "hold funds", "terms", "licence"] },
+            { "id": "S1-p12", "item": "S1-i11", "angle": "security-privacy", "thought": "Whether keeping a no-show deposit is allowed under consumer rules, and what happens when a guest disputes the charge with their bank.", "keywords": ["no-show", "deposit", "dispute", "chargeback", "consumer"] }
+          ],
+          "notes": ["The question that leaves the device must not contain Paolo, Tablekeep or €60."]
+        }
+      ]
+    },
+    {
+      "id": "S2",
+      "name": "Sitelog",
+      "status": "held-back",
+      "writtenAs": "B",
+      "plays": [
+        { "profile": "B", "mode": "full" },
+        { "profile": "A", "mode": "on-device" }
+      ],
+      "story": "A backend developer plans a phone app that turns a site manager's spoken notes into the daily building-site report. Over the session they plan the speech step, offline use and how to sell it, and they change their mind once about building a native app.",
+      "privateTokens": ["Sitelog", "Varga Build", "Varga", "Tomas", "€90"],
+      "steps": [
+        {
+          "n": 1,
+          "action": "write",
+          "title": "What it is",
+          "text": "Site managers at small building firms write the daily report at night, from memory. Sitelog: they talk into the phone during the day and the app turns it into the report the client expects. Varga Build will try it on two sites. I'll do a native iPhone app first, since Tomas and his foremen all have iPhones.",
+          "items": [
+            { "id": "S2-i1", "kind": "decision", "span": "I'll do a native iPhone app first", "topics": ["mobile"] },
+            { "id": "S2-i2", "kind": "assumption", "span": "Tomas and his foremen all have iPhones", "topics": ["mobile"], "onlyBuilderCanAnswer": true }
+          ],
+          "plants": [
+            { "id": "S2-p1", "item": "S2-i1", "angle": "limits-operations", "thought": "What publishing an iPhone app takes before a first test on site: developer account, review, and the tools and hardware needed to build it.", "keywords": ["App Store review", "developer account", "TestFlight", "iOS"] },
+            { "id": "S2-p2", "item": "S2-i1", "angle": "alternatives", "thought": "A web app or a cross-platform toolkit may reach the same phones without a native app.", "keywords": ["web app", "cross-platform", "PWA"] }
+          ],
+          "notes": ["Profile B has never shipped a mobile app (B-s4). The why-note for B should say so."]
+        },
+        {
+          "n": 2,
+          "action": "write",
+          "title": "Speech and summary",
+          "text": "Voice notes get transcribed and summarised by a hosted AI API. I built something like this at work, so I know the pattern: queue, worker, retries. Cost should be close to nothing at this size, about 20 minutes of audio per site per day. I'll pick the cheapest speech model and switch later if the quality is bad.",
+          "items": [
+            { "id": "S2-i4", "kind": "assumption", "span": "Cost should be close to nothing at this size, about 20 minutes of audio per site per day", "topics": ["ai-api", "pricing"] },
+            { "id": "S2-i5", "kind": "decision", "span": "pick the cheapest speech model and switch later if the quality is bad", "topics": ["ai-api"] },
+            { "id": "S2-i6", "kind": "decision", "span": "I know the pattern: queue, worker, retries", "topics": ["backend"] }
+          ],
+          "plants": [
+            { "id": "S2-p3", "item": "S2-i5", "angle": "end-user", "thought": "Whether cheap speech models cope with building-site noise, trade vocabulary and the languages spoken on site.", "keywords": ["speech recognition", "noise", "accuracy", "languages"] },
+            { "id": "S2-p4", "item": "S2-i5", "angle": "limits-operations", "thought": "The speech provider's rate limits, model retirement dates and notice periods.", "keywords": ["rate limit", "deprecation", "speech API"] },
+            { "id": "S2-p5", "item": "S2-i4", "angle": "cost-at-scale", "thought": "The price per minute of audio and how the bill grows with more sites and with the summaries.", "keywords": ["price per minute", "transcription", "cost"] },
+            { "id": "S2-p6", "item": "S2-i6", "angle": "limits-operations", "thought": "Time limits for long audio jobs on the chosen hosting, and what happens to a recording when a job fails halfway.", "keywords": ["job timeout", "retries", "queue"] }
+          ],
+          "notes": [
+            "Profile B's lesson B-l2 (a provider changed its rate limits at two weeks' notice) fits S2-i4 and S2-i5 directly.",
+            "For profile B, S2-i6 is home ground (backend: strong). It should be a one-line mention at most, not a card."
+          ]
+        },
+        {
+          "n": 3,
+          "action": "write",
+          "title": "Offline",
+          "text": "Sites often have no signal, so the app must work offline and sync when it's back. Recordings stay on the phone until then, sometimes for a whole day. The backend is Postgres on my own Hetzner box, I already run one.",
+          "items": [
+            { "id": "S2-i7", "kind": "decision", "span": "the app must work offline and sync when it's back", "topics": ["mobile", "data-storage"] },
+            { "id": "S2-i8", "kind": "assumption", "span": "Recordings stay on the phone until then, sometimes for a whole day", "topics": ["mobile", "data-storage"] },
+            { "id": "S2-i9", "kind": "decision", "span": "The backend is Postgres on my own Hetzner box", "topics": ["hosting", "backend", "data-storage"] }
+          ],
+          "plants": [
+            { "id": "S2-p7", "item": "S2-i7", "angle": "limits-operations", "thought": "What phones let an app do in the background: whether uploads continue when the app is closed or the screen is locked.", "keywords": ["background upload", "iOS", "sync", "offline"] },
+            { "id": "S2-p8", "item": "S2-i8", "angle": "security-privacy", "thought": "Recordings of workers' voices kept on phones and on a private server are personal data; what the people recorded must be told.", "keywords": ["voice recordings", "personal data", "consent", "workers"] },
+            { "id": "S2-p9", "item": "S2-i9", "angle": "alternatives", "thought": "A managed database would take backups and updates off the builder's plate; what it costs at this size.", "keywords": ["managed Postgres", "backups", "cost"] }
+          ],
+          "notes": [
+            "Trap for profile B: the lesson B-l2 shares the topic 'hosting' with S2-i9, but it is about an AI provider's rate limits and has nothing to do with running Postgres. If S2-i9 is mentioned at all, the why-note should not use B-l2.",
+            "Contrast step: profile B should be pointed at the phone side, profile A at running a server alone."
+          ]
+        },
+        {
+          "n": 4,
+          "action": "write",
+          "title": "Report layout",
+          "quiet": true,
+          "text": "Report layout ideas: weather at the top, who was on site, one line per trade. Maybe the firm's logo in the corner. Tables read better than long text. Sort this out later with Tomas.",
+          "items": [],
+          "plants": [],
+          "notes": ["Layout wishes only. Nothing should be raised."]
+        },
+        {
+          "n": 5,
+          "action": "write",
+          "title": "Selling it",
+          "text": "If Varga Build likes it, I'll put it on the App Store at €90 a month per firm with a free trial, and post in a couple of Facebook groups for builders. Subscriptions run through Stripe on the website, like on my last project, so firms pay there and just log in on the phone.",
+          "items": [
+            { "id": "S2-i10", "kind": "decision", "span": "put it on the App Store at €90 a month per firm with a free trial", "topics": ["mobile", "pricing"] },
+            { "id": "S2-i11", "kind": "decision", "span": "Subscriptions run through Stripe on the website", "topics": ["payments", "mobile"] },
+            { "id": "S2-i12", "kind": "decision", "span": "post in a couple of Facebook groups for builders", "topics": ["marketing"] }
+          ],
+          "plants": [
+            { "id": "S2-p10", "item": "S2-i11", "angle": "limits-operations", "thought": "What the App Store rules say about selling a subscription outside the app and only letting users log in.", "keywords": ["App Store", "in-app purchase", "external payment", "subscription"] },
+            { "id": "S2-p11", "item": "S2-i12", "angle": "alternatives", "thought": "Other ways small tools for building firms have found their first customers, and whether trade groups allow promotion.", "keywords": ["first customers", "Facebook groups", "promotion", "small firms"] },
+            { "id": "S2-p12", "item": "S2-i10", "angle": "end-user", "thought": "What small building firms already pay for site software and whether a monthly price per firm is what they expect.", "keywords": ["pricing", "building firms", "per firm", "software"] }
+          ],
+          "notes": [
+            "Contrast step: profile B should be pointed at finding customers (B-l1), profile A at the payment side.",
+            "The question that leaves the device must not contain Varga Build, Sitelog or €90."
+          ]
+        },
+        {
+          "n": 6,
+          "action": "edit",
+          "replacesStep": 1,
+          "editKind": "real-change",
+          "title": "What it is",
+          "text": "Site managers at small building firms write the daily report at night, from memory. Sitelog: they talk into the phone during the day and the app turns it into the report the client expects. Varga Build will try it on two sites. I'll build it as a web app that installs to the home screen, so it runs on any phone and I skip app review.",
+          "changes": [
+            { "item": "S2-i1", "expect": "changed", "path": "model" },
+            { "item": "S2-i2", "expect": "removed", "path": "model" }
+          ],
+          "items": [
+            { "id": "S2-i1b", "kind": "decision", "span": "build it as a web app that installs to the home screen", "topics": ["mobile", "frontend"] }
+          ],
+          "plants": [
+            { "id": "S2-p13", "item": "S2-i1b", "angle": "limits-operations", "thought": "What an installed web app cannot do on iPhones: recording with the screen locked, syncing in the background, keeping stored data.", "keywords": ["PWA", "iOS", "limitations", "background", "storage"] }
+          ],
+          "notes": [
+            "The builder dropped the native app. Every card that depended on S2-i1 should get the banner.",
+            "Observation only, not scored: step 5 still says 'App Store'. A person would notice that; the product tracks each statement on its own and is not expected to. Write down what happens."
+          ]
+        },
+        {
+          "n": 7,
+          "action": "edit",
+          "replacesStep": 3,
+          "editKind": "reworded",
+          "title": "Offline",
+          "text": "Sites often have no signal, so the app must work offline and sync when it's back. Until then the recordings are kept on the phone, which can mean a whole day. The backend is Postgres on my own Hetzner box, I already run one.",
+          "changes": [
+            { "item": "S2-i7", "expect": "unchanged", "path": "code" },
+            { "item": "S2-i8", "expect": "unchanged", "path": "model" },
+            { "item": "S2-i9", "expect": "unchanged", "path": "code" }
+          ],
+          "items": [],
+          "plants": [],
+          "notes": ["One sentence was reworded and means the same. The model has to recognise that. No banner and no new card."]
+        }
+      ]
+    },
+    {
+      "id": "S3",
+      "name": "Skimmer",
+      "status": "held-back",
+      "writtenAs": "neutral",
+      "plays": [
+        { "profile": "A", "mode": "full" },
+        { "profile": "B", "mode": "full" }
+      ],
+      "story": "A builder plans a paid service that reads a person's newsletters and sends one short AI-written digest each morning. The text does not say what the builder is good at, so the same session is played in full for both profiles. They change their mind once about how the newsletters are collected.",
+      "privateTokens": ["Skimmer", "Ilse", "€4", "digest@skimmer.example", "skimmer.example"],
+      "steps": [
+        {
+          "n": 1,
+          "action": "write",
+          "title": "Idea",
+          "text": "People subscribe to thirty newsletters and read two. Skimmer connects to your Gmail, finds the newsletters and sends one short digest every morning, written by an AI model. €4 a month. Ilse and three others from my old team said they'd pay today. I want a first version in three weeks.",
+          "items": [
+            { "id": "S3-i1", "kind": "decision", "span": "Skimmer connects to your Gmail, finds the newsletters", "topics": ["auth", "security", "legal-privacy"] },
+            { "id": "S3-i2", "kind": "assumption", "span": "Ilse and three others from my old team said they'd pay today", "topics": ["marketing", "pricing"], "onlyBuilderCanAnswer": true },
+            { "id": "S3-i3", "kind": "constraint", "span": "I want a first version in three weeks", "topics": ["other"] }
+          ],
+          "plants": [
+            { "id": "S3-p1", "item": "S3-i1", "angle": "limits-operations", "thought": "What Google requires before an app may read users' Gmail (review, security assessment) and how long that takes.", "keywords": ["Gmail API", "restricted scope", "verification", "security assessment"] },
+            { "id": "S3-p2", "item": "S3-i1", "angle": "alternatives", "thought": "A forwarding address would avoid reading the whole inbox.", "keywords": ["forwarding address", "inbox access", "alternative"] }
+          ],
+          "notes": [
+            "Trap for profile B: S3-i2 has the highest 'unfamiliar' score for B (marketing, plus lesson B-l1), but only the builder can answer it. Relevance comes first: it must be held back, not turned into a card."
+          ]
+        },
+        {
+          "n": 2,
+          "action": "write",
+          "title": "The digest",
+          "text": "Each morning a job reads the new newsletters and asks the model for five bullet points per letter. I'll use the cheapest model on its free tier while I have under 50 users. If a newsletter is paid-only, I'll summarise it the same way, the user is a subscriber after all.",
+          "items": [
+            { "id": "S3-i4", "kind": "assumption", "span": "use the cheapest model on its free tier while I have under 50 users", "topics": ["ai-api", "pricing"] },
+            { "id": "S3-i5", "kind": "assumption", "span": "If a newsletter is paid-only, I'll summarise it the same way, the user is a subscriber after all", "topics": ["legal-privacy"] }
+          ],
+          "plants": [
+            { "id": "S3-p3", "item": "S3-i4", "angle": "limits-operations", "thought": "Free-tier rate limits and terms: whether a free tier may be used for a public product, and what happens to the text sent to it.", "keywords": ["free tier", "rate limit", "terms", "production"] },
+            { "id": "S3-p4", "item": "S3-i5", "angle": "security-privacy", "thought": "Whether summarising and re-sending paid newsletter content is allowed by copyright and by the newsletters' terms.", "keywords": ["copyright", "paid newsletter", "summary", "terms"] },
+            { "id": "S3-p5", "item": "S3-i4", "angle": "cost-at-scale", "thought": "Thirty newsletters per user per day is a lot of text; what that costs per user per month once the free tier ends, against the subscription price.", "keywords": ["tokens", "cost per user", "summarisation", "price"] }
+          ],
+          "notes": ["Contrast step: profile A should be pointed at the legal question, profile B at the AI provider's limits (B-l2)."]
+        },
+        {
+          "n": 3,
+          "action": "write",
+          "title": "Sending",
+          "text": "The digest goes out by email at 7:00 in each user's time zone from digest@skimmer.example. 500 users means 500 emails a day, which any provider handles. Unsubscribing is a setting inside the app.",
+          "items": [
+            { "id": "S3-i7", "kind": "assumption", "span": "500 users means 500 emails a day, which any provider handles", "topics": ["messaging"] },
+            { "id": "S3-i8", "kind": "decision", "span": "Unsubscribing is a setting inside the app", "topics": ["messaging", "legal-privacy"] }
+          ],
+          "plants": [
+            { "id": "S3-p6", "item": "S3-i7", "angle": "limits-operations", "thought": "A new sending address has no reputation, and a daily email made of other newsletters may be treated as bulk mail or spam.", "keywords": ["sender reputation", "warm-up", "spam", "deliverability"] },
+            { "id": "S3-p7", "item": "S3-i8", "angle": "security-privacy", "thought": "Mailbox providers and the law may require an unsubscribe link in every email, not only a setting in the app.", "keywords": ["unsubscribe", "one-click", "requirements", "email"] }
+          ],
+          "notes": [
+            "Profile A has the lesson A-l1 (reminder emails in spam). The why-note for A should say so; profile B has no such record and its why-note should not claim one.",
+            "The paragraph contains an email address. It must not appear in any question that leaves the device."
+          ]
+        },
+        {
+          "n": 4,
+          "action": "write",
+          "title": "Later, maybe",
+          "quiet": true,
+          "text": "Later, maybe: a weekly version, an audio digest for the commute, dark mode, a home-screen widget. Parking all of this.",
+          "items": [],
+          "plants": [],
+          "notes": ["Feature wishes only. Nothing should be raised."]
+        },
+        {
+          "n": 5,
+          "action": "write",
+          "title": "Launch and money",
+          "text": "I have no audience, so: a waiting-list page from this weekend, then Product Hunt and a Show HN post on the same day. I'd guess 5% of the waiting list ends up paying. Payments through Stripe Checkout, monthly only. VAT I'll sort out when someone asks.",
+          "items": [
+            { "id": "S3-i9", "kind": "decision", "span": "a waiting-list page from this weekend, then Product Hunt and a Show HN post on the same day", "topics": ["marketing"] },
+            { "id": "S3-i10", "kind": "assumption", "span": "I'd guess 5% of the waiting list ends up paying", "topics": ["marketing", "pricing"] },
+            { "id": "S3-i11", "kind": "decision", "span": "VAT I'll sort out when someone asks", "topics": ["payments", "legal-privacy"] }
+          ],
+          "plants": [
+            { "id": "S3-p8", "item": "S3-i10", "angle": "end-user", "thought": "What share of a waiting list usually turns into paying users for small consumer tools.", "keywords": ["waiting list", "conversion", "paying"] },
+            { "id": "S3-p9", "item": "S3-i9", "angle": "alternatives", "thought": "Launch-day posts bring a short spike; other ways such tools have found users who stay.", "keywords": ["Product Hunt", "launch", "retention", "audience"] },
+            { "id": "S3-p10", "item": "S3-i11", "angle": "security-privacy", "thought": "Whether tax on digital services sold to consumers in the EU applies from the first sale, and what the payment provider does and does not take care of.", "keywords": ["VAT", "digital services", "consumers", "first sale"] }
+          ],
+          "notes": ["The clearest contrast step: profile A (never handled VAT; Gumroad did it) should be pointed at VAT, profile B (no audience; Ledgerline) at the launch."]
+        },
+        {
+          "n": 6,
+          "action": "edit",
+          "replacesStep": 1,
+          "editKind": "real-change",
+          "title": "Idea",
+          "text": "People subscribe to thirty newsletters and read two. Skimmer gives you a private forwarding address, you point your newsletters at it, and it sends one short digest every morning, written by an AI model. €4 a month. Ilse and three others from my old team said they'd pay today. I want a first version in three weeks.",
+          "changes": [
+            { "item": "S3-i1", "expect": "changed", "path": "model" },
+            { "item": "S3-i2", "expect": "unchanged", "path": "code" },
+            { "item": "S3-i3", "expect": "unchanged", "path": "code" }
+          ],
+          "items": [
+            { "id": "S3-i1b", "kind": "decision", "span": "Skimmer gives you a private forwarding address, you point your newsletters at it", "topics": ["messaging"] }
+          ],
+          "plants": [
+            { "id": "S3-p11", "item": "S3-i1b", "angle": "end-user", "thought": "Whether people will change the address on thirty subscriptions, and whether newsletters accept a forwarding address.", "keywords": ["forwarding", "re-subscribe", "setup effort", "newsletters"] }
+          ],
+          "notes": ["The builder dropped Gmail access. Every card that depended on S3-i1 should get the banner."]
+        },
+        {
+          "n": 7,
+          "action": "edit",
+          "replacesStep": 5,
+          "editKind": "unrelated",
+          "title": "Launch and money",
+          "text": "Nobody knows me yet, so: a waiting-list page from this weekend, then Product Hunt and a Show HN post on the same day. I'd guess 5% of the waiting list ends up paying. Payments through Stripe Checkout, monthly only. VAT I'll sort out when someone asks.",
+          "changes": [
+            { "item": "S3-i9", "expect": "unchanged", "path": "code" },
+            { "item": "S3-i10", "expect": "unchanged", "path": "code" },
+            { "item": "S3-i11", "expect": "unchanged", "path": "code" }
+          ],
+          "items": [],
+          "plants": [],
+          "notes": ["Only the opening words changed. No banner and no new card."]
+        }
+      ]
+    }
+  ]
+}

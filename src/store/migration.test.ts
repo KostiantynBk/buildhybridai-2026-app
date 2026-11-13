@@ -37,6 +37,33 @@ it('upgrades a v1 database and migrates only current items into independent v1 l
   } finally { store.close(); }
 });
 
+it('upgrades a v2 database without losing prior data and persists the new privacy list', async () => {
+  const name = `migration-v2-${crypto.randomUUID()}`;
+  const old = await openDB(name, 2, { upgrade(db) {
+    db.createObjectStore('paragraphs', { keyPath: 'id' });
+    db.createObjectStore('paragraphVersions', { keyPath: ['id', 'version'] });
+    db.createObjectStore('items', { keyPath: 'id' });
+    db.createObjectStore('profile', { keyPath: 'id' });
+    db.createObjectStore('jobs', { keyPath: 'key' });
+    db.createObjectStore('outbox', { keyPath: 'id' });
+    db.createObjectStore('meta', { keyPath: 'key' });
+    db.createObjectStore('lineageVersions', { keyPath: ['lineageId', 'version'] });
+    db.createObjectStore('dependencies', { keyPath: ['consumerId', 'lineageId', 'version'] });
+    db.createObjectStore('comparisonBatches', { keyPath: 'key' });
+  } });
+  const record = { id: 'p1', type: 'project', text: 'Local project', topics: [], tags: [], updatedAt: 1 };
+  await old.put('profile', record);
+  old.close();
+  const store = await openLocalStore(name);
+  try {
+    expect((await store.snapshot()).profile).toEqual([record]);
+    expect((await store.snapshot()).neverSend).toEqual([]);
+    await store.putNeverSend(['  Acme  ', 'acme']);
+    expect((await store.snapshot()).neverSend).toEqual(['Acme']);
+    await store.clearAll({ getItem: () => null, removeItem: () => {} });
+    expect((await store.snapshot()).neverSend).toEqual([]);
+  } finally { store.close(); }
+});
 it('rolls back an aborted upgrade without an unhandled completion rejection', async () => {
   const name = `migration-abort-${crypto.randomUUID()}`;
   const old = await openDB(name, 1, { upgrade(db) {

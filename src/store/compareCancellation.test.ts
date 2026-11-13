@@ -8,7 +8,7 @@ const old = 'The hosting handles fifty visitors at once. The project has a simpl
 const edited = 'The hosting handles twenty visitors at once. The project has a simple catalogue for early users.';
 const oldQuote = 'The hosting handles fifty visitors at once';
 const newQuote = 'The hosting handles twenty visitors at once';
-const flush = async () => { for (let i = 0; i < 20; i++) await new Promise<void>(resolve => setImmediate(resolve)); };
+const flush = async () => { for (let i = 0; i < 120; i++) await new Promise<void>(resolve => setImmediate(resolve)); };
 async function pendingCompare(store: LocalStore) {
   await store.saveNotebook(`${old}\n\nshort side`, 0);
   await store.enqueueSettled(4000, 'extract.v2');
