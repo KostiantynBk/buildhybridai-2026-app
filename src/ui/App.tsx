@@ -10,8 +10,12 @@ import { OutboxPage } from './OutboxPage';
 import { Notices } from './Notices';
 import { PlaceholderPage } from './PlaceholderPage';
 import { StatusBar } from './StatusBar';
+import { STORAGE_BLOCKED_NOTICE, STORAGE_OUTDATED_NOTICE } from './storageNotices';
 
 const emptySnapshot = (): Snapshot => ({ paragraphs: [], items: [], profile: [], jobs: [] });
+export function StorageNotice({ notice }: { notice: string }) {
+  return notice ? <p role="alert">{notice}</p> : null;
+}
 const DevSessionPlayer = import.meta.env.DEV ? lazy(() => import('../eval/SessionPlayerPanel')) : null;
 export default function App({ developerPlayer = false }: { developerPlayer?: boolean } = {}) {
   const service = useMemo(createService, []);
@@ -19,6 +23,7 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
   const [page, setPage] = useState('Notebook');
   const [text, setText] = useState('');
   const [storageStatus, setStorageStatus] = useState<'loading' | 'saving' | 'saved' | 'error'>('loading');
+  const [storageNotice, setStorageNotice] = useState('');
   const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
   const snapshotRef = useRef(snapshot);
   const [settings, setSettings] = useState(builtInSettings);
@@ -45,6 +50,7 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
     mounted.current = true;
     let opened: LocalStore | null = null;
     let scheduler: Scheduler | null = null;
+    let outdated = false;
     const update = () => {
       if (!opened) return;
       void opened.snapshot().then(value => {
@@ -54,11 +60,22 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
     };
     void (async () => {
       try {
-        opened = await openLocalStore();
-        if (!mounted.current) { opened.close(); return; }
+        opened = await openLocalStore(undefined, {
+          onBlocked: () => {
+            if (mounted.current) setStorageNotice(STORAGE_BLOCKED_NOTICE);
+          },
+          onVersionChange: () => {
+            outdated = true; scheduler?.stop(); schedulerRef.current = null; storeRef.current = null;
+            if (mounted.current) {
+              setStorageNotice(STORAGE_OUTDATED_NOTICE); setStorageStatus('error');
+            }
+          },
+        });
+        if (!mounted.current || outdated) { opened.close(); return; }
         await opened.migrate(localStorage);
         const initial = await opened.snapshot();
-        if (!mounted.current) { opened.close(); return; }
+        if (!mounted.current || outdated) { opened.close(); return; }
+        setStorageNotice('');
         storeRef.current = opened;
         snapshotRef.current = initial;
         setSnapshot(initial);
@@ -135,6 +152,7 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
             {item}
           </button>))}</nav></header>
       <Notices configured={config !== null} state={service.state} />
+      <StorageNotice notice={storageNotice} />
       <main>{page === 'Notebook' ? <NotebookPanel text={text} save={save} storageStatus={storageStatus}
         snapshot={snapshot} configured={config !== null} ready={service.state.kind === 'ready'}
         feedback={(cardId, value) => {

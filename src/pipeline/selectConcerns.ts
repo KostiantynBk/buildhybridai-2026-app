@@ -6,6 +6,7 @@ export type DisplayAngle = Angle | 'track-record';
 export interface SelectionItem { lineageId: string; version: number; kind: string; quote: string; topics: string[] }
 export interface Concern { item: number; angle: Angle; concern: string; checkable: boolean }
 export interface Pair { lineageId: string; version: number; angle: DisplayAngle; sourceAngle?: Angle }
+export interface PriorLiveCard { quote: string; angle: DisplayAngle; sourceAngle: Angle }
 export interface Pick { item: SelectionItem; concern: Concern; angle: DisplayAngle; score: number;
   lessonId: string | null; modelOrder: number; brief: boolean }
 export type HeldReason = 'invalid-item' | 'unverified-quote' | 'only-you' | 'repeat' | 'over-limit';
@@ -27,6 +28,7 @@ function hasPair(pairs: readonly Pair[], item: SelectionItem, angle: DisplayAngl
 export function selectConcerns(options: {
   paragraph: string; items: readonly SelectionItem[]; concerns: readonly Concern[]; profile: readonly ProfileRecord[];
   used: readonly Pair[]; angleCounts: Partial<Record<DisplayAngle, number>>; alreadyShown?: number;
+  priorLiveCards?: readonly PriorLiveCard[];
 }): { picked: Pick[]; held: Held[] } {
   const held: Held[] = [];
   const candidates: Pick[] = [];
@@ -43,7 +45,12 @@ export function selectConcerns(options: {
     const lesson = options.profile.filter(record => record.type === 'lesson' && shared(record) > 0)
       .sort((a, b) => shared(b) - shared(a) || a.id.localeCompare(b.id))[0];
     const angle = lesson ? 'track-record' : concern.angle;
-    if (hasPair(options.used, item, angle, concern.angle)) {
+    const duplicate = options.priorLiveCards?.some(card => {
+      const priorQuote = normalizeQuote(card.quote);
+      return priorQuote && (quote.includes(priorQuote) || priorQuote.includes(quote)) &&
+        (card.sourceAngle === concern.angle || card.angle === angle);
+    });
+    if (duplicate || hasPair(options.used, item, angle, concern.angle)) {
       held.push({ concern, modelOrder, reason: 'repeat' }); return;
     }
     const score = unfamiliarity(item.topics, options.profile) + (lesson ? 1 : 0);

@@ -57,8 +57,10 @@ interface Database extends DBSchema {
   dependencies: { key: [string, string, number]; value: Dependency };
   comparisonBatches: { key: string; value: ComparisonBatch };
   privacy: { key: string; value: { key: string; terms: string[] } };
+  anglesConsidered: { key: [string, number]; value: { lineageId: string; version: number; recordedAt: number;
+    source: 'adopted' | 'migrated-card' | 'migrated-current' } };
 }
-export const STORE_VERSION = 3;
+export const STORE_VERSION = 4;
 export const LEGACY_KEY = 'thoughtpartner-notebook';
 export const SETTLE_MS = 4000;
 export const MIN_WORDS = 12;
@@ -85,6 +87,10 @@ function currentTriageItems(paragraph: Paragraph, items: StoredItem[], versions:
       text: item.text, topics: item.topics }];
   });
   return eligibleItems(paragraph.text, list);
+}
+function unconsideredItems(items: TriageItem[], considered: Array<{ lineageId: string; version: number }>) {
+  const keys = new Set(considered.map(value => JSON.stringify([value.lineageId, value.version])));
+  return items.filter(item => !keys.has(JSON.stringify([item.lineageId, item.version])));
 }
 function triageFailure(job: StoredJob, card: ThoughtCard | undefined, now: number):
   { card?: ThoughtCard; event: FunnelEvent } {
@@ -174,18 +180,20 @@ export class LocalStore {
     }
   }
   async enqueueAngles(now: number): Promise<void> {
-    const tx = this.db.transaction(['paragraphs', 'items', 'jobs', 'lineageVersions', 'comparisonBatches'],
-      'readwrite');
+    const tx = this.db.transaction(['paragraphs', 'items', 'jobs', 'lineageVersions', 'comparisonBatches',
+      'anglesConsidered'], 'readwrite');
     void tx.done.catch(() => undefined);
     try {
-      const [paragraphs, items, versions, jobs] = await Promise.all([tx.objectStore('paragraphs').getAll(),
-        tx.objectStore('items').getAll(), tx.objectStore('lineageVersions').getAll(), tx.objectStore('jobs').getAll()]);
+      const [paragraphs, items, versions, jobs, considered] = await Promise.all([
+        tx.objectStore('paragraphs').getAll(), tx.objectStore('items').getAll(),
+        tx.objectStore('lineageVersions').getAll(), tx.objectStore('jobs').getAll(),
+        tx.objectStore('anglesConsidered').getAll()]);
       for (const paragraph of paragraphs) {
         const key = `${paragraph.id}@${paragraph.version}#angles`;
         const extract = jobs.find(job => job.key === jobKey(paragraph.id, paragraph.version));
         if (extract?.status !== 'done' || jobs.some(job => job.key === key) ||
             await tx.objectStore('comparisonBatches').get(batchKey(paragraph.id, paragraph.version)) ||
-            !currentTriageItems(paragraph, items, versions).length) continue;
+            !unconsideredItems(currentTriageItems(paragraph, items, versions), considered).length) continue;
         await tx.objectStore('jobs').put({ key, paragraphId: paragraph.id, paragraphVersion: paragraph.version,
           step: 'angles', promptVersion: 'angles.v1', status: 'pending', attempts: 0, createdAt: now, nextRunAt: now });
       }
@@ -197,17 +205,20 @@ export class LocalStore {
     }
   }
   async anglesInput(job: StoredJob): Promise<{ paragraph: string; items: TriageItem[] } | null> {
-    const tx = this.db.transaction(['paragraphs', 'items', 'lineageVersions', 'comparisonBatches'], 'readonly');
+    const tx = this.db.transaction(['paragraphs', 'items', 'lineageVersions', 'comparisonBatches', 'anglesConsidered'],
+      'readonly');
     void tx.done.catch(() => undefined);
     try {
-      const [paragraph, items, versions, batch] = await Promise.all([
+      const [paragraph, items, versions, batch, considered] = await Promise.all([
         tx.objectStore('paragraphs').get(job.paragraphId), tx.objectStore('items').getAll(),
         tx.objectStore('lineageVersions').getAll(),
         tx.objectStore('comparisonBatches').get(batchKey(job.paragraphId, job.paragraphVersion)),
+        tx.objectStore('anglesConsidered').getAll(),
       ]);
       await tx.done;
       if (!paragraph || paragraph.version !== job.paragraphVersion || batch) return null;
-      return { paragraph: paragraph.text, items: currentTriageItems(paragraph, items, versions) };
+      const eligible = unconsideredItems(currentTriageItems(paragraph, items, versions), considered);
+      return eligible.length ? { paragraph: paragraph.text, items: eligible } : null;
     } catch (error) {
       try { tx.abort(); } catch { /* Already finished or aborted. */ }
       await tx.done.catch(() => undefined);
@@ -217,29 +228,41 @@ export class LocalStore {
   async completeAngles(job: StoredJob, input: { paragraph: string; items: TriageItem[] }, concerns: Concern[],
     sessionId: string, now = Date.now()): Promise<boolean> {
     const tx = this.db.transaction(['jobs', 'paragraphs', 'items', 'lineageVersions', 'comparisonBatches', 'profile',
-      'cards', 'dependencies', 'funnel'], 'readwrite');
+      'cards', 'dependencies', 'funnel', 'anglesConsidered'], 'readwrite');
     void tx.done.catch(() => undefined);
     try {
-      const [current, paragraph, items, versions, batch, profile, cards] = await Promise.all([
+      const [current, paragraph, items, versions, batch, profile, cards, considered] = await Promise.all([
         tx.objectStore('jobs').get(job.key), tx.objectStore('paragraphs').get(job.paragraphId),
         tx.objectStore('items').getAll(), tx.objectStore('lineageVersions').getAll(),
         tx.objectStore('comparisonBatches').get(batchKey(job.paragraphId, job.paragraphVersion)),
         tx.objectStore('profile').getAll(), tx.objectStore('cards').getAll(),
+        tx.objectStore('anglesConsidered').getAll(),
       ]);
       if (!current || current.step !== 'angles' || current.status !== 'running' || !paragraph || batch ||
           paragraph.version !== job.paragraphVersion || paragraph.text !== input.paragraph ||
-          JSON.stringify(currentTriageItems(paragraph, items, versions)) !== JSON.stringify(input.items)) {
+          JSON.stringify(unconsideredItems(currentTriageItems(paragraph, items, versions), considered)) !==
+            JSON.stringify(input.items)) {
         if (current?.status === 'running') await tx.objectStore('jobs').put({ ...current, status: 'superseded' });
         await tx.done; return false;
       }
+      for (const item of input.items) await tx.objectStore('anglesConsidered').put({ lineageId: item.lineageId,
+        version: item.version, recordedAt: now, source: 'adopted' });
       const used: Pair[] = cards.map(card => ({ lineageId: card.itemLineageId, version: card.itemVersion,
         angle: card.angle, sourceAngle: card.sourceAngle }));
       const angleCounts: Partial<Record<DisplayAngle, number>> = {};
       for (const card of cards.filter(value => value.sessionId === sessionId)) {
         angleCounts[card.angle] = (angleCounts[card.angle] ?? 0) + 1;
       }
+      const heads = lineageHeads(versions);
+      const priorLiveCards = cards.filter(card => {
+        if (card.paragraphId !== paragraph.id || card.paragraphVersion >= paragraph.version ||
+            card.questionStatus === 'waiting' || card.recheckFailedVersion !== undefined) return false;
+        const head = heads.find(value => value.lineageId === card.itemLineageId);
+        return head && head.version === card.itemVersion && head.paragraphVersion === paragraph.version &&
+          head.status !== 'removed' && !head.unchecked && !head.needsConfirmation;
+      }).map(card => ({ quote: card.itemQuote, angle: card.angle, sourceAngle: card.sourceAngle }));
       const selection = selectConcerns({ paragraph: input.paragraph, items: input.items, concerns, profile, used,
-        angleCounts, alreadyShown: cards.filter(card => card.paragraphId === paragraph.id &&
+        priorLiveCards, angleCounts, alreadyShown: cards.filter(card => card.paragraphId === paragraph.id &&
           card.paragraphVersion === paragraph.version).length });
       for (const [modelOrder, concern] of concerns.entries()) {
         await tx.objectStore('funnel').put({ id: id(), paragraphId: paragraph.id, paragraphVersion: paragraph.version,
@@ -1108,7 +1131,8 @@ export class LocalStore {
   async clearAll(storage: LegacyStorage): Promise<void> {
     storage.removeItem(LEGACY_KEY);
     const tx = this.db.transaction(['paragraphs', 'paragraphVersions', 'items', 'profile', 'jobs', 'outbox', 'meta',
-      'lineageVersions', 'dependencies', 'comparisonBatches', 'privacy', 'cards', 'funnel'], 'readwrite');
+      'lineageVersions', 'dependencies', 'comparisonBatches', 'privacy', 'cards', 'funnel', 'anglesConsidered'],
+      'readwrite');
     void tx.done.catch(() => undefined);
     try {
       for (const name of tx.objectStoreNames) await tx.objectStore(name).clear();
@@ -1121,8 +1145,13 @@ export class LocalStore {
     }
   }
 }
-export async function openLocalStore(name = 'thoughtpartner'): Promise<LocalStore> {
-  const db = await openDB<Database>(name, STORE_VERSION, {
+export async function openLocalStore(name = 'thoughtpartner', events: {
+  onBlocked?: () => void; onVersionChange?: () => void;
+} = {}): Promise<LocalStore> {
+  let db: IDBPDatabase<Database> | undefined;
+  db = await openDB<Database>(name, STORE_VERSION, {
+    blocked() { events.onBlocked?.(); },
+    blocking() { db?.close(); events.onVersionChange?.(); },
     upgrade(database, oldVersion, _newVersion, tx) {
       void tx.done.catch(() => undefined);
       if (oldVersion < 1) {
@@ -1133,6 +1162,30 @@ export async function openLocalStore(name = 'thoughtpartner'): Promise<LocalStor
         database.createObjectStore('jobs', { keyPath: 'key' });
         database.createObjectStore('outbox', { keyPath: 'id' });
         database.createObjectStore('meta', { keyPath: 'key' });
+      }
+      if (oldVersion < 4) {
+        database.createObjectStore('anglesConsidered', { keyPath: ['lineageId', 'version'] });
+        if (oldVersion === 3) {
+          void (async () => {
+            const [cards, paragraphs, items, versions, jobs, batches] = await Promise.all([
+              tx.objectStore('cards').getAll(), tx.objectStore('paragraphs').getAll(),
+              tx.objectStore('items').getAll(), tx.objectStore('lineageVersions').getAll(),
+              tx.objectStore('jobs').getAll(), tx.objectStore('comparisonBatches').getAll(),
+            ]);
+            const considered = tx.objectStore('anglesConsidered');
+            for (const card of cards) await considered.put({ lineageId: card.itemLineageId,
+              version: card.itemVersion, recordedAt: Date.now(), source: 'migrated-card' });
+            for (const paragraph of paragraphs) {
+              if (!jobs.some(job => job.step === 'angles' && job.paragraphId === paragraph.id &&
+                  job.paragraphVersion === paragraph.version && job.status === 'done') || batches.some(batch =>
+                  batch.paragraphId === paragraph.id && batch.paragraphVersion === paragraph.version)) continue;
+              for (const item of currentTriageItems(paragraph, items, versions)) {
+                await considered.put({ lineageId: item.lineageId, version: item.version, recordedAt: Date.now(),
+                  source: 'migrated-current' });
+              }
+            }
+          })().catch(() => { try { tx.abort(); } catch { /* Upgrade has already aborted. */ } });
+        }
       }
       if (oldVersion < 3) {
         database.createObjectStore('privacy', { keyPath: 'key' });

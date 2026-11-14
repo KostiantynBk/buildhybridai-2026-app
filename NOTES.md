@@ -1,5 +1,9 @@
 # Scaffold notes
 
+Angles receive only lineage/version pairs not previously considered on an adopted run; the full paragraph remains context. A candidate overlapping a live card from an earlier version of the same paragraph is held as a display-only repeat when its source angle or effective label matches; this never links identity or affects staleness.
+
+The v3→v4 migration conservatively seeds considered pairs from existing cards and completed angles on the still-current paragraph version; unprovable history remains unmarked.
+
 Revalidation in progress defers dependents without withdrawal; terminal failure or an unchecked outcome marks them uncertain, ends retained work and withdraws affected pending/approved questions as stale. A later edit requires new proof and does not restore withdrawn entries.
 
 An edit between claim and dispatch may count an attempt that never reached the model; at worst a job gets one fewer retry. The 3-attempt bound is never exceeded.

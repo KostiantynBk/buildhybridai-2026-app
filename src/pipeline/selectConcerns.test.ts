@@ -73,6 +73,23 @@ describe('selection rule', () => {
     expect(result.picked).toHaveLength(0);
     expect(result.held[0].reason).toBe('repeat');
   });
+  it('holds cross-version quote overlaps only for matching source or effective angles', () => {
+    const items = [item('a', ['hosting'], 'quoted statement'), item('b', ['payments'], 'in the plan')];
+    const concerns = [concern(1, 'end-user'), concern(2, 'alternatives')];
+    const baseline = run(items, concerns);
+    expect(baseline.picked).toHaveLength(2);
+    const priorLiveCards = [{ quote: 'A quoted statement', angle: 'end-user', sourceAngle: 'end-user' }];
+    const filtered = run(items, concerns, [], { priorLiveCards });
+    expect(filtered.held).toEqual([expect.objectContaining({ modelOrder: 0, reason: 'repeat' })]);
+    expect(filtered.picked.map(value => value.modelOrder)).toEqual([1]);
+    const effective = run([items[0]], [concern(1, 'alternatives')], [lesson('l', ['hosting'])],
+      { priorLiveCards: [{ quote: 'A quoted statement', angle: 'track-record', sourceAngle: 'end-user' }] });
+    expect(effective.held[0].reason).toBe('repeat');
+    expect(run(items, concerns)).toEqual(baseline);
+    const sameVersion = run([item('x', ['hosting'], 'A quoted statement'),
+      item('y', ['hosting'], 'quoted statement')], [concern(1), concern(2)]);
+    expect(sameVersion.picked.map(value => value.modelOrder)).toEqual([0, 1]);
+  });
   it('shows at most one track-record card per item version even across different source angles', () => {
     const result = run([item('a', ['hosting'])], [concern(1, 'end-user'), concern(1, 'alternatives')],
       [lesson('lesson', ['hosting'])]);
