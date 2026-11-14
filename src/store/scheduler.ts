@@ -112,7 +112,7 @@ export class Scheduler {
           const input = await this.store.anglesInput(claimed.job);
           if (!input) { await this.store.supersedeJob(claimed.job); return; }
           const result = await runAngles(job => this.service.runLocal(job), input.paragraph, input.items,
-            controller.signal, () => { dispatched = true; });
+            controller.signal, () => { dispatched = true; }, claimed.job.promptVersion === 'angles.v1' ? 'v1' : 'v2');
           if (this.stopped || controller.signal.aborted || generation !== this.generation) {
             await this.store.fail(claimed.job, 'AbortError', true, this.now(), false, dispatched);
           } else {
@@ -124,7 +124,7 @@ export class Scheduler {
           const card = input.card;
           const result = await runQuestion(job => this.service.runLocal(job),
             { text: card.itemText, quote: card.itemQuote }, card.sourceAngle, card.concern, input.neverSend, [],
-            controller.signal, () => { dispatched = true; });
+            controller.signal, () => { dispatched = true; }, claimed.job.promptVersion === 'question.v1' ? 'v1' : 'v2');
           if (this.stopped || controller.signal.aborted || generation !== this.generation) {
             await this.store.fail(claimed.job, 'AbortError', true, this.now(), false, dispatched);
           } else {
@@ -140,11 +140,12 @@ export class Scheduler {
           const fingerprints = await fingerprintRecords(supplied);
           const result = await runWhyNote(job => this.service.runLocal(job), card.itemQuote, card.angle,
             card.concern, input.question, card.topics, supplied, controller.signal, card.lessonId,
-            () => { dispatched = true; });
+            () => { dispatched = true; }, card.itemKind ?? 'assumption',
+            claimed.job.promptVersion === 'whynote.v1' ? 'v1' : 'v2');
           if (this.stopped || controller.signal.aborted || generation !== this.generation) {
             await this.store.fail(claimed.job, 'AbortError', true, this.now(), false, dispatched);
           } else {
-            await this.store.completeWhy(claimed.job, result.note, supplied, fingerprints);
+            await this.store.completeWhy(claimed.job, result.note, supplied, fingerprints, result.whyDropped);
           }
         } else {
           throw new Error('Unsupported job step.');

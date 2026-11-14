@@ -1,11 +1,14 @@
 import { SDK_VERSION } from 'firebase/app';
 import notes from '../../eval/set-v1/notes.json';
+import practice from '../../eval/practice-v2/notes.json';
+import examples from '../../eval/set-v1/dev-examples.json';
 import { LocalError } from '../ai/localModel';
 import { safeErrorName } from '../ai/errorMetadata';
 import { extract, type LocalRunner } from '../pipeline/extract';
 import { filterQuestion } from '../pipeline/leakFilter';
 import { selectConcerns, type Pick } from '../pipeline/selectConcerns';
 import { runAngles, runQuestion, runWhyNote, type TriageItem } from '../pipeline/triage';
+import { TRIAGE_PROMPT_SET, triagePromptVersions, type TriageVersion } from '../pipeline/triageVersion';
 import { demoNeverSend, demoProfile } from '../profile/profile';
 import { builtInSettings } from '../settings/defaults';
 import { normalizeModelIdentity } from './modelIdentity';
@@ -15,13 +18,17 @@ const profiles = ['A', 'B'] as const;
 type ProfileId = typeof profiles[number];
 type QuestionRow = { key: string; question: string | null; keptOut: string[]; passed: boolean;
   privateBefore: boolean; privateAfter: boolean; latencyMs: number; source: string };
-type WhyRow = { profile: ProfileId; key: string; seeing: string; why: string; used: string[]; source: string };
+type WhyRow = { profile: ProfileId; key: string; seeing: string; why: string; used: string[]; source: string;
+  whyDropped: boolean };
 type Run3Row = { noteId: string; repetition: number; concerns: Array<{ item: number; angle: string;
   concern: string; checkable: boolean }>; picks: Record<ProfileId, Array<{ key: string; angle: string; score: number;
     brief: boolean }>>; questions: QuestionRow[]; whynotes: WhyRow[]; sources: string[]; firstTagMs: number | null;
-  blindSpotMatched: boolean; error: string | null; errorName: string | null };
+  blindSpotMatched: boolean; error: string | null; errorName: string | null;
+  extractedItems: Array<{ kind: string; text: string; quote: string }>; openQuestionsSent: number;
+  decisionRespected: number };
 export interface Run3Evaluation {
-  mode: 'run3'; total: number; complete: boolean; reason: string | null; rows: Run3Row[]; summary: unknown;
+  mode: 'run3' | 'practice-v2'; total: number; complete: boolean; reason: string | null; rows: Run3Row[];
+  summary: unknown;
   environment: { timestamp: string; chromeVersion: string; sdkVersion: string; onDeviceModel: string;
     promptVersions: string[]; setVersion: string; warmupLatencyMs: number | null;
     settings: ReturnType<typeof builtInSettings>;
@@ -61,6 +68,13 @@ function rateSummary(rows: Run3Row[]) {
     privateAfter, privateAfterRate: questions.length ? privateAfter / questions.length : null,
     topPickDiffers, topPickDiffersRate: baseline.length ? topPickDiffers / baseline.length : null,
     firstTagMedianMs: median, firstTagCount: latencies.length,
+    reportedOnly: { notesWithNoCard: baseline.filter(row => !row.picks.A.length && !row.picks.B.length).length,
+      checkable: concerns.filter(value => value.concern.checkable).length, concerns: concerns.length,
+      checkableShare: concerns.length ? concerns.filter(value => value.concern.checkable).length / concerns.length
+        : null,
+      openQuestionItemsSent: baseline.reduce((sum, row) => sum + row.openQuestionsSent, 0),
+      decisionRespectedHolds: baseline.reduce((sum, row) => sum + row.decisionRespected, 0),
+      whyNotesDropped: whynotes.filter(why => why.whyDropped).length },
     sources: baseline.flatMap(row => row.sources),
     ratingSample: { instructions: { concerns: 'Would I want this checked?',
       questions: 'Could I answer this without seeing the plan?',
@@ -80,45 +94,75 @@ function rateSummary(rows: Run3Row[]) {
           JSON.stringify(first.questions.map(q => q.question)) : null };
     }) };
 }
-export async function runGate2(options: { runner: LocalRunner; signal: AbortSignal; onDeviceModel: string;
+type RunOptions = { runner: LocalRunner; signal: AbortSignal; onDeviceModel: string;
   warmupLatencyMs: number | null; onUpdate?: (run: Run3Evaluation) => void; now?: () => number;
-  rest?: () => Promise<void>; chromeVersion?: string }): Promise<Run3Evaluation> {
-  const model = normalizeModelIdentity(options.onDeviceModel);
-  if (!model) throw new Error('On-device model identity is required.');
+  rest?: () => Promise<void>; chromeVersion?: string; version?: TriageVersion };
+type EvaluationNote = { id: string; title: string; text: string; privateTokens: string[];
+  blindSpots?: Array<{ angle: string; questionKeywords: string[] }> };
+export async function runGate2(options: RunOptions): Promise<Run3Evaluation> {
   const selectedNotes = notes.notes.filter(note => note.expected.length > 0);
   const schedule = selectedNotes.flatMap(note => (subset.has(note.id) ? [1, 2, 3] : [1])
     .map(repetition => ({ note, repetition })));
+  return runScheduled(options, 'run3', notes.version, schedule);
+}
+export async function runPracticeV2(options: RunOptions & { ids?: string[] }): Promise<Run3Evaluation> {
+  const pool: EvaluationNote[] = [...practice.notes, ...examples.examples];
+  const allowed = new Set(pool.map(note => note.id));
+  const ids = options.ids ?? pool.map(note => note.id);
+  if (ids.some(id => !allowed.has(id)) || new Set(ids).size !== ids.length) {
+    throw new Error('Only approved practice notes are allowed.');
+  }
+  const schedule = ids.map(id => ({ note: pool.find(value => value.id === id)!, repetition: 1 }));
+  return runScheduled({ ...options, version: 'v2' }, 'practice-v2', practice.version, schedule);
+}
+async function runScheduled(options: RunOptions, mode: 'run3' | 'practice-v2', setVersion: string,
+  schedule: Array<{ note: EvaluationNote; repetition: number }>): Promise<Run3Evaluation> {
+  const model = normalizeModelIdentity(options.onDeviceModel);
+  if (!model) throw new Error('On-device model identity is required.');
+  const version = options.version ?? TRIAGE_PROMPT_SET;
+  const promptSet = triagePromptVersions(version);
   const now = options.now ?? (() => performance.now());
-  const run: Run3Evaluation = { mode: 'run3', total: schedule.length, complete: false, reason: null, rows: [],
+  const run: Run3Evaluation = { mode, total: schedule.length, complete: false, reason: null, rows: [],
     summary: null, environment: { timestamp: new Date().toISOString(), chromeVersion: options.chromeVersion ??
       (typeof navigator === 'undefined' ? 'not detected' :
         navigator.userAgent.match(/Chrome\/[^ ]+/)?.[0] ?? 'not detected'),
-    sdkVersion: SDK_VERSION, onDeviceModel: model, promptVersions: ['extract.v2', 'angles.v1', 'question.v1',
-      'whynote.v1'], setVersion: notes.version, warmupLatencyMs: options.warmupLatencyMs, settings: builtInSettings(),
-    sharing: 'local-only', rulings: { notePasses: 27, baselineOnlyMetrics: true,
+    sdkVersion: SDK_VERSION, onDeviceModel: model, promptVersions: ['extract.v2', promptSet.angles, promptSet.question,
+      promptSet.whynote], setVersion, warmupLatencyMs: options.warmupLatencyMs, settings: builtInSettings(),
+    sharing: 'local-only', rulings: { notePasses: schedule.length, baselineOnlyMetrics: true,
       questionSharing: 'once per distinct item-version and model concern across selected profiles',
       latencySelection: 'profile A first pick, otherwise B; no pick is N/A',
       briefQuestion: true, briefWhyNote: false, ratingSeed } } };
-  const update = () => { run.summary = rateSummary(run.rows); options.onUpdate?.({ ...run, rows: [...run.rows] }); };
+  const update = () => {
+    run.summary = mode === 'practice-v2' ? { unscored: true, completedNotes: run.rows.filter(row => !row.error).length }
+      : rateSummary(run.rows);
+    options.onUpdate?.({ ...run, rows: [...run.rows] });
+  };
   for (let index = 0; index < schedule.length; index++) {
     if (options.signal.aborted) { run.reason = 'Cancelled by user.'; break; }
     const { note, repetition } = schedule[index];
     const row: Run3Row = { noteId: note.id, repetition, concerns: [], picks: { A: [], B: [] }, questions: [],
-      whynotes: [], sources: [], firstTagMs: null, blindSpotMatched: false, error: null, errorName: null };
+      whynotes: [], sources: [], firstTagMs: null, blindSpotMatched: false, error: null, errorName: null,
+      extractedItems: [], openQuestionsSent: 0, decisionRespected: 0 };
     const started = now();
     try {
       const extraction = await extract(options.runner, note.title, note.text, options.signal, 'extract.v2');
       if (extraction.source !== 'on_device') throw new LocalError('privacy-fault', 'Local source not verified.',
         { source: extraction.source === 'in_cloud' ? 'in_cloud' : 'not reported' });
       row.sources.push(extraction.source);
+      row.extractedItems = extraction.items.map(({ kind, text, quote }) => ({ kind, text, quote }));
       const items: TriageItem[] = extraction.items.map((item, position) => ({ ...item,
         lineageId: `${note.id}-${position}`, version: 1 }));
-      const angles = await runAngles(options.runner, note.text, items, options.signal);
+      const angles = await runAngles(options.runner, note.text, items, options.signal, undefined, version);
+      row.openQuestionsSent = angles.items.filter(item => item.kind === 'open-question').length;
       if (angles.source !== 'code') row.sources.push(angles.source);
       row.concerns = angles.concerns;
-      const selections = Object.fromEntries(profiles.map(profile => [profile,
+      const selectionResults = Object.fromEntries(profiles.map(profile => [profile,
         selectConcerns({ paragraph: note.text, items: angles.items, concerns: angles.concerns,
-          profile: demoProfile(profile), used: [], angleCounts: {} }).picked])) as Record<ProfileId, Pick[]>;
+          profile: demoProfile(profile), used: [], angleCounts: {}, version })]));
+      const selections = Object.fromEntries(profiles.map(profile => [profile, selectionResults[profile].picked])) as
+        Record<ProfileId, Pick[]>;
+      row.decisionRespected = new Set(profiles.flatMap(profile => selectionResults[profile].held
+        .filter(value => value.reason === 'held back: decision respected').map(value => value.modelOrder))).size;
       const pool = new Map<string, { pick: Pick; profiles: ProfileId[] }>();
       for (const profile of profiles) for (const pick of selections[profile]) {
         const key = `${pick.item.lineageId}@${pick.item.version}#${pick.modelOrder}`;
@@ -134,7 +178,8 @@ export async function runGate2(options: { runner: LocalRunner; signal: AbortSign
         const tokens = [...note.privateTokens, ...value.profiles.flatMap(profile => demoNeverSend(profile))];
         const question = await runQuestion(options.runner, sourceItem, value.pick.concern.angle,
           value.pick.concern.concern,
-          value.profiles.flatMap(profile => demoNeverSend(profile)), note.privateTokens, options.signal);
+          value.profiles.flatMap(profile => demoNeverSend(profile)), note.privateTokens, options.signal,
+          undefined, version);
         row.sources.push(question.source);
         const privateBefore = filterQuestion(question.question, [], tokens).reasons.includes('private-token');
         const exposed = question.leak.passed ? question.question : null;
@@ -150,11 +195,12 @@ export async function runGate2(options: { runner: LocalRunner; signal: AbortSign
         const question = row.questions.find(value => value.key === key);
         if (!question?.question) continue;
         const why = await runWhyNote(options.runner, pick.item.quote, pick.angle, pick.concern.concern,
-          question.question, pick.item.topics, demoProfile(profile), options.signal, pick.lessonId);
+          question.question, pick.item.topics, demoProfile(profile), options.signal, pick.lessonId, undefined,
+          pick.item.kind, version);
         row.sources.push(why.source);
-        if (why.note) row.whynotes.push({ profile, key, ...why.note, source: why.source });
+        if (why.note) row.whynotes.push({ profile, key, ...why.note, source: why.source, whyDropped: why.whyDropped });
       }
-      row.blindSpotMatched = note.blindSpots.some(blind => row.concerns.some(concern =>
+      row.blindSpotMatched = (note.blindSpots ?? []).some(blind => row.concerns.some(concern =>
         concern.angle === blind.angle || blind.questionKeywords.some(keyword =>
           concern.concern.toLocaleLowerCase('en').includes(keyword.toLocaleLowerCase('en')) ||
           row.questions.some(question => question.question?.toLocaleLowerCase('en')

@@ -1,5 +1,9 @@
 # Scaffold notes
 
+Open questions in paragraphs last processed by v1 are considered after the paragraph's next edit.
+
+The unscored `eval/practice-v2/notes.json` is copied unchanged from the pre-implementation planning repository; it is invented practice data, not a held-out scored set. The code-only triage switch defaults to v2; Remote Config does not choose triage prompts. The v2 negative-claim guard is a literal phrase check, not a general hallucination detector.
+
 Angles receive only lineage/version pairs not previously considered on an adopted run; the full paragraph remains context. A candidate overlapping a live card from an earlier version of the same paragraph is held as a display-only repeat when its source angle or effective label matches; this never links identity or affects staleness.
 
 The v3→v4 migration conservatively seeds considered pairs from existing cards and completed angles on the still-current paragraph version; unprovable history remains unmarked.

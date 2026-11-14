@@ -1,9 +1,9 @@
 import 'fake-indexeddb/auto';
 import { expect, it, vi } from 'vitest';
 import type { Job } from '../ai/localModel';
-import { anglesV1 } from '../pipeline/prompts/angles.v1';
-import { questionV1 } from '../pipeline/prompts/question.v1';
-import { whynoteV1 } from '../pipeline/prompts/whynote.v1';
+import { anglesV2 } from '../pipeline/prompts/angles.v2';
+import { questionV2 } from '../pipeline/prompts/question.v2';
+import { whynoteV2 } from '../pipeline/prompts/whynote.v2';
 import { prepareSessionStart, sessionForPlay } from '../eval/sessionPlayer';
 import { openLocalStore } from './index';
 import { Scheduler, type LocalService } from './scheduler';
@@ -22,10 +22,10 @@ it('runs the durable local pipeline and keeps profile/list sentinels out of forb
   await store.saveNotebook(paragraph, 0);
   const run = vi.fn(async (job: Job<unknown>) => {
     job.onDispatch?.();
-    const data = job.instructions === anglesV1 ? { concerns: [{ item: 1, angle: 'limits-operations',
-      concern: 'Could hosting have limits?', checkable: true }] } : job.instructions === questionV1
+    const data = job.instructions === anglesV2 ? { concerns: [{ item: 1, angle: 'limits-operations',
+      concern: 'Could hosting have limits?', checkable: true }] } : job.instructions === questionV2
       ? { question: 'Which hosting limits apply?', keptOut: ['client name', 'NEVER_SEND_SENTINEL'] }
-      : job.instructions === whynoteV1 ? { seeing: 'You plan hosting.', why: 'Your experience is relevant.',
+      : job.instructions === whynoteV2 ? { seeing: 'You plan hosting.', why: 'Your experience is relevant.',
         used: ['s1', 'unknown'] } : { items: [item] };
     return { data, source: 'on_device', latencyMs: 1, raw: '{}' };
   });
@@ -44,9 +44,9 @@ it('runs the durable local pipeline and keeps profile/list sentinels out of forb
       keptOut: ['client name'] });
     expect(JSON.stringify(snapshot.outbox)).not.toContain('PROFILE_SENTINEL');
     expect(JSON.stringify(snapshot.outbox)).not.toContain('NEVER_SEND_SENTINEL');
-    const anglesCall = run.mock.calls.find(call => call[0].instructions === anglesV1)![0];
-    const questionCall = run.mock.calls.find(call => call[0].instructions === questionV1)![0];
-    const whyCall = run.mock.calls.find(call => call[0].instructions === whynoteV1)![0];
+    const anglesCall = run.mock.calls.find(call => call[0].instructions === anglesV2)![0];
+    const questionCall = run.mock.calls.find(call => call[0].instructions === questionV2)![0];
+    const whyCall = run.mock.calls.find(call => call[0].instructions === whynoteV2)![0];
     expect(anglesCall.prompt).not.toContain('PROFILE_SENTINEL');
     expect(questionCall.prompt).not.toContain('PROFILE_SENTINEL');
     expect(questionCall.prompt).not.toContain('track-record');
@@ -75,8 +75,8 @@ it('gives a score-zero brief a filtered Outbox question but no why-note job', as
   await store.saveNotebook(paragraph, 0);
   const run = vi.fn(async (job: Job<unknown>) => {
     job.onDispatch?.();
-    const data = job.instructions === anglesV1 ? { concerns: [{ item: 1, angle: 'end-user',
-      concern: 'A concern', checkable: true }] } : job.instructions === questionV1
+    const data = job.instructions === anglesV2 ? { concerns: [{ item: 1, angle: 'end-user',
+      concern: 'A concern', checkable: true }] } : job.instructions === questionV2
       ? { question: 'What are public hosting limits?', keptOut: [] } : { items: [item] };
     return { data, source: 'on_device', latencyMs: 1, raw: '{}' };
   });
@@ -88,7 +88,7 @@ it('gives a score-zero brief a filtered Outbox question but no why-note job', as
     expect(snapshot.cards?.[0]).toMatchObject({ brief: true, score: 0, questionStatus: 'ready' });
     expect(snapshot.outbox?.[0].status).toBe('pending');
     expect(snapshot.jobs.some(job => job.step === 'whynote')).toBe(false);
-    expect(run.mock.calls.some(call => call[0].instructions === whynoteV1)).toBe(false);
+    expect(run.mock.calls.some(call => call[0].instructions === whynoteV2)).toBe(false);
   } finally { scheduler.stop(); store.close(); }
 });
 it('uses S1-added terms to hold back a matching question on the normal scheduler path', async () => {
@@ -100,8 +100,8 @@ it('uses S1-added terms to hold back a matching question on the normal scheduler
   await store.saveNotebook(paragraph, 0);
   const run = vi.fn(async (job: Job<unknown>) => {
     job.onDispatch?.();
-    const data = job.instructions === anglesV1 ? { concerns: [{ item: 1, angle: 'end-user',
-      concern: 'A concern', checkable: true }] } : job.instructions === questionV1
+    const data = job.instructions === anglesV2 ? { concerns: [{ item: 1, angle: 'end-user',
+      concern: 'A concern', checkable: true }] } : job.instructions === questionV2
       ? { question: `What about ${tokens[0]}?`, keptOut: [] } : { items: [item] };
     return { data, source: 'on_device', latencyMs: 1, raw: '{}' };
   });
@@ -119,8 +119,8 @@ it('stops the worker on a cloud-sourced angles response', async () => {
   await store.saveNotebook(paragraph, 0);
   const run = vi.fn(async (job: Job<unknown>) => {
     job.onDispatch?.();
-    return { data: job.instructions === anglesV1 ? { concerns: [] } : { items: [item] },
-      source: job.instructions === anglesV1 ? 'in_cloud' : 'on_device', latencyMs: 1, raw: '{}' };
+    return { data: job.instructions === anglesV2 ? { concerns: [] } : { items: [item] },
+      source: job.instructions === anglesV2 ? 'in_cloud' : 'on_device', latencyMs: 1, raw: '{}' };
   });
   const service = { state: { kind: 'ready' }, subscribe: () => () => {}, runLocal: run } as unknown as LocalService;
   const scheduler = new Scheduler(store, service, () => 'extract.v2', () => {}, () => 10000);
@@ -139,9 +139,9 @@ it('blocks a question if the never-send list changes before the result commits',
   let finish!: (value: typeof result) => void;
   const run = vi.fn(async (job: Job<unknown>) => {
     job.onDispatch?.();
-    if (job.instructions === anglesV1) return { data: { concerns: [{ item: 1, angle: 'end-user',
+    if (job.instructions === anglesV2) return { data: { concerns: [{ item: 1, angle: 'end-user',
       concern: 'A concern', checkable: true }] }, source: 'on_device', latencyMs: 1, raw: '{}' };
-    if (job.instructions === questionV1) return new Promise<typeof result>(resolve => { finish = resolve; });
+    if (job.instructions === questionV2) return new Promise<typeof result>(resolve => { finish = resolve; });
     return { data: { items: [item] }, source: 'on_device', latencyMs: 1, raw: '{}' };
   });
   const result = { data: { question: 'Does Acme Service have limits?', keptOut: [] },
@@ -152,7 +152,7 @@ it('blocks a question if the never-send list changes before the result commits',
     await scheduler.start();
     await scheduler.tick();
     const pending = scheduler.tick();
-    await vi.waitFor(() => expect(run.mock.calls.some(call => call[0].instructions === questionV1)).toBe(true));
+    await vi.waitFor(() => expect(run.mock.calls.some(call => call[0].instructions === questionV2)).toBe(true));
     await store.putNeverSend(['Acme Service']);
     finish(result);
     await pending;

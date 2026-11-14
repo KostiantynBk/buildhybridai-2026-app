@@ -1,0 +1,34 @@
+{
+  "version": "practice-v2",
+  "note": "Practice notes for tuning angles.v2, question.v2 and whynote.v2 (D-027). Unscored. Written 14 Nov 2026, after Run 3; not derived from the 17 scored notes. Everything is invented; any match with a real person, company or product is coincidental. Use these and dev-examples d1-d3 for practice runs. Never tune on eval/set-v1/notes.json.",
+  "notes": [
+    {
+      "id": "p1",
+      "title": "Workshop booking",
+      "text": "Booking page for pottery workshops. I've decided to take payment upfront through the card provider I already use for the shop. I don't know if I'm allowed to keep a deposit when someone cancels the day before. I expect most people to book from their phones in the evening. Margit at Clayhouse Studio wants the first version before the spring term.",
+      "privateTokens": ["Margit", "Clayhouse Studio", "Clayhouse"],
+      "covers": ["open-question with a public answer (cancellation and deposit rules)", "firm decision (upfront payment through the existing provider)", "assumption (mobile evening booking)"]
+    },
+    {
+      "id": "p2",
+      "title": "Data on a small server",
+      "text": "I've decided to keep everything in SQLite on the same small server as the app, because it's simple and I know it well. I assume nightly copies of the file are enough as a backup. Two people will edit records at the same time during busy afternoons. If this works for Harbourline Logistics, they might roll it out to three depots.",
+      "privateTokens": ["Harbourline Logistics", "Harbourline"],
+      "covers": ["firm decision that must not get 'alternatives' (SQLite)", "assumption with a checkable fact (copying a live SQLite file as a backup)", "limit of the chosen option (concurrent writes)"]
+    },
+    {
+      "id": "p3",
+      "title": "Weekends only",
+      "text": "I can only work on this at weekends. The client expects a weekly update with something they can click. I'll use a hosted preview link for each update. I haven't decided how to handle feedback that arrives midweek. Budget is €80 a month for all tools.",
+      "privateTokens": ["€80"],
+      "covers": ["constraint framing must stay a constraint", "open question that only the builder can answer (midweek feedback): checkable false is correct here", "money amount must stay out of the question"]
+    },
+    {
+      "id": "p4",
+      "title": "Meeting summaries",
+      "text": "Users paste meeting notes and get a summary. I'm using a large-model API's free tier for now and assume its limits are fine for twenty users. I don't know whether I can store the pasted notes for a month to improve the summaries. Some notes will be in German and Polish.",
+      "privateTokens": [],
+      "covers": ["assumption with a checkable fact (free-tier limits)", "open question with a public answer (storing user content, data protection)", "end-user angle (languages)"]
+    }
+  ]
+}

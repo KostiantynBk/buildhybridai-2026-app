@@ -3,16 +3,16 @@ import type { ProfileRecord } from '../store';
 import type { Job } from '../ai/localModel';
 import { runAngles, runQuestion, runWhyNote, chooseProfileRecords, type TriageItem } from './triage';
 import type { LocalRunner } from './extract';
-import { anglesV1 } from './prompts/angles.v1';
-import { questionV1 } from './prompts/question.v1';
-import { whynoteV1 } from './prompts/whynote.v1';
+import { anglesV2 } from './prompts/angles.v2';
+import { questionV2 } from './prompts/question.v2';
+import { whynoteV2 } from './prompts/whynote.v2';
 
 const item: TriageItem = { lineageId: 'l', version: 1, kind: 'assumption', text: 'A statement',
   quote: 'the selected words', topics: ['hosting'] };
 const profile: ProfileRecord[] = [{ id: 's', type: 'skill', depth: 'new', text: 'PROFILE_SENTINEL',
   topics: ['hosting'], tags: [], updatedAt: 0 }];
 it('keeps profile, never-send terms and paragraph-only content out of angles/question prompts', async () => {
-  const run = vi.fn(async job => ({ data: job.instructions === anglesV1
+  const run = vi.fn(async job => ({ data: job.instructions === anglesV2
     ? { concerns: [{ item: 1, angle: 'end-user', concern: 'A concern', checkable: true }] }
     : { question: 'What are the hosting limits?', keptOut: ['client name', 'PRIVATE_LIST_SENTINEL'] },
   source: 'on_device', latencyMs: 1, raw: '{}' }));
@@ -23,8 +23,8 @@ it('keeps profile, never-send terms and paragraph-only content out of angles/que
   const question = await runQuestion(runner, itemWithProfile, 'end-user', 'A concern', ['PRIVATE_LIST_SENTINEL']);
   expect(question.keptOut).toEqual(['client name']);
   expect(question.leak.passed).toBe(true);
-  expect(run.mock.calls[0][0].instructions).toBe(anglesV1);
-  expect(run.mock.calls[1][0].instructions).toBe(questionV1);
+  expect(run.mock.calls[0][0].instructions).toBe(anglesV2);
+  expect(run.mock.calls[1][0].instructions).toBe(questionV2);
   for (const call of run.mock.calls) {
     expect(call[0].prompt).not.toContain('PROFILE_SENTINEL');
     expect(call[0].prompt).not.toContain('PRIVATE_LIST_SENTINEL');
@@ -60,7 +60,7 @@ it('allows the selected profile only in why-note, strips unknown IDs and rejects
     'A public question?', item.topics, profile);
   expect(output.note?.used).toEqual(['s']);
   expect(runner.mock.calls[0][0].prompt).toContain('PROFILE_SENTINEL');
-  expect(runner.mock.calls[0][0].instructions).toBe(whynoteV1);
+  expect(runner.mock.calls[0][0].instructions).toBe(whynoteV2);
   expect(runner.mock.calls[0][0].prompt).not.toContain('{one line per record:');
   runner.mockResolvedValueOnce({ data: { seeing: 'The builder plans hosting.', why: 'A reason.', used: ['s'] },
     source: 'on_device', latencyMs: 1, raw: '{}' });

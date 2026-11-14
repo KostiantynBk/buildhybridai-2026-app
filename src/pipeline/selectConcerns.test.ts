@@ -55,7 +55,8 @@ describe('selection rule', () => {
   it('requires valid numbered, eligible and quote-verified items and holds non-checkable concerns', () => {
     const items = [item('a', ['hosting']), { ...item('b', ['hosting']), kind: 'open-question' },
       item('c', ['hosting'], 'not in the paragraph')];
-    const result = run(items, [concern(0), concern(2), concern(3), concern(1, 'end-user', false)]);
+    const result = run(items, [concern(0), concern(2), concern(3), concern(1, 'end-user', false)], [],
+      { version: 'v1' });
     expect(result.picked).toHaveLength(0);
     expect(result.held.map(value => value.reason))
       .toEqual(['invalid-item', 'invalid-item', 'unverified-quote', 'only-you']);

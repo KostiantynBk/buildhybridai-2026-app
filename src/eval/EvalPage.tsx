@@ -30,7 +30,7 @@ import {
 import { useRef } from 'react';
 import type { ExtractVersion } from '../pipeline/extract';
 import { runChangeEvaluation, type Run2Evaluation } from './run2';
-import { runGate2, type Run3Evaluation } from './run3';
+import { runGate2, runPracticeV2, type Run3Evaluation } from './run3';
 
 export default function EvalPage() {
   const service = useMemo(createService, []);
@@ -177,17 +177,18 @@ export default function EvalPage() {
       controller.current = null; setRunning(false);
     }
   }
-  async function startGate2() {
+  async function startGate2(practice = false) {
     if (!measuredRunEnabled) return;
     const current = new AbortController();
     controller.current = current;
-    setRunning(true); setProgress('Starting run3…');
+    setRunning(true); setProgress(practice ? 'Starting unscored v2 practice…' : 'Starting run3…');
     let latest: Run3Evaluation | null = null;
     try {
-      const complete = await runGate2({ runner: job => service.runLocal(job), warmupLatencyMs: service.warmLatencyMs,
+      const execute = practice ? runPracticeV2 : runGate2;
+      const complete = await execute({ runner: job => service.runLocal(job), warmupLatencyMs: service.warmLatencyMs,
         onDeviceModel: normalizeModelIdentity(modelIdentity), signal: current.signal, onUpdate: evaluation => {
           latest = evaluation;
-          setProgress(`run3: ${evaluation.rows.length}/${evaluation.total}`);
+          setProgress(`${practice ? 'practice-v2' : 'run3'}: ${evaluation.rows.length}/${evaluation.total}`);
         } });
       setRuns(previous => [...previous, complete]);
     } catch {
@@ -329,6 +330,8 @@ export default function EvalPage() {
           <button disabled={!measuredRunEnabled} aria-describedby={measuredReason ? 'measured-reason' : undefined}
             onClick={() => void startChangeEvaluation()}>Start Run 2 · change detection</button>{' '}
           <button disabled={!measuredRunEnabled} aria-describedby={measuredReason ? 'measured-reason' : undefined}
+            onClick={() => void startGate2(true)}>Start v2 practice · unscored</button>{' '}
+          <button disabled={!measuredRunEnabled} aria-describedby={measuredReason ? 'measured-reason' : undefined}
             onClick={() => void startGate2()}>Start Run 3 · Gate 2</button>{' '}
           <button
             disabled={!running || !controller.current}
@@ -343,7 +346,8 @@ export default function EvalPage() {
           </button>
           <p>Run 2 uses the frozen target span as both earlier statement and quote;
             code shortcuts need no model call.</p>
-          <p>Run 3 uses 27 synthetic note passes. Its export is local-only and can contain profile-derived text.</p>
+          <p>Practice runs only p1–p4 and d1–d3, unscored. Run 3 uses 27 synthetic note passes.
+            Exports are local-only and can contain profile-derived text.</p>
           {measuredReason && <p id="measured-reason">{measuredReason}</p>}
           {(!running || !controller.current) && <p id="cancel-reason">No measured run is active to cancel.</p>}
           {runs.length === 0 && <p id="export-reason">Complete or stop a measured run before exporting.</p>}

@@ -1,5 +1,6 @@
 import { normalizeQuote } from './extract';
 import type { ProfileRecord } from '../store';
+import { TRIAGE_PROMPT_SET, type TriageVersion } from './triageVersion';
 
 export type Angle = 'end-user' | 'cost-at-scale' | 'limits-operations' | 'security-privacy' | 'alternatives';
 export type DisplayAngle = Angle | 'track-record';
@@ -9,7 +10,8 @@ export interface Pair { lineageId: string; version: number; angle: DisplayAngle;
 export interface PriorLiveCard { quote: string; angle: DisplayAngle; sourceAngle: Angle }
 export interface Pick { item: SelectionItem; concern: Concern; angle: DisplayAngle; score: number;
   lessonId: string | null; modelOrder: number; brief: boolean }
-export type HeldReason = 'invalid-item' | 'unverified-quote' | 'only-you' | 'repeat' | 'over-limit';
+export type HeldReason = 'invalid-item' | 'unverified-quote' | 'only-you' | 'repeat' | 'over-limit' |
+  'held back: decision respected';
 export interface Held { concern: Concern; modelOrder: number; reason: HeldReason }
 
 const levels = { new: 2, some: 1, deep: 0 } as const;
@@ -28,18 +30,24 @@ function hasPair(pairs: readonly Pair[], item: SelectionItem, angle: DisplayAngl
 export function selectConcerns(options: {
   paragraph: string; items: readonly SelectionItem[]; concerns: readonly Concern[]; profile: readonly ProfileRecord[];
   used: readonly Pair[]; angleCounts: Partial<Record<DisplayAngle, number>>; alreadyShown?: number;
-  priorLiveCards?: readonly PriorLiveCard[];
+  priorLiveCards?: readonly PriorLiveCard[]; version?: TriageVersion;
 }): { picked: Pick[]; held: Held[] } {
   const held: Held[] = [];
   const candidates: Pick[] = [];
   const body = normalizeQuote(options.paragraph);
   options.concerns.forEach((concern, modelOrder) => {
     const item = Number.isInteger(concern.item) && concern.item > 0 ? options.items[concern.item - 1] : undefined;
-    if (!item || !['assumption', 'decision', 'constraint'].includes(item.kind)) {
+    const version = options.version ?? TRIAGE_PROMPT_SET;
+    const kinds = version === 'v2' ? ['assumption', 'decision', 'constraint', 'open-question']
+      : ['assumption', 'decision', 'constraint'];
+    if (!item || !kinds.includes(item.kind)) {
       held.push({ concern, modelOrder, reason: 'invalid-item' }); return;
     }
     const quote = normalizeQuote(item.quote);
     if (!quote || !body.includes(quote)) { held.push({ concern, modelOrder, reason: 'unverified-quote' }); return; }
+    if (version === 'v2' && item.kind === 'decision' && concern.angle === 'alternatives') {
+      held.push({ concern, modelOrder, reason: 'held back: decision respected' }); return;
+    }
     if (!concern.checkable) { held.push({ concern, modelOrder, reason: 'only-you' }); return; }
     const shared = (record: ProfileRecord) => new Set(record.topics.filter(topic => item.topics.includes(topic))).size;
     const lesson = options.profile.filter(record => record.type === 'lesson' && shared(record) > 0)

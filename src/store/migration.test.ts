@@ -85,6 +85,12 @@ it('backfills only provable v3 card and completed-current-angles evidence', asyn
     await old.put('jobs', { key: `${id}@1#angles`, paragraphId: id, paragraphVersion: 1, step: 'angles',
       promptVersion: 'angles.v1', status, attempts: 1, createdAt: 0, nextRunAt: 0 });
   }
+  const openQuote = 'The a hosting statement has enough exact words for its synthetic quote.';
+  await old.put('items', { id: 'i-open', paragraphId: 'a', paragraphVersion: 1, kind: 'open-question',
+    text: 'An open question', quote: openQuote, topics: ['hosting'], status: 'current',
+    promptVersion: 'extract.v2', createdAt: 0, lineageId: 'l-open' });
+  await old.put('lineageVersions', { lineageId: 'l-open', version: 1, itemId: 'i-open', paragraphId: 'a',
+    paragraphVersion: 1, status: 'current' });
   await old.put('cards', { id: 'c', itemLineageId: 'old-card-lineage', itemVersion: 2, createdAt: 5 });
   old.close();
   const store = await openLocalStore(name);
@@ -93,6 +99,7 @@ it('backfills only provable v3 card and completed-current-angles evidence', asyn
     try {
       expect(await db.getAllKeys('anglesConsidered')).toEqual([['l-a', 1], ['old-card-lineage', 2]]);
       expect(await db.get('anglesConsidered', ['l-b', 1])).toBeUndefined();
+      expect(await db.get('anglesConsidered', ['l-open', 1])).toBeUndefined();
       expect(await db.get('cards', 'c')).toMatchObject({ itemLineageId: 'old-card-lineage' });
     } finally { db.close(); }
   } finally { store.close(); }

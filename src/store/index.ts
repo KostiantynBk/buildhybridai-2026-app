@@ -8,6 +8,7 @@ import { validateNeverSend } from '../privacy/terms';
 import { filterQuestion } from '../pipeline/leakFilter';
 import { eligibleItems, type TriageItem } from '../pipeline/triage';
 import { selectConcerns, type Concern, type DisplayAngle, type Pair } from '../pipeline/selectConcerns';
+import { TRIAGE_PROMPT_SET, triagePromptVersions, type TriageVersion } from '../pipeline/triageVersion';
 import { containsQuote, type Comparison } from '../pipeline/compare';
 import { assignmentsWithConflicts, comparisonBaseline, lineageHeads, type Decision, type PriorLineage }
   from './lineage';
@@ -33,7 +34,8 @@ export interface Dependency { consumerId: string; lineageId: string; version: nu
 export interface StoredJob {
   key: string; paragraphId: string; paragraphVersion: number;
   step: 'extract' | 'compare' | 'angles' | 'question' | 'whynote';
-  promptVersion: 'extract.v1' | 'extract.v2' | 'compare.v1' | 'angles.v1' | 'question.v1' | 'whynote.v1';
+  promptVersion: 'extract.v1' | 'extract.v2' | 'compare.v1' | 'angles.v1' | 'angles.v2' |
+    'question.v1' | 'question.v2' | 'whynote.v1' | 'whynote.v2';
   lineageId?: string; cardId?: string;
   status: 'pending' | 'running' | 'done' | 'superseded' | 'failed'; attempts: number; createdAt: number;
   nextRunAt: number; errorName?: string;
@@ -74,7 +76,8 @@ export type Snapshot = { paragraphs: Paragraph[]; items: StoredItem[]; profile: 
   lineages?: LineageVersion[]; neverSend?: string[]; cards?: ThoughtCard[]; outbox?: OutboxEntry[];
   dependencies?: Dependency[] };
 type LegacyStorage = Pick<Storage, 'getItem' | 'removeItem'>;
-function currentTriageItems(paragraph: Paragraph, items: StoredItem[], versions: LineageVersion[]): TriageItem[] {
+function currentTriageItems(paragraph: Paragraph, items: StoredItem[], versions: LineageVersion[],
+  version: TriageVersion = TRIAGE_PROMPT_SET): TriageItem[] {
   const heads = lineageHeads(versions);
   const list = items.filter(item => item.paragraphId === paragraph.id && item.paragraphVersion === paragraph.version &&
     item.status === 'current' && item.lineageId).sort((a, b) => (a.order ?? 0) - (b.order ?? 0) ||
@@ -86,7 +89,7 @@ function currentTriageItems(paragraph: Paragraph, items: StoredItem[], versions:
     return [{ lineageId: head.lineageId, version: head.version, kind: item.kind, quote: item.quote,
       text: item.text, topics: item.topics }];
   });
-  return eligibleItems(paragraph.text, list);
+  return eligibleItems(paragraph.text, list, version);
 }
 function unconsideredItems(items: TriageItem[], considered: Array<{ lineageId: string; version: number }>) {
   const keys = new Set(considered.map(value => JSON.stringify([value.lineageId, value.version])));
@@ -98,7 +101,9 @@ function triageFailure(job: StoredJob, card: ThoughtCard | undefined, now: numbe
     questionReason: 'local-step-failed' as const }
     : card && job.step === 'whynote' ? { ...card, why: null } : card;
   return { card: updated, event: { id: id(), paragraphId: job.paragraphId, paragraphVersion: job.paragraphVersion,
-    event: 'held', at: now, reason: 'local-step-failed', ...(job.cardId ? { cardId: job.cardId } : {}) } };
+    event: 'held', at: now, reason: 'local-step-failed',
+    promptVersions: triagePromptVersions(card?.triageVersion ?? (job.promptVersion.endsWith('.v2') ? 'v2' : 'v1')),
+    ...(job.cardId ? { cardId: job.cardId } : {}) } };
 }
 async function invalidateProfileNotes(cards: ThoughtCard[], jobs: StoredJob[], paragraphs: Paragraph[],
   changedIds: Set<string>, putCard: (card: ThoughtCard) => Promise<unknown>,
@@ -114,14 +119,16 @@ async function invalidateProfileNotes(cards: ThoughtCard[], jobs: StoredJob[], p
     if (!pending && !refreshCount && paragraph) {
       const now = Date.now();
       await putJob({ key: `${card.id}#profile-refresh#${crypto.randomUUID()}`, paragraphId: paragraph.id,
-        paragraphVersion: paragraph.version, step: 'whynote', promptVersion: 'whynote.v1', cardId: card.id,
+        paragraphVersion: paragraph.version, step: 'whynote',
+          promptVersion: triagePromptVersions(card.triageVersion ?? 'v1').whynote, cardId: card.id,
         status: 'pending', attempts: 0, createdAt: now, nextRunAt: now });
     }
   }
 }
 function outboxEvent(card: ThoughtCard, reason: string, now: number): FunnelEvent {
   return { id: id(), paragraphId: card.paragraphId, paragraphVersion: card.paragraphVersion,
-    event: 'outbox', at: now, reason, cardId: card.id };
+    event: 'outbox', at: now, reason, cardId: card.id,
+    promptVersions: triagePromptVersions(card.triageVersion ?? 'v1') };
 }
 async function resolveTerminalDependents(paragraphs: Paragraph[], versions: LineageVersion[], jobs: StoredJob[],
   cards: ThoughtCard[], entries: OutboxEntry[], now: number, putCard: (card: ThoughtCard) => Promise<unknown>,
@@ -193,9 +200,12 @@ export class LocalStore {
         const extract = jobs.find(job => job.key === jobKey(paragraph.id, paragraph.version));
         if (extract?.status !== 'done' || jobs.some(job => job.key === key) ||
             await tx.objectStore('comparisonBatches').get(batchKey(paragraph.id, paragraph.version)) ||
-            !unconsideredItems(currentTriageItems(paragraph, items, versions), considered).length) continue;
+            !unconsideredItems(currentTriageItems(paragraph, items, versions, TRIAGE_PROMPT_SET), considered).length) {
+          continue;
+        }
         await tx.objectStore('jobs').put({ key, paragraphId: paragraph.id, paragraphVersion: paragraph.version,
-          step: 'angles', promptVersion: 'angles.v1', status: 'pending', attempts: 0, createdAt: now, nextRunAt: now });
+          step: 'angles', promptVersion: triagePromptVersions().angles, status: 'pending', attempts: 0,
+          createdAt: now, nextRunAt: now });
       }
       await tx.done;
     } catch (error) {
@@ -217,7 +227,8 @@ export class LocalStore {
       ]);
       await tx.done;
       if (!paragraph || paragraph.version !== job.paragraphVersion || batch) return null;
-      const eligible = unconsideredItems(currentTriageItems(paragraph, items, versions), considered);
+      const version: TriageVersion = job.promptVersion === 'angles.v1' ? 'v1' : 'v2';
+      const eligible = unconsideredItems(currentTriageItems(paragraph, items, versions, version), considered);
       return eligible.length ? { paragraph: paragraph.text, items: eligible } : null;
     } catch (error) {
       try { tx.abort(); } catch { /* Already finished or aborted. */ }
@@ -238,9 +249,10 @@ export class LocalStore {
         tx.objectStore('profile').getAll(), tx.objectStore('cards').getAll(),
         tx.objectStore('anglesConsidered').getAll(),
       ]);
+      const version: TriageVersion = job.promptVersion === 'angles.v1' ? 'v1' : 'v2';
       if (!current || current.step !== 'angles' || current.status !== 'running' || !paragraph || batch ||
           paragraph.version !== job.paragraphVersion || paragraph.text !== input.paragraph ||
-          JSON.stringify(unconsideredItems(currentTriageItems(paragraph, items, versions), considered)) !==
+          JSON.stringify(unconsideredItems(currentTriageItems(paragraph, items, versions, version), considered)) !==
             JSON.stringify(input.items)) {
         if (current?.status === 'running') await tx.objectStore('jobs').put({ ...current, status: 'superseded' });
         await tx.done; return false;
@@ -262,16 +274,18 @@ export class LocalStore {
           head.status !== 'removed' && !head.unchecked && !head.needsConfirmation;
       }).map(card => ({ quote: card.itemQuote, angle: card.angle, sourceAngle: card.sourceAngle }));
       const selection = selectConcerns({ paragraph: input.paragraph, items: input.items, concerns, profile, used,
-        priorLiveCards, angleCounts, alreadyShown: cards.filter(card => card.paragraphId === paragraph.id &&
+        priorLiveCards, version, angleCounts, alreadyShown: cards.filter(card => card.paragraphId === paragraph.id &&
           card.paragraphVersion === paragraph.version).length });
       for (const [modelOrder, concern] of concerns.entries()) {
         await tx.objectStore('funnel').put({ id: id(), paragraphId: paragraph.id, paragraphVersion: paragraph.version,
-          event: 'considered', at: now, concern: concern.concern, sourceAngle: concern.angle, modelOrder,
+          event: 'considered', at: now, promptVersions: triagePromptVersions(version),
+          concern: concern.concern, sourceAngle: concern.angle, modelOrder,
           itemIndex: concern.item, checkable: concern.checkable });
       }
       for (const held of selection.held) {
         await tx.objectStore('funnel').put({ id: id(), paragraphId: paragraph.id, paragraphVersion: paragraph.version,
-          event: 'held', at: now, reason: held.reason, concern: held.concern.concern, sourceAngle: held.concern.angle,
+          event: 'held', at: now, promptVersions: triagePromptVersions(version),
+          reason: held.reason, concern: held.concern.concern, sourceAngle: held.concern.angle,
           modelOrder: held.modelOrder, itemIndex: held.concern.item });
       }
       for (const pick of selection.picked) {
@@ -280,20 +294,22 @@ export class LocalStore {
         if (!source) throw new Error('Selected item unavailable.');
         const card: ThoughtCard = { id: id(), paragraphId: paragraph.id, paragraphVersion: paragraph.version,
           itemLineageId: source.lineageId, itemVersion: source.version, itemText: source.text, itemQuote: source.quote,
-          topics: source.topics, angle: pick.angle, sourceAngle: pick.concern.angle, concern: pick.concern.concern,
+          itemKind: source.kind, triageVersion: version, topics: source.topics, angle: pick.angle,
+          sourceAngle: pick.concern.angle, concern: pick.concern.concern,
           score: pick.score, lessonId: pick.lessonId, brief: pick.brief, sessionId, questionStatus: 'waiting',
           createdAt: now };
         await tx.objectStore('cards').put(card);
         await tx.objectStore('dependencies').put({ consumerId: card.id, lineageId: card.itemLineageId,
           version: card.itemVersion });
         await tx.objectStore('funnel').put({ id: id(), paragraphId: paragraph.id, paragraphVersion: paragraph.version,
-          event: 'picked', at: now, angle: card.angle, sourceAngle: card.sourceAngle, score: card.score,
+          event: 'picked', at: now, promptVersions: triagePromptVersions(version),
+          angle: card.angle, sourceAngle: card.sourceAngle, score: card.score,
           modelOrder: pick.modelOrder, itemIndex: pick.concern.item, concern: pick.concern.concern,
           ...(card.lessonId ? { lessonId: card.lessonId } : {}), cardId: card.id, itemLineageId: card.itemLineageId,
           itemVersion: card.itemVersion });
         await tx.objectStore('jobs').put({ key: `${job.key}#question#${card.id}`,
           paragraphId: paragraph.id, paragraphVersion: paragraph.version, step: 'question',
-          promptVersion: 'question.v1',
+          promptVersion: triagePromptVersions(version).question,
           cardId: card.id, status: 'pending', attempts: 0, createdAt: now, nextRunAt: now });
       }
       await tx.objectStore('jobs').put({ ...current, status: 'done' });
@@ -345,7 +361,8 @@ export class LocalStore {
       }
       const terms = privacy?.terms ?? [];
       const leak = filterQuestion(question, terms);
-      const eventBase = { paragraphId: paragraph.id, paragraphVersion: paragraph.version, at: now, cardId: card.id };
+      const eventBase = { paragraphId: paragraph.id, paragraphVersion: paragraph.version, at: now, cardId: card.id,
+        promptVersions: triagePromptVersions(card.triageVersion ?? 'v1') };
       if (!passedAtGeneration || !leak.passed) {
         await tx.objectStore('cards').put({ ...card, questionStatus: 'blocked', questionReason: 'private detail' });
         await tx.objectStore('funnel').put({ ...eventBase, id: id(), event: 'question', reason: 'private detail' });
@@ -358,7 +375,8 @@ export class LocalStore {
         await tx.objectStore('funnel').put({ ...eventBase, id: id(), event: 'question', reason: 'passed' });
         await tx.objectStore('funnel').put({ ...eventBase, id: id(), event: 'outbox', reason: 'pending' });
         if (!card.brief) await tx.objectStore('jobs').put({ key: `${job.key}#whynote`, paragraphId: paragraph.id,
-          paragraphVersion: paragraph.version, step: 'whynote', promptVersion: 'whynote.v1', cardId: card.id,
+          paragraphVersion: paragraph.version, step: 'whynote',
+          promptVersion: triagePromptVersions(card.triageVersion ?? 'v1').whynote, cardId: card.id,
           status: 'pending', attempts: 0, createdAt: now, nextRunAt: now });
       }
       await tx.objectStore('jobs').put({ ...current, status: 'done' });
@@ -392,8 +410,9 @@ export class LocalStore {
     }
   }
   async completeWhy(job: StoredJob, note: ThoughtCard['why'], supplied: ProfileRecord[],
-    fingerprints: RecordFingerprint[]): Promise<boolean> {
-    const tx = this.db.transaction(['jobs', 'cards', 'paragraphs', 'lineageVersions', 'profile'], 'readwrite');
+    fingerprints: RecordFingerprint[], whyDropped = false): Promise<boolean> {
+    const tx = this.db.transaction(['jobs', 'cards', 'paragraphs', 'lineageVersions', 'profile', 'funnel'],
+      'readwrite');
     void tx.done.catch(() => undefined);
     try {
       const [current, card, paragraph, versions] = await Promise.all([tx.objectStore('jobs').get(job.key),
@@ -420,6 +439,9 @@ export class LocalStore {
       } else {
         await tx.objectStore('cards').put({ ...card, why: note ?? null, whyFingerprints: note ? fingerprints : [],
           whyRefreshCount: 0 });
+        if (whyDropped && note) await tx.objectStore('funnel').put({ id: id(), paragraphId: paragraph.id,
+          paragraphVersion: paragraph.version, event: 'why', at: Date.now(), cardId: card.id,
+          reason: 'why dropped: unsupported claim', promptVersions: triagePromptVersions(card.triageVersion ?? 'v1') });
       }
       await tx.objectStore('jobs').put({ ...current, status: 'done' });
       await tx.done; return true;
@@ -464,7 +486,10 @@ export class LocalStore {
     } catch (error) { try { tx.abort(); } catch { /* Already finished. */ }
       await tx.done.catch(() => undefined); throw error; }
   }
-  async funnel(): Promise<FunnelEvent[]> { return this.db.getAll('funnel'); }
+  async funnel(): Promise<FunnelEvent[]> {
+    return (await this.db.getAll('funnel')).map(event => ({ ...event,
+      promptVersions: event.promptVersions ?? triagePromptVersions('v1') }));
+  }
   async versions(): Promise<Paragraph[]> { return this.db.getAll('paragraphVersions'); }
   async lineages(): Promise<LineageVersion[]> { return this.db.getAll('lineageVersions'); }
   async putDependency(dependency: Dependency): Promise<void> { await this.db.put('dependencies', dependency); }
@@ -1039,7 +1064,8 @@ export class LocalStore {
       if (!card) { await tx.done; return false; }
       await tx.objectStore('cards').put({ ...card, feedback });
       await tx.objectStore('funnel').put({ id: id(), paragraphId: card.paragraphId,
-        paragraphVersion: card.paragraphVersion, event: 'feedback', at: now, reason: feedback, cardId });
+        paragraphVersion: card.paragraphVersion, event: 'feedback', at: now, reason: feedback, cardId,
+        promptVersions: triagePromptVersions(card.triageVersion ?? 'v1') });
       await tx.done; return true;
     } catch (error) {
       try { tx.abort(); } catch { /* Already finished or aborted. */ }
@@ -1179,7 +1205,7 @@ export async function openLocalStore(name = 'thoughtpartner', events: {
               if (!jobs.some(job => job.step === 'angles' && job.paragraphId === paragraph.id &&
                   job.paragraphVersion === paragraph.version && job.status === 'done') || batches.some(batch =>
                   batch.paragraphId === paragraph.id && batch.paragraphVersion === paragraph.version)) continue;
-              for (const item of currentTriageItems(paragraph, items, versions)) {
+              for (const item of currentTriageItems(paragraph, items, versions, 'v1')) {
                 await considered.put({ lineageId: item.lineageId, version: item.version, recordedAt: Date.now(),
                   source: 'migrated-current' });
               }

@@ -5,6 +5,10 @@ import { compareV1 } from '../pipeline/prompts/compare.v1';
 import { anglesV1 } from '../pipeline/prompts/angles.v1';
 import { questionV1 } from '../pipeline/prompts/question.v1';
 import { whynoteV1 } from '../pipeline/prompts/whynote.v1';
+import { anglesV2 } from '../pipeline/prompts/angles.v2';
+import { questionV2 } from '../pipeline/prompts/question.v2';
+import { whynoteV2 } from '../pipeline/prompts/whynote.v2';
+import { TRIAGE_PROMPT_SET } from '../pipeline/triageVersion';
 import { bindTemplate } from '../pipeline/bindTemplate';
 import { extractionPrompts, type ExtractVersion } from '../pipeline/extract';
 
@@ -20,7 +24,13 @@ export type PracticeId = (typeof practice.examples)[number]['id'];
 export type ProfileId = 'A' | 'B';
 export const examples = practice.examples;
 export function promptFor(name: PromptName, version: ExtractVersion = 'extract.v1') {
-  return name === 'extract' ? extractionPrompts[version] : prompts[name];
+  if (name === 'extract') return extractionPrompts[version];
+  if (TRIAGE_PROMPT_SET === 'v2') {
+    if (name === 'angles') return anglesV2;
+    if (name === 'question') return questionV2;
+    if (name === 'whynote') return whynoteV2;
+  }
+  return prompts[name];
 }
 
 function recordsFor(topics: string[], profile: ProfileId): string {
@@ -59,7 +69,8 @@ export function practiceInput(name: PromptName, id: PracticeId, profile: Profile
   const angle = concern?.angle ?? '';
   const description = concern?.description ?? '';
   const numbered = example.expected
-    .filter((entry) => ['assumption', 'decision', 'constraint'].includes(entry.kind))
+    .filter((entry) => ['assumption', 'decision', 'constraint',
+      ...(TRIAGE_PROMPT_SET === 'v2' ? ['open-question'] : [])].includes(entry.kind))
     .map((entry, index) => `${index + 1}. (${entry.kind}) ${entry.span}`)
     .join('\n');
   const fields: Record<string, string> = {
@@ -67,6 +78,7 @@ export function practiceInput(name: PromptName, id: PracticeId, profile: Profile
     '{paragraph}': example.text,
     '{item.text}': text,
     '{item.quote}': quote,
+    '{item.kind}': item?.kind ?? 'assumption',
     '{angle}': angle,
     '{concern}': description,
     '{question}': concern
@@ -74,10 +86,13 @@ export function practiceInput(name: PromptName, id: PracticeId, profile: Profile
       : '',
     '{numbered list: "{n}. ({kind}) {text}" for each item of kind assumption, decision or constraint}':
       numbered,
+    '{numbered list: "{n}. ({kind}) {text}" for each item of kind assumption, decision, constraint or open-question}':
+      numbered,
+    '{one line per record, as in whynote.v1, or the single word "none"}': recordsFor(item?.topics ?? [], profile),
     '{one line per record: "[{id}] {type}{" (" + depth + ")" for skills}: {text}", or the single word "none"}':
       recordsFor(item?.topics ?? [], profile),
   };
-  return bindTemplate(prompts[name].inputTemplate, fields);
+  return bindTemplate(promptFor(name).inputTemplate, fields);
 }
 export function sizeInCharacters(
   name: PromptName,

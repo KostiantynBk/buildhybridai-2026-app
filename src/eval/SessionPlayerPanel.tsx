@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ProfileRecord, Snapshot } from '../store';
 import type { FunnelEvent } from '../store/triageTypes';
+import { triagePromptVersions } from '../pipeline/triageVersion';
 import { applySessionEdit, buildSessionStepLog, nextSessionEdit, prepareSessionStart, removeSessionTerms,
   sessionForPlay, type SessionTerms } from './sessionPlayer';
 
@@ -88,7 +89,7 @@ export default function SessionPlayer({ text, save, snapshot, storageStatus, rea
     const report = { mode: 'S1-rehearsal', sharing: 'local-only', profile, startedWithEmptyNotebook: true,
       neverSendTestTerms: terms,
       sourcePolicy: 'Local inference is source-checked; code shortcuts may make no model call.',
-      sessionVersion: 'sessions.v1', logs };
+      sessionVersion: 'sessions.v1', promptVersions: triagePromptVersions(), logs };
     const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' }));
     const link = document.createElement('a'); link.href = url; link.download = 'thoughtpartner-s1-local.json';
     link.click(); URL.revokeObjectURL(url);

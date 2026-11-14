@@ -2,10 +2,10 @@ import 'fake-indexeddb/auto';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { expect, it, vi } from 'vitest';
 import type { Job } from '../ai/localModel';
-import { anglesV1 } from '../pipeline/prompts/angles.v1';
+import { anglesV2 } from '../pipeline/prompts/angles.v2';
 import { compareV1 } from '../pipeline/prompts/compare.v1';
-import { questionV1 } from '../pipeline/prompts/question.v1';
-import { whynoteV1 } from '../pipeline/prompts/whynote.v1';
+import { questionV2 } from '../pipeline/prompts/question.v2';
+import { whynoteV2 } from '../pipeline/prompts/whynote.v2';
 import { NotebookPanel } from '../ui/NotebookPanel';
 import { openLocalStore } from './index';
 import { Scheduler, type LocalService } from './scheduler';
@@ -26,15 +26,15 @@ for (const scenario of ['waiting-extraction', 'ready-extraction', 'ready-compari
     let held = false;
     const run = vi.fn(async (job: Job<unknown>) => {
       job.onDispatch?.();
-      if (job.instructions === anglesV1) return response({ concerns: [{ item: 1, angle: 'end-user',
+      if (job.instructions === anglesV2) return response({ concerns: [{ item: 1, angle: 'end-user',
         concern: 'Can this be checked?', checkable: true }] });
-      if (job.instructions === questionV1) {
+      if (job.instructions === questionV2) {
         if (scenario === 'waiting-extraction' && !held) {
           held = true; return new Promise<ReturnType<typeof response>>(resolve => { release = resolve; });
         }
         return response({ question: 'What are hosting limits?', keptOut: [] });
       }
-      if (job.instructions === whynoteV1) {
+      if (job.instructions === whynoteV2) {
         if (scenario !== 'waiting-extraction' && !held) {
           held = true; return new Promise<ReturnType<typeof response>>(resolve => { release = resolve; });
         }
@@ -106,7 +106,7 @@ for (const scenario of ['waiting-extraction', 'ready-extraction', 'ready-compari
       store = await openLocalStore(name);
       scheduler = new Scheduler(store, service, () => 'extract.v2', () => {}, () => now);
       const prerequisiteCalls = () => run.mock.calls.filter(call => call[0].instructions === compareV1 ||
-        ![anglesV1, questionV1, whynoteV1].includes(call[0].instructions as typeof anglesV1)).length;
+        ![anglesV2, questionV2, whynoteV2].includes(call[0].instructions as typeof anglesV2)).length;
       const calls = prerequisiteCalls();
       await scheduler.start(); await scheduler.tick();
       snapshot = await store.snapshot();

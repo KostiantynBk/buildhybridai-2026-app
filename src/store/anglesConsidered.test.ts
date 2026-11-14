@@ -2,10 +2,10 @@ import 'fake-indexeddb/auto';
 import { openDB } from 'idb';
 import { expect, it, vi } from 'vitest';
 import type { Job } from '../ai/localModel';
-import { anglesV1 } from '../pipeline/prompts/angles.v1';
+import { anglesV2 } from '../pipeline/prompts/angles.v2';
 import { compareV1 } from '../pipeline/prompts/compare.v1';
-import { questionV1 } from '../pipeline/prompts/question.v1';
-import { whynoteV1 } from '../pipeline/prompts/whynote.v1';
+import { questionV2 } from '../pipeline/prompts/question.v2';
+import { whynoteV2 } from '../pipeline/prompts/whynote.v2';
 import { openLocalStore } from './index';
 import { Scheduler, type LocalService } from './scheduler';
 
@@ -56,14 +56,14 @@ it('skips angles entirely on an edit with no newly eligible lineage versions', a
   let now = 20000;
   const run = vi.fn(async (job: Job<unknown>) => {
     job.onDispatch?.();
-    if (job.instructions === anglesV1) return result({ concerns: [] });
+    if (job.instructions === anglesV2) return result({ concerns: [] });
     return result({ items: [line('VPS hosting and traffic', whole), line('Stripe', stripe, ['payments'])] });
   });
   const service = { state: { kind: 'ready' }, subscribe: () => () => {}, runLocal: run } as unknown as LocalService;
   const scheduler = new Scheduler(store, service, () => 'extract.v2', () => {}, () => now);
   try {
     await scheduler.start(); await scheduler.tick();
-    expect(run.mock.calls.filter(call => call[0].instructions === anglesV1)).toHaveLength(1);
+    expect(run.mock.calls.filter(call => call[0].instructions === anglesV2)).toHaveLength(1);
     const before = await store.snapshot();
     const edited = base.replace('My friend Marta', 'My friend Marta and her sister');
     now += 10000; scheduler.edited(edited, before.paragraphs);
@@ -77,7 +77,7 @@ it('skips angles entirely on an edit with no newly eligible lineage versions', a
       expect(snapshot.lineages?.every(lineage => lineage.paragraphVersion === current.version)).toBe(true);
     }, { timeout: 5000 });
     for (let i = 0; i < 2; i++) await scheduler.tick();
-    expect(run.mock.calls.filter(call => call[0].instructions === anglesV1)).toHaveLength(1);
+    expect(run.mock.calls.filter(call => call[0].instructions === anglesV2)).toHaveLength(1);
     const raw = await openDB(name, 4);
     try { expect(await raw.count('anglesConsidered')).toBe(2); } finally { raw.close(); }
     const snapshot = await store.snapshot();
@@ -95,7 +95,7 @@ it('retries an unadopted failed angles input on the next edit', async () => {
   let failing = true;
   const run = vi.fn(async (job: Job<unknown>) => {
     job.onDispatch?.();
-    if (job.instructions === anglesV1) {
+    if (job.instructions === anglesV2) {
       if (failing) throw new Error('Synthetic failure');
       return result({ concerns: [] });
     }
@@ -117,7 +117,7 @@ it('retries an unadopted failed angles input on the next edit', async () => {
       expect(snapshot.jobs.some(job => job.step === 'angles' && job.status === 'done' &&
         job.paragraphVersion === snapshot.paragraphs[0].version)).toBe(true);
     }, { timeout: 5000 });
-    expect(run.mock.calls.filter(call => call[0].instructions === anglesV1)).toHaveLength(4);
+    expect(run.mock.calls.filter(call => call[0].instructions === anglesV2)).toHaveLength(4);
   } finally { scheduler.stop(); store.close(); }
 });
 it('considers a changed lineage version again and permits a new non-stale card', async () => {
@@ -128,11 +128,11 @@ it('considers a changed lineage version again and permits a new non-stale card',
   const newQuote = 'traffic will be tiny';
   const run = vi.fn(async (job: Job<unknown>) => {
     job.onDispatch?.();
-    if (job.instructions === anglesV1) return result({ concerns: [{ item: 1, angle: 'end-user',
+    if (job.instructions === anglesV2) return result({ concerns: [{ item: 1, angle: 'end-user',
       concern: 'What about traffic?', checkable: true }] });
     if (job.instructions === compareV1) return result({ status: 'changed', newQuote });
-    if (job.instructions === questionV1) return result({ question: 'What are public traffic limits?', keptOut: [] });
-    if (job.instructions === whynoteV1) return result({ seeing: 'You are planning.', why: 'Relevant.', used: [] });
+    if (job.instructions === questionV2) return result({ question: 'What are public traffic limits?', keptOut: [] });
+    if (job.instructions === whynoteV2) return result({ seeing: 'You are planning.', why: 'Relevant.', used: [] });
     return result({ items: [line('Traffic estimate', changed ? newQuote : traffic)] });
   });
   const service = { state: { kind: 'ready' }, subscribe: () => () => {}, runLocal: run } as unknown as LocalService;
@@ -155,7 +155,7 @@ it('considers a changed lineage version again and permits a new non-stale card',
     expect(after.cards!.find(card => card.id !== original.id)).toMatchObject({
       itemLineageId: original.itemLineageId, itemVersion: original.itemVersion + 1,
     });
-    expect(run.mock.calls.filter(call => call[0].instructions === anglesV1)).toHaveLength(2);
+    expect(run.mock.calls.filter(call => call[0].instructions === anglesV2)).toHaveLength(2);
   } finally { scheduler.stop(); store.close(); }
 });
 for (const { addUnrelated, decision } of [
@@ -173,16 +173,16 @@ for (const { addUnrelated, decision } of [
     let now = 20000;
     const run = vi.fn(async (job: Job<unknown>) => {
       job.onDispatch?.();
-      if (job.instructions === anglesV1) {
+      if (job.instructions === anglesV2) {
         const count = (job.prompt.split('Statements:\n')[1].match(/^\d+\. \(/gm) ?? []).length;
         return result({ concerns: Array.from({ length: count }, (_, index) => ({ item: index + 1,
           angle: split && index === 1 ? 'alternatives' : index === 0 ? 'end-user' : 'security-privacy',
           concern: `Concern ${index + 1}`, checkable: true })) });
       }
-      if (job.instructions === questionV1) return result({
+      if (job.instructions === questionV2) return result({
         question: decision === 'blocked' && job.prompt.includes('VPS hosting and traffic')
           ? 'What about person@example.com?' : 'What are public service limits?', keptOut: [] });
-      if (job.instructions === whynoteV1) return result({ seeing: 'You are planning.', why: 'Relevant.', used: [] });
+      if (job.instructions === whynoteV2) return result({ seeing: 'You are planning.', why: 'Relevant.', used: [] });
       if (job.instructions === compareV1) return result({ status: 'unchanged', newQuote: '' });
       return result({ items: split ? [line('VPS hosting', host), line('Low traffic', traffic),
         line('Stripe Checkout', stripe, ['payments']), ...(addUnrelated ? [line('Forum sharing', forum, ['marketing'])]
@@ -211,12 +211,12 @@ for (const { addUnrelated, decision } of [
       await store.saveNotebook(edited, now - 5000); scheduler.saved();
       await vi.waitFor(async () => {
         await scheduler.tick();
-        const calls = run.mock.calls.filter(call => call[0].instructions === anglesV1);
+        const calls = run.mock.calls.filter(call => call[0].instructions === anglesV2);
         expect(calls.length).toBe(2);
       }, { timeout: 5000 });
       for (let i = 0; i < 6; i++) { await scheduler.tick(); await new Promise(resolve => setTimeout(resolve, 0)); }
       snapshot = await store.snapshot();
-      const call = run.mock.calls.filter(value => value[0].instructions === anglesV1)[1][0];
+      const call = run.mock.calls.filter(value => value[0].instructions === anglesV2)[1][0];
       expect(call.prompt).toContain(edited);
       const statements = call.prompt.split('Statements:\n')[1];
       const unchanged = snapshot.items.filter(value => value.status === 'current' &&

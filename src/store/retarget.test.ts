@@ -1,9 +1,9 @@
 import 'fake-indexeddb/auto';
 import { expect, it, vi } from 'vitest';
 import { LocalError, type Job } from '../ai/localModel';
-import { anglesV1 } from '../pipeline/prompts/angles.v1';
-import { questionV1 } from '../pipeline/prompts/question.v1';
-import { whynoteV1 } from '../pipeline/prompts/whynote.v1';
+import { anglesV2 } from '../pipeline/prompts/angles.v2';
+import { questionV2 } from '../pipeline/prompts/question.v2';
+import { whynoteV2 } from '../pipeline/prompts/whynote.v2';
 import { openLocalStore } from './index';
 import { Scheduler, type LocalService } from './scheduler';
 
@@ -20,8 +20,8 @@ it('ends a question after bounded failures without leaving an ownerless waiting 
   let now = 20000;
   const run = vi.fn(async (job: Job<unknown>) => {
     job.onDispatch?.();
-    if (job.instructions === questionV1) throw new Error('Synthetic failure');
-    if (job.instructions === anglesV1) return output({ concerns: [{ item: 1, angle: 'end-user',
+    if (job.instructions === questionV2) throw new Error('Synthetic failure');
+    if (job.instructions === anglesV2) return output({ concerns: [{ item: 1, angle: 'end-user',
       concern: 'Can we check this?', checkable: true }] });
     return output({ items: [item] });
   });
@@ -39,9 +39,9 @@ it('refunds an ordinary cancellation before dispatch when there is no retarget',
   const store = await openLocalStore(`cancel-before-dispatch-${crypto.randomUUID()}`);
   await store.saveNotebook(paragraph, 0);
   const run = vi.fn(async (job: Job<unknown>) => {
-    if (job.instructions === questionV1) throw new LocalError('cancelled', 'Cancelled before dispatch.');
+    if (job.instructions === questionV2) throw new LocalError('cancelled', 'Cancelled before dispatch.');
     job.onDispatch?.();
-    if (job.instructions === anglesV1) return output({ concerns: [{ item: 1, angle: 'end-user',
+    if (job.instructions === anglesV2) return output({ concerns: [{ item: 1, angle: 'end-user',
       concern: 'Can we check this?', checkable: true }] });
     return output({ items: [item] });
   });
@@ -66,10 +66,10 @@ it('conservatively retains a claim made before dispatch when an edit retargets t
   });
   const run = vi.fn(async (job: Job<unknown>) => {
     job.onDispatch?.();
-    if (job.instructions === anglesV1) return output({ concerns: [{ item: 1, angle: 'end-user',
+    if (job.instructions === anglesV2) return output({ concerns: [{ item: 1, angle: 'end-user',
       concern: 'Can we check this?', checkable: true }] });
-    if (job.instructions === questionV1) return output(question);
-    if (job.instructions === whynoteV1) return output(why);
+    if (job.instructions === questionV2) return output(question);
+    if (job.instructions === whynoteV2) return output(why);
     return output({ items: [item] });
   });
   const service = { state: { kind: 'ready' }, subscribe: () => () => {}, runLocal: run } as unknown as LocalService;
@@ -78,7 +78,7 @@ it('conservatively retains a claim made before dispatch when an edit retargets t
     await scheduler.start(); await scheduler.tick();
     const claimed = scheduler.tick();
     await vi.waitFor(() => expect(entered).toBe(true));
-    expect(run.mock.calls.some(call => call[0].instructions === questionV1)).toBe(false);
+    expect(run.mock.calls.some(call => call[0].instructions === questionV2)).toBe(false);
     const before = await store.snapshot();
     const edited = `${paragraph} Extra context for testers.`;
     scheduler.edited(edited, before.paragraphs);
@@ -103,15 +103,15 @@ for (const waitingFor of ['question', 'whynote'] as const) {
     let held = false;
     const run = vi.fn(async (job: Job<unknown>) => {
       job.onDispatch?.();
-      const target = waitingFor === 'question' ? questionV1 : whynoteV1;
+      const target = waitingFor === 'question' ? questionV2 : whynoteV2;
       if (job.instructions === target && !held) {
         held = true;
         return new Promise<ReturnType<typeof output>>(resolve => { finish = resolve; });
       }
-      if (job.instructions === anglesV1) return output({ concerns: [{ item: 1, angle: 'end-user',
+      if (job.instructions === anglesV2) return output({ concerns: [{ item: 1, angle: 'end-user',
         concern: 'Can we check this?', checkable: true }] });
-      if (job.instructions === questionV1) return output(question);
-      if (job.instructions === whynoteV1) return output(why);
+      if (job.instructions === questionV2) return output(question);
+      if (job.instructions === whynoteV2) return output(why);
       return output({ items: [item] });
     });
     const service = { state: { kind: 'ready' }, subscribe: () => () => {}, runLocal: run } as unknown as LocalService;

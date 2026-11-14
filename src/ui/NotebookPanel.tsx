@@ -7,6 +7,16 @@ import { containsQuote } from '../pipeline/compare';
 import { calculateStaleness } from '../store/staleness';
 import type { Feedback } from '../store/triageTypes';
 
+export function WhyContent({ card, profile }: { card: ThoughtCard; profile: ProfileRecord[] }) {
+  if (!card.why) return null;
+  const cited = card.triageVersion === 'v2' ? card.why.used.flatMap(id => {
+    const record = profile.find(value => value.id === id);
+    return record ? [record] : [];
+  }) : [];
+  return <><p>{card.why.seeing}{card.why.why ? ` ${card.why.why}` : ''}</p>
+    {cited.length > 0 && <div><p>From your profile:</p><ul>{cited.map(record =>
+      <li key={record.id} style={{ whiteSpace: 'pre-wrap' }}>{record.text}</li>)}</ul></div>}</>;
+}
 function FreshWhy({ card, profile }: { card: ThoughtCard; profile: ProfileRecord[] }) {
   const [checked, setChecked] = useState('');
   const signature = JSON.stringify([card.whyFingerprints, (card.whyFingerprints ?? []).map(fingerprint => {
@@ -21,7 +31,7 @@ function FreshWhy({ card, profile }: { card: ThoughtCard; profile: ProfileRecord
     }).catch(() => { if (active) setChecked(''); });
     return () => { active = false; };
   }, [signature]);
-  return card.why && checked === signature ? <p>{card.why.seeing} {card.why.why}</p> : null;
+  return card.why && checked === signature ? <WhyContent card={card} profile={profile} /> : null;
 }
 export function emptyReason(snapshot: Snapshot, configured: boolean, ready: boolean): string {
   if (!snapshot.paragraphs.length) return 'Start writing a plan to see what it relies on.';

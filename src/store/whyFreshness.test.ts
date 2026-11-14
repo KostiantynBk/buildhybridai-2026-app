@@ -1,9 +1,9 @@
 import 'fake-indexeddb/auto';
 import { expect, it, vi } from 'vitest';
 import type { Job } from '../ai/localModel';
-import { anglesV1 } from '../pipeline/prompts/angles.v1';
-import { questionV1 } from '../pipeline/prompts/question.v1';
-import { whynoteV1 } from '../pipeline/prompts/whynote.v1';
+import { anglesV2 } from '../pipeline/prompts/angles.v2';
+import { questionV2 } from '../pipeline/prompts/question.v2';
+import { whynoteV2 } from '../pipeline/prompts/whynote.v2';
 import { openLocalStore, type ProfileRecord } from './index';
 import { Scheduler, type LocalService } from './scheduler';
 
@@ -25,12 +25,12 @@ for (const { used, initialDelete } of [{ used: [] as string[], initialDelete: fa
     const releases: Array<(value: ReturnType<typeof result>) => void> = [];
     const run = vi.fn(async (job: Job<unknown>) => {
       job.onDispatch?.();
-      if (job.instructions === whynoteV1) {
+      if (job.instructions === whynoteV2) {
         return new Promise<ReturnType<typeof result>>(resolve => releases.push(resolve));
       }
-      if (job.instructions === anglesV1) return result({ concerns: [{ item: 1, angle: 'end-user',
+      if (job.instructions === anglesV2) return result({ concerns: [{ item: 1, angle: 'end-user',
         concern: 'Can this be checked?', checkable: true }] });
-      if (job.instructions === questionV1) return result({ question: 'What are hosting limits?', keptOut: [] });
+      if (job.instructions === questionV2) return result({ question: 'What are hosting limits?', keptOut: [] });
       return result({ items: [item] });
     });
     const service = { state: { kind: 'ready' }, subscribe: () => () => {}, runLocal: run } as unknown as LocalService;
@@ -66,12 +66,12 @@ it('keeps notes on additions and hides a committed note when a supplied record c
   await store.saveNotebook(paragraph, 0);
   const run = vi.fn(async (job: Job<unknown>) => {
     job.onDispatch?.();
-    if (job.instructions === whynoteV1) {
+    if (job.instructions === whynoteV2) {
       return result({ seeing: 'You use your second skill.', why: 'Relevant.', used: [] });
     }
-    if (job.instructions === anglesV1) return result({ concerns: [{ item: 1, angle: 'end-user',
+    if (job.instructions === anglesV2) return result({ concerns: [{ item: 1, angle: 'end-user',
       concern: 'Can this be checked?', checkable: true }] });
-    if (job.instructions === questionV1) return result({ question: 'What are hosting limits?', keptOut: [] });
+    if (job.instructions === questionV2) return result({ question: 'What are hosting limits?', keptOut: [] });
     return result({ items: [item] });
   });
   const service = { state: { kind: 'ready' }, subscribe: () => () => {}, runLocal: run } as unknown as LocalService;

@@ -1,0 +1,52 @@
+// Prompt and example copied from the pre-submission planning draft.
+import { whynoteV1 } from './whynote.v1';
+
+export const whynoteV2 = {
+  version: 'whynote.v2',
+  system: [
+    "Write a short note to a solo builder explaining why a question a",
+    "bout their plan matters for them personally.\n\nYou get what they ",
+    "wrote, the kind of statement, the concern, the question, and up ",
+    "to three records from their private profile. Each record has an ",
+    "id in square brackets.\n\nReturn:\n- seeing: one sentence starting ",
+    "with \"You\", restating their statement in their own framing. A de",
+    "cision stays a decision (\"You have decided...\"), an assumption s",
+    "tays an assumption (\"You expect...\"), a constraint stays a const",
+    "raint (\"You can only...\"), an open question stays open (\"You don",
+    "'t know yet...\").\n- why: one sentence on why the question matter",
+    "s for them, pointing to one record. Do not retell the record: th",
+    "e app shows the record's own words under your sentence.\n- used: ",
+    "the ids of the records you pointed to. Empty if none truly relat",
+    "es.\n\nRules:\n- Say nothing about the builder's past, skills or ha",
+    "bits beyond what a record says. Never claim they have not done s",
+    "omething unless a record says exactly that. Never describe an ev",
+    "ent that no record describes.\n- If no record truly relates, writ",
+    "e why without mentioning the builder's background, and return an",
+    " empty used list.\n- Do not answer the question and do not give f",
+    "acts about the outside world.\n- No praise and no alarm. Plain an",
+    "d calm.",
+  ].join(''),
+  exampleInput: [
+    "They wrote: \"I'll host the files on my own server in the office\"",
+    "\nKind: decision\nConcern (limits-operations): A server in an offi",
+    "ce depends on the office connection and power. Is a plan for out",
+    "ages part of the setup?\nQuestion: How often do small-office inte",
+    "rnet connections go down, and how do people keep a self-hosted f",
+    "ile server reachable during outages?\nProfile records:\n[x1] skill",
+    " (strong): Linux servers and networking for 8 years.\n[x2] prefer",
+    "ence: Wants to keep monthly costs low.",
+  ].join(''),
+  exampleOutput: [
+    "{\"seeing\":\"You have decided to host the files on your own server",
+    " in the office.\",\"why\":\"Your wish to keep monthly costs low matt",
+    "ers here, because the cheapest way to cover outages may not be t",
+    "he most reliable one.\",\"used\":[\"x2\"]}",
+  ].join(''),
+  inputTemplate: [
+    "They wrote: \"{item.quote}\"\nKind: {item.kind}\nConcern ({angle}): ",
+    "{concern}\nQuestion: {question}\nProfile records:\n{one line per re",
+    "cord, as in whynote.v1, or the single word \"none\"}",
+  ].join(''),
+  schemaText: whynoteV1.schemaText,
+  schema: whynoteV1.schema,
+} as const;
