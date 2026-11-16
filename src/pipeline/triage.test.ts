@@ -1,4 +1,9 @@
 import { expect, it, vi } from 'vitest';
+// This regression explicitly exercises the pinned v2 path.
+vi.mock('./triageVersion', async importOriginal => ({
+  ...(await importOriginal<typeof import('./triageVersion')>()), TRIAGE_PROMPT_SET: 'v2',
+}));
+
 import type { ProfileRecord } from '../store';
 import type { Job } from '../ai/localModel';
 import { runAngles, runQuestion, runWhyNote, chooseProfileRecords, type TriageItem } from './triage';

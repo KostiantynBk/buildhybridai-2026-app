@@ -8,7 +8,8 @@ import { validateNeverSend } from '../privacy/terms';
 import { filterQuestion } from '../pipeline/leakFilter';
 import { eligibleItems, type TriageItem } from '../pipeline/triage';
 import { selectConcerns, type Concern, type DisplayAngle, type Pair } from '../pipeline/selectConcerns';
-import { TRIAGE_PROMPT_SET, triagePromptVersions, type TriageVersion } from '../pipeline/triageVersion';
+import { TRIAGE_PROMPT_SET, triagePromptVersions, versionFromPrompt, type TriageVersion }
+  from '../pipeline/triageVersion';
 import { containsQuote, type Comparison } from '../pipeline/compare';
 import { assignmentsWithConflicts, comparisonBaseline, lineageHeads, type Decision, type PriorLineage }
   from './lineage';
@@ -34,8 +35,8 @@ export interface Dependency { consumerId: string; lineageId: string; version: nu
 export interface StoredJob {
   key: string; paragraphId: string; paragraphVersion: number;
   step: 'extract' | 'compare' | 'angles' | 'question' | 'whynote';
-  promptVersion: 'extract.v1' | 'extract.v2' | 'compare.v1' | 'angles.v1' | 'angles.v2' |
-    'question.v1' | 'question.v2' | 'whynote.v1' | 'whynote.v2';
+  promptVersion: 'extract.v1' | 'extract.v2' | 'compare.v1' | 'angles.v1' | 'angles.v2' | 'angles.v2.1' |
+    'question.v1' | 'question.v2' | 'question.v2.1' | 'whynote.v1' | 'whynote.v2';
   lineageId?: string; cardId?: string;
   status: 'pending' | 'running' | 'done' | 'superseded' | 'failed'; attempts: number; createdAt: number;
   nextRunAt: number; errorName?: string;
@@ -102,14 +103,15 @@ function triageFailure(job: StoredJob, card: ThoughtCard | undefined, now: numbe
     : card && job.step === 'whynote' ? { ...card, why: null } : card;
   return { card: updated, event: { id: id(), paragraphId: job.paragraphId, paragraphVersion: job.paragraphVersion,
     event: 'held', at: now, reason: 'local-step-failed',
-    promptVersions: triagePromptVersions(card?.triageVersion ?? (job.promptVersion.endsWith('.v2') ? 'v2' : 'v1')),
+    promptVersions: triagePromptVersions(card?.triageVersion ?? versionFromPrompt(job.promptVersion)),
     ...(job.cardId ? { cardId: job.cardId } : {}) } };
 }
 async function invalidateProfileNotes(cards: ThoughtCard[], jobs: StoredJob[], paragraphs: Paragraph[],
   changedIds: Set<string>, putCard: (card: ThoughtCard) => Promise<unknown>,
   putJob: (job: StoredJob) => Promise<unknown>): Promise<void> {
   for (const card of cards) {
-    if (!card.why || !card.whyFingerprints?.some(value => changedIds.has(value.id))) continue;
+    if (card.triageVersion === 'v2.1' || !card.why ||
+        !card.whyFingerprints?.some(value => changedIds.has(value.id))) continue;
     const pending = jobs.some(job => job.cardId === card.id && job.step === 'whynote' &&
       (job.status === 'pending' || job.status === 'running'));
     const paragraph = paragraphs.find(value => value.id === card.paragraphId);
@@ -118,9 +120,10 @@ async function invalidateProfileNotes(cards: ThoughtCard[], jobs: StoredJob[], p
       whyRefreshCount: Math.min(1, refreshCount + 1) });
     if (!pending && !refreshCount && paragraph) {
       const now = Date.now();
+      const promptVersion = triagePromptVersions(card.triageVersion ?? 'v1').whynote;
+      if (!promptVersion) continue;
       await putJob({ key: `${card.id}#profile-refresh#${crypto.randomUUID()}`, paragraphId: paragraph.id,
-        paragraphVersion: paragraph.version, step: 'whynote',
-          promptVersion: triagePromptVersions(card.triageVersion ?? 'v1').whynote, cardId: card.id,
+        paragraphVersion: paragraph.version, step: 'whynote', promptVersion, cardId: card.id,
         status: 'pending', attempts: 0, createdAt: now, nextRunAt: now });
     }
   }
@@ -204,7 +207,7 @@ export class LocalStore {
           continue;
         }
         await tx.objectStore('jobs').put({ key, paragraphId: paragraph.id, paragraphVersion: paragraph.version,
-          step: 'angles', promptVersion: triagePromptVersions().angles, status: 'pending', attempts: 0,
+          step: 'angles', promptVersion: triagePromptVersions(TRIAGE_PROMPT_SET).angles, status: 'pending', attempts: 0,
           createdAt: now, nextRunAt: now });
       }
       await tx.done;
@@ -227,7 +230,7 @@ export class LocalStore {
       ]);
       await tx.done;
       if (!paragraph || paragraph.version !== job.paragraphVersion || batch) return null;
-      const version: TriageVersion = job.promptVersion === 'angles.v1' ? 'v1' : 'v2';
+      const version = versionFromPrompt(job.promptVersion);
       const eligible = unconsideredItems(currentTriageItems(paragraph, items, versions, version), considered);
       return eligible.length ? { paragraph: paragraph.text, items: eligible } : null;
     } catch (error) {
@@ -249,7 +252,7 @@ export class LocalStore {
         tx.objectStore('profile').getAll(), tx.objectStore('cards').getAll(),
         tx.objectStore('anglesConsidered').getAll(),
       ]);
-      const version: TriageVersion = job.promptVersion === 'angles.v1' ? 'v1' : 'v2';
+      const version = versionFromPrompt(job.promptVersion);
       if (!current || current.step !== 'angles' || current.status !== 'running' || !paragraph || batch ||
           paragraph.version !== job.paragraphVersion || paragraph.text !== input.paragraph ||
           JSON.stringify(unconsideredItems(currentTriageItems(paragraph, items, versions, version), considered)) !==
@@ -294,7 +297,8 @@ export class LocalStore {
         if (!source) throw new Error('Selected item unavailable.');
         const card: ThoughtCard = { id: id(), paragraphId: paragraph.id, paragraphVersion: paragraph.version,
           itemLineageId: source.lineageId, itemVersion: source.version, itemText: source.text, itemQuote: source.quote,
-          itemKind: source.kind, triageVersion: version, topics: source.topics, angle: pick.angle,
+          itemKind: source.kind, triageVersion: version, profileRecordIds: pick.profileRecordIds,
+          topics: source.topics, angle: pick.angle,
           sourceAngle: pick.concern.angle, concern: pick.concern.concern,
           score: pick.score, lessonId: pick.lessonId, brief: pick.brief, sessionId, questionStatus: 'waiting',
           createdAt: now };
@@ -374,9 +378,10 @@ export class LocalStore {
         await tx.objectStore('cards').put({ ...card, questionStatus: 'ready', outboxId });
         await tx.objectStore('funnel').put({ ...eventBase, id: id(), event: 'question', reason: 'passed' });
         await tx.objectStore('funnel').put({ ...eventBase, id: id(), event: 'outbox', reason: 'pending' });
-        if (!card.brief) await tx.objectStore('jobs').put({ key: `${job.key}#whynote`, paragraphId: paragraph.id,
-          paragraphVersion: paragraph.version, step: 'whynote',
-          promptVersion: triagePromptVersions(card.triageVersion ?? 'v1').whynote, cardId: card.id,
+        const whyPromptVersion = triagePromptVersions(card.triageVersion ?? 'v1').whynote;
+        if (!card.brief && whyPromptVersion) await tx.objectStore('jobs').put({ key: `${job.key}#whynote`,
+          paragraphId: paragraph.id, paragraphVersion: paragraph.version, step: 'whynote',
+          promptVersion: whyPromptVersion, cardId: card.id,
           status: 'pending', attempts: 0, createdAt: now, nextRunAt: now });
       }
       await tx.objectStore('jobs').put({ ...current, status: 'done' });

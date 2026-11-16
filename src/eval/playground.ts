@@ -8,6 +8,8 @@ import { whynoteV1 } from '../pipeline/prompts/whynote.v1';
 import { anglesV2 } from '../pipeline/prompts/angles.v2';
 import { questionV2 } from '../pipeline/prompts/question.v2';
 import { whynoteV2 } from '../pipeline/prompts/whynote.v2';
+import { anglesV21 } from '../pipeline/prompts/angles.v2.1';
+import { questionV21 } from '../pipeline/prompts/question.v2.1';
 import { TRIAGE_PROMPT_SET } from '../pipeline/triageVersion';
 import { bindTemplate } from '../pipeline/bindTemplate';
 import { extractionPrompts, type ExtractVersion } from '../pipeline/extract';
@@ -25,6 +27,11 @@ export type ProfileId = 'A' | 'B';
 export const examples = practice.examples;
 export function promptFor(name: PromptName, version: ExtractVersion = 'extract.v1') {
   if (name === 'extract') return extractionPrompts[version];
+  if (TRIAGE_PROMPT_SET === 'v2.1') {
+    if (name === 'angles') return anglesV21;
+    if (name === 'question') return questionV21;
+    if (name === 'whynote') throw new Error('The v2.1 prompt set does not call why-note.');
+  }
   if (TRIAGE_PROMPT_SET === 'v2') {
     if (name === 'angles') return anglesV2;
     if (name === 'question') return questionV2;
@@ -70,7 +77,7 @@ export function practiceInput(name: PromptName, id: PracticeId, profile: Profile
   const description = concern?.description ?? '';
   const numbered = example.expected
     .filter((entry) => ['assumption', 'decision', 'constraint',
-      ...(TRIAGE_PROMPT_SET === 'v2' ? ['open-question'] : [])].includes(entry.kind))
+      ...(TRIAGE_PROMPT_SET !== 'v1' ? ['open-question'] : [])].includes(entry.kind))
     .map((entry, index) => `${index + 1}. (${entry.kind}) ${entry.span}`)
     .join('\n');
   const fields: Record<string, string> = {

@@ -4,9 +4,8 @@ import { promptFor, prompts, sizeInCharacters } from './playground';
 import { extractInput, type ExtractVersion, type LocalRunner } from '../pipeline/extract';
 import { extractV1 } from '../pipeline/prompts/extract.v1';
 import { extractV2 } from '../pipeline/prompts/extract.v2';
-import { anglesV2 } from '../pipeline/prompts/angles.v2';
-import { questionV2 } from '../pipeline/prompts/question.v2';
-import { whynoteV2 } from '../pipeline/prompts/whynote.v2';
+import { anglesV21 } from '../pipeline/prompts/angles.v2.1';
+import { questionV21 } from '../pipeline/prompts/question.v2.1';
 import notes from '../../eval/set-v1/notes.json';
 
 it.each<RunMode>(['run1', 'latency'])(
@@ -56,9 +55,9 @@ it('keeps v1 and v2 template/schema identical while sizing the second example', 
   const input = extractInput(notes.notes[0].title, notes.notes[0].text);
   expect(promptFor('extract', 'extract.v2')).toBe(extractV2);
   expect(promptFor('compare', 'extract.v2')).toBe(prompts.compare);
-  expect(promptFor('angles', 'extract.v2')).toBe(anglesV2);
-  expect(promptFor('question', 'extract.v2')).toBe(questionV2);
-  expect(promptFor('whynote', 'extract.v2')).toBe(whynoteV2);
+  expect(promptFor('angles', 'extract.v2')).toBe(anglesV21);
+  expect(promptFor('question', 'extract.v2')).toBe(questionV21);
+  expect(() => promptFor('whynote', 'extract.v2')).toThrow('does not call why-note');
   expect(extractV2.schema).toBe(extractV1.schema);
   expect(extractV2.inputTemplate).toBe(extractV1.inputTemplate);
   expect(sizeInCharacters('extract', input, 'extract.v1')).toBe(3356);

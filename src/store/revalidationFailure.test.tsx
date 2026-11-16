@@ -1,6 +1,11 @@
 import 'fake-indexeddb/auto';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { expect, it, vi } from 'vitest';
+// This regression explicitly exercises the pinned v2 path.
+vi.mock('../pipeline/triageVersion', async importOriginal => ({
+  ...(await importOriginal<typeof import('../pipeline/triageVersion')>()), TRIAGE_PROMPT_SET: 'v2',
+}));
+
 import type { Job } from '../ai/localModel';
 import { anglesV2 } from '../pipeline/prompts/angles.v2';
 import { compareV1 } from '../pipeline/prompts/compare.v1';

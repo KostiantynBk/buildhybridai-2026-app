@@ -9,6 +9,8 @@ import { whynoteV1 } from './prompts/whynote.v1';
 import { anglesV2 } from './prompts/angles.v2';
 import { questionV2 } from './prompts/question.v2';
 import { whynoteV2 } from './prompts/whynote.v2';
+import { anglesV21 } from './prompts/angles.v2.1';
+import { questionV21 } from './prompts/question.v2.1';
 import { TRIAGE_PROMPT_SET, type TriageVersion } from './triageVersion';
 import type { Concern, DisplayAngle, SelectionItem } from './selectConcerns';
 
@@ -16,7 +18,8 @@ export interface TriageItem extends SelectionItem { text: string }
 export interface LocalOutput<T> { data: T; latencyMs: number; source: string }
 async function checked<T>(runner: LocalRunner, prompt: string,
   definition: typeof anglesV1 | typeof questionV1 | typeof whynoteV1 |
-    typeof anglesV2 | typeof questionV2 | typeof whynoteV2, signal?: AbortSignal,
+    typeof anglesV2 | typeof questionV2 | typeof whynoteV2 | typeof anglesV21 | typeof questionV21,
+  signal?: AbortSignal,
   onDispatch?: () => void): Promise<LocalOutput<T>> {
   const result = await runner<T>({ prompt, schema: definition.schema, instructions: definition, signal, onDispatch });
   if (result.source !== 'on_device') throw new LocalError('privacy-fault', 'Local inference source not verified.',
@@ -26,7 +29,7 @@ async function checked<T>(runner: LocalRunner, prompt: string,
 export function eligibleItems(paragraph: string, items: readonly TriageItem[],
   version: TriageVersion = TRIAGE_PROMPT_SET): TriageItem[] {
   const body = normalizeQuote(paragraph);
-  const kinds = version === 'v2' ? ['assumption', 'decision', 'constraint', 'open-question']
+  const kinds = version !== 'v1' ? ['assumption', 'decision', 'constraint', 'open-question']
     : ['assumption', 'decision', 'constraint'];
   return items.filter(item => kinds.includes(item.kind) &&
     normalizeQuote(item.quote).length > 0 && body.includes(normalizeQuote(item.quote)));
@@ -37,8 +40,8 @@ export async function runAngles(runner: LocalRunner, paragraph: string, items: r
   const eligible = eligibleItems(paragraph, items, version);
   if (!eligible.length) return { items: [], concerns: [], latencyMs: 0, source: 'code' };
   const numbered = eligible.map((item, index) => `${index + 1}. (${item.kind}) ${item.text}`).join('\n');
-  const definition = version === 'v2' ? anglesV2 : anglesV1;
-  const key = version === 'v2'
+  const definition = version === 'v2.1' ? anglesV21 : version === 'v2' ? anglesV2 : anglesV1;
+  const key = version !== 'v1'
     ? '{numbered list: "{n}. ({kind}) {text}" for each item of kind assumption, decision, constraint or open-question}'
     : '{numbered list: "{n}. ({kind}) {text}" for each item of kind assumption, decision or constraint}';
   const prompt = bindTemplate(definition.inputTemplate, { '{paragraph}': paragraph, [key]: numbered });
@@ -50,7 +53,7 @@ export async function runQuestion(runner: LocalRunner, item: Pick<TriageItem, 't
   signal?: AbortSignal, onDispatch?: () => void, version: TriageVersion = TRIAGE_PROMPT_SET):
   Promise<{ question: string; keptOut: string[]; leak: LeakResult;
     latencyMs: number; source: string }> {
-  const definition = version === 'v2' ? questionV2 : questionV1;
+  const definition = version === 'v2.1' ? questionV21 : version === 'v2' ? questionV2 : questionV1;
   const prompt = bindTemplate(definition.inputTemplate, { '{item.text}': item.text, '{item.quote}': item.quote,
     '{angle}': angle, '{concern}': concern });
   const result = await checked<{ question: string; keptOut: string[] }>(runner, prompt, definition, signal,
@@ -76,6 +79,7 @@ export async function runWhyNote(runner: LocalRunner, quote: string, angle: Disp
   version: TriageVersion = TRIAGE_PROMPT_SET):
   Promise<{ note: { seeing: string; why: string; used: string[] } | null; whyDropped: boolean;
     latencyMs: number; source: string }> {
+  if (version === 'v2.1') throw new Error('The v2.1 prompt set does not call why-note.');
   const records = chooseProfileRecords(topics, profile, angle === 'track-record' ? triggeringLessonId : undefined);
   const lines = records.map(record => `[${record.id}] ${record.type}` +
     `${record.type === 'skill' && record.depth ? ` (${record.depth})` : ''}: ${record.text}`).join('\n') || 'none';

@@ -2,7 +2,7 @@
 
 Open questions in paragraphs last processed by v1 are considered after the paragraph's next edit.
 
-The unscored `eval/practice-v2/notes.json` is copied unchanged from the pre-implementation planning repository; it is invented practice data, not a held-out scored set. The code-only triage switch defaults to v2; Remote Config does not choose triage prompts. The v2 negative-claim guard is a literal phrase check, not a general hallucination detector.
+The unscored `eval/practice-v2/notes.json` is copied unchanged from the pre-implementation planning repository; it is invented practice data, not a held-out scored set. The code-only triage switch defaults to v2.1; Remote Config does not choose triage prompts. v2.1 makes no why-note call: it displays up to two current profile records selected by code. The legacy v2 negative-claim guard is a literal phrase check, not a general hallucination detector.
 
 Angles receive only lineage/version pairs not previously considered on an adopted run; the full paragraph remains context. A candidate overlapping a live card from an earlier version of the same paragraph is held as a display-only repeat when its source angle or effective label matches; this never links identity or affects staleness.
 
@@ -78,7 +78,7 @@ Before matching, a changed quote is conflicting if it overlaps another lineage's
 
 README §4's no-repeat rule is applied conservatively to both the model's source angle and the emitted angle. A profile change cannot bypass a previous source-angle pairing by relabelling it `track-record`, and at most one `track-record` card may be selected per item version. Session counts and tie-breaks use the effective emitted label. The Navigator accepted this interpretation before Run 3. Skill depths map `new/some/deep` to `2/1/0`; the strongest matching skill is selected independently per topic, and the item receives its highest topic score.
 
-For a `track-record` selection, the triggering lesson (most shared topics, then lowest ID) is reserved in slot 1 of the why-note; remaining slots follow shared-topic count, lesson before skill, then ID. This is the Navigator's pre-Run-3 resolution giving README §4 precedence over the ticket's unqualified top-three ordering.
+For legacy v1/v2 `track-record` selections, the triggering lesson (most shared topics, then lowest ID) is reserved in slot 1 of the why-note; remaining slots follow shared-topic count, lesson before skill, then ID. v2.1 instead displays the triggering lesson and scoring skill, in that order, or a preference only if neither qualifies; briefs show no profile block.
 
 The question filter checks currency, emails, URLs, the user's explicitly listed terms and synthetic private tokens; it is not a general private-detail detector. Profile-text names are not automatically detected and must be added to the local never-send list. The URL check can conservatively hold back library names with TLD-like suffixes such as `socket.io` or `ASP.NET`, and text missing a space after a full stop; these are false positives, not leaks. The list is included in local profile exports but must not appear in shareable exports, prompts or the Outbox.
 

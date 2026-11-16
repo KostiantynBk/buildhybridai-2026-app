@@ -29,6 +29,7 @@ import {
 } from './modelIdentity';
 import { useRef } from 'react';
 import type { ExtractVersion } from '../pipeline/extract';
+import { TRIAGE_PROMPT_SET } from '../pipeline/triageVersion';
 import { runChangeEvaluation, type Run2Evaluation } from './run2';
 import { runGate2, runPracticeV2, type Run3Evaluation } from './run3';
 
@@ -71,6 +72,7 @@ export default function EvalPage() {
     setInput(practiceInput(nextPrompt, nextExample, nextProfile));
   }
   async function run() {
+    if (TRIAGE_PROMPT_SET === 'v2.1' && prompt === 'whynote') return;
     setRunning(true);
     setResult('Running locally…');
     const firstEvaluationAttemptAfterReload = markEvaluationCall();
@@ -181,7 +183,7 @@ export default function EvalPage() {
     if (!measuredRunEnabled) return;
     const current = new AbortController();
     controller.current = current;
-    setRunning(true); setProgress(practice ? 'Starting unscored v2 practice…' : 'Starting run3…');
+    setRunning(true); setProgress(practice ? 'Starting unscored practice…' : 'Starting run3…');
     let latest: Run3Evaluation | null = null;
     try {
       const execute = practice ? runPracticeV2 : runGate2;
@@ -253,9 +255,10 @@ export default function EvalPage() {
               value={prompt}
               onChange={(e) => select(e.target.value as PromptName, example, profile)}
             >
-              {Object.keys(prompts).map((name) => (
+              {Object.keys(prompts).filter(name => TRIAGE_PROMPT_SET !== 'v2.1' || name !== 'whynote')
+                .map((name) => (
                 <option key={name} value={name}>
-                  {name === 'extract' ? extractVersion : `${name}.v1`}
+                  {promptFor(name as PromptName, extractVersion).version}
                 </option>
               ))}
             </select>
@@ -330,7 +333,7 @@ export default function EvalPage() {
           <button disabled={!measuredRunEnabled} aria-describedby={measuredReason ? 'measured-reason' : undefined}
             onClick={() => void startChangeEvaluation()}>Start Run 2 · change detection</button>{' '}
           <button disabled={!measuredRunEnabled} aria-describedby={measuredReason ? 'measured-reason' : undefined}
-            onClick={() => void startGate2(true)}>Start v2 practice · unscored</button>{' '}
+            onClick={() => void startGate2(true)}>Start practice · unscored</button>{' '}
           <button disabled={!measuredRunEnabled} aria-describedby={measuredReason ? 'measured-reason' : undefined}
             onClick={() => void startGate2()}>Start Run 3 · Gate 2</button>{' '}
           <button
@@ -346,7 +349,8 @@ export default function EvalPage() {
           </button>
           <p>Run 2 uses the frozen target span as both earlier statement and quote;
             code shortcuts need no model call.</p>
-          <p>Practice runs only p1–p4 and d1–d3, unscored. Run 3 uses 27 synthetic note passes.
+          <p>Practice runs only p1–p4 and d1–d3, unscored; D-028 calls for no second practice run.
+            Run 3 uses 27 synthetic note passes.
             Exports are local-only and can contain profile-derived text.</p>
           {measuredReason && <p id="measured-reason">{measuredReason}</p>}
           {(!running || !controller.current) && <p id="cancel-reason">No measured run is active to cancel.</p>}

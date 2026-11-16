@@ -10,7 +10,7 @@ This evaluation uses invented notes on the local model. No cloud inference is pa
 
 ## Run 0: unscored practice
 
-Select a prompt, practice note and profile. Edit the prefilled input if useful, then click **Run local practice**. The page shows the original JSON returned, source, latency and input size. Repeat for the five prompts and both profiles for the why-note. Practice outputs are not included in the scored export. Prompt files are built-in and versioned; changing any prompt, example or schema requires a new version, not an unrecorded edit.
+Select a prompt, practice note and profile. Edit the prefilled input if useful, then click **Run local practice**. The page shows the original JSON returned, source, latency and input size. The active v2.1 set has no why-note prompt. Practice outputs are not included in the scored export. Prompt files are built-in and versioned; changing any prompt, example or schema requires a new version, not an unrecorded edit.
 
 ## v2 run
 
@@ -36,9 +36,9 @@ Starting S1 adds its invented private terms, plus the chosen demo profile's inve
 
 ## Run 3: Gate 2 triage (local synthetic evaluation)
 
-Run 3 uses 17 labelled notes. The baseline is repetition 1; n01, n03, n07, n11 and n14 have two further repetitions, for 27 note passes total. Gate 2 counts and rates use baseline rows only; repeats 2–3 are reported separately as variance. Angles runs once per pass, selection runs for A and B, and question generation runs once per distinct selected item-version and model concern across both profiles. Each why-note uses its own profile's selected concern and corresponding shared question. The profile-derived `track-record` display label is not inserted into the profile-independent question prompt.
+Run 3 uses 17 labelled notes. The baseline is repetition 1; n01, n03, n07, n11 and n14 have two further repetitions, for 27 note passes total. Gate 2 counts and rates use baseline rows only; repeats 2–3 are reported separately as variance. Angles runs once per pass, selection runs for A and B, and question generation runs once per distinct selected item-version and model concern across both profiles. v2.1 makes no why-note call: each non-brief pick shows up to two selection-derived profile records verbatim. The profile-derived `track-record` display label is not inserted into the profile-independent question prompt.
 
-Brief score-zero mentions also get a filtered question and pending Outbox equivalent, but no why-note. First-tag latency runs from the start of extraction to completion of profile A's first pick's question; if A has no pick, use B's first. If neither has a pick, latency is N/A. All distinct generated questions count in private-token metrics. Rating samples use deterministic Fisher–Yates selection with seed `0x53696465` and successive seeds for questions, A why-notes and B why-notes; insufficient samples stay short rather than being invented. Run 3 exports are **local-only** and may contain synthetic profile-derived why-notes; inspect before sharing. The page reports counts, not a gate verdict.
+Brief score-zero mentions also get a filtered question and pending Outbox equivalent, but no profile block. First-tag latency runs from the start of extraction to completion of profile A's first pick's question; if A has no pick, use B's first. If neither has a pick, latency is N/A. All distinct generated questions count in private-token metrics. Rating samples use deterministic Fisher–Yates selection with seed `0x53696465` and successive seeds for questions, A profile blocks and B profile blocks; insufficient samples stay short rather than being invented. Profile-block relevance is reported only, not a gate. Run 3 exports are **local-only** and may contain synthetic profile text; inspect before sharing. The page reports counts, not a gate verdict.
 
 ## Fixed Gate 1 thresholds
 

@@ -20,9 +20,12 @@ type QuestionRow = { key: string; question: string | null; keptOut: string[]; pa
   privateBefore: boolean; privateAfter: boolean; latencyMs: number; source: string };
 type WhyRow = { profile: ProfileId; key: string; seeing: string; why: string; used: string[]; source: string;
   whyDropped: boolean };
+type ProfileBlockRow = { profile: ProfileId; key: string; concern: string; recordIds: string[];
+  records: Array<{ id: string; text: string }> };
 type Run3Row = { noteId: string; repetition: number; concerns: Array<{ item: number; angle: string;
   concern: string; checkable: boolean }>; picks: Record<ProfileId, Array<{ key: string; angle: string; score: number;
-    brief: boolean }>>; questions: QuestionRow[]; whynotes: WhyRow[]; sources: string[]; firstTagMs: number | null;
+    brief: boolean; profileRecordIds?: string[] }>>; questions: QuestionRow[]; whynotes: WhyRow[];
+  profileBlocks: ProfileBlockRow[]; sources: string[]; firstTagMs: number | null;
   blindSpotMatched: boolean; error: string | null; errorName: string | null;
   extractedItems: Array<{ kind: string; text: string; quote: string }>; openQuestionsSent: number;
   decisionRespected: number };
@@ -30,7 +33,7 @@ export interface Run3Evaluation {
   mode: 'run3' | 'practice-v2'; total: number; complete: boolean; reason: string | null; rows: Run3Row[];
   summary: unknown;
   environment: { timestamp: string; chromeVersion: string; sdkVersion: string; onDeviceModel: string;
-    promptVersions: string[]; setVersion: string; warmupLatencyMs: number | null;
+    promptVersions: string[]; triagePromptSet: TriageVersion; setVersion: string; warmupLatencyMs: number | null;
     settings: ReturnType<typeof builtInSettings>;
     sharing: 'local-only'; rulings: { notePasses: number; baselineOnlyMetrics: true; questionSharing: string;
       latencySelection: string; briefQuestion: true; briefWhyNote: false; ratingSeed: number } };
@@ -46,10 +49,11 @@ function sample<T>(values: T[], count: number, seed: number): T[] {
   }
   return copy.slice(0, count);
 }
-function rateSummary(rows: Run3Row[]) {
+function rateSummary(rows: Run3Row[], version: TriageVersion) {
   const baseline = rows.filter(row => row.repetition === 1 && !row.error);
   const questions = baseline.flatMap(row => row.questions);
   const whynotes = baseline.flatMap(row => row.whynotes);
+  const profileBlocks = baseline.flatMap(row => row.profileBlocks);
   const concerns = baseline.flatMap(row => row.concerns.map((concern, index) =>
     ({ noteId: row.noteId, index, concern })));
   const latencies = baseline.map(row => row.firstTagMs).filter((value): value is number => value !== null)
@@ -78,13 +82,21 @@ function rateSummary(rows: Run3Row[]) {
     sources: baseline.flatMap(row => row.sources),
     ratingSample: { instructions: { concerns: 'Would I want this checked?',
       questions: 'Could I answer this without seeing the plan?',
-      why: 'Does it say anything about me that is not in the profile?' },
+      ...(version === 'v2.1' ? { profileBlock: 'Does this profile entry explain why the concern matters?' }
+        : { why: 'Does it say anything about me that is not in the profile?' }) },
     concerns: sample(concerns, 15, ratingSeed).map(value => ({ ...value, rating: null })),
     questions: sample(questions.filter(q => q.passed), 10, ratingSeed + 1).map(value => ({ ...value, rating: null })),
-    whyA: sample(whynotes.filter(why => why.profile === 'A'), 6, ratingSeed + 2)
-      .map(value => ({ ...value, rating: null, reviewerRating: null })),
-    whyB: sample(whynotes.filter(why => why.profile === 'B'), 6, ratingSeed + 3)
-      .map(value => ({ ...value, rating: null, reviewerRating: null })) },
+    ...(version === 'v2.1' ? {
+      profileA: sample(profileBlocks.filter(block => block.profile === 'A'), 6, ratingSeed + 2)
+        .map(value => ({ ...value, rating: null, reviewerRating: null })),
+      profileB: sample(profileBlocks.filter(block => block.profile === 'B'), 6, ratingSeed + 3)
+        .map(value => ({ ...value, rating: null, reviewerRating: null })),
+    } : {
+      whyA: sample(whynotes.filter(why => why.profile === 'A'), 6, ratingSeed + 2)
+        .map(value => ({ ...value, rating: null, reviewerRating: null })),
+      whyB: sample(whynotes.filter(why => why.profile === 'B'), 6, ratingSeed + 3)
+        .map(value => ({ ...value, rating: null, reviewerRating: null })),
+    }) },
     variance: rows.filter(row => row.repetition > 1 && !row.error).map(row => {
       const first = baseline.find(value => value.noteId === row.noteId);
       return { noteId: row.noteId, repetition: row.repetition,
@@ -113,7 +125,8 @@ export async function runPracticeV2(options: RunOptions & { ids?: string[] }): P
     throw new Error('Only approved practice notes are allowed.');
   }
   const schedule = ids.map(id => ({ note: pool.find(value => value.id === id)!, repetition: 1 }));
-  return runScheduled({ ...options, version: 'v2' }, 'practice-v2', practice.version, schedule);
+  return runScheduled({ ...options, version: options.version ?? TRIAGE_PROMPT_SET }, 'practice-v2',
+    practice.version, schedule);
 }
 async function runScheduled(options: RunOptions, mode: 'run3' | 'practice-v2', setVersion: string,
   schedule: Array<{ note: EvaluationNote; repetition: number }>): Promise<Run3Evaluation> {
@@ -127,21 +140,23 @@ async function runScheduled(options: RunOptions, mode: 'run3' | 'practice-v2', s
       (typeof navigator === 'undefined' ? 'not detected' :
         navigator.userAgent.match(/Chrome\/[^ ]+/)?.[0] ?? 'not detected'),
     sdkVersion: SDK_VERSION, onDeviceModel: model, promptVersions: ['extract.v2', promptSet.angles, promptSet.question,
-      promptSet.whynote], setVersion, warmupLatencyMs: options.warmupLatencyMs, settings: builtInSettings(),
+      ...(promptSet.whynote ? [promptSet.whynote] : [])], triagePromptSet: version,
+    setVersion, warmupLatencyMs: options.warmupLatencyMs, settings: builtInSettings(),
     sharing: 'local-only', rulings: { notePasses: schedule.length, baselineOnlyMetrics: true,
       questionSharing: 'once per distinct item-version and model concern across selected profiles',
       latencySelection: 'profile A first pick, otherwise B; no pick is N/A',
       briefQuestion: true, briefWhyNote: false, ratingSeed } } };
   const update = () => {
     run.summary = mode === 'practice-v2' ? { unscored: true, completedNotes: run.rows.filter(row => !row.error).length }
-      : rateSummary(run.rows);
+      : rateSummary(run.rows, version);
     options.onUpdate?.({ ...run, rows: [...run.rows] });
   };
   for (let index = 0; index < schedule.length; index++) {
     if (options.signal.aborted) { run.reason = 'Cancelled by user.'; break; }
     const { note, repetition } = schedule[index];
     const row: Run3Row = { noteId: note.id, repetition, concerns: [], picks: { A: [], B: [] }, questions: [],
-      whynotes: [], sources: [], firstTagMs: null, blindSpotMatched: false, error: null, errorName: null,
+      whynotes: [], profileBlocks: [], sources: [], firstTagMs: null, blindSpotMatched: false, error: null,
+      errorName: null,
       extractedItems: [], openQuestionsSent: 0, decisionRespected: 0 };
     const started = now();
     try {
@@ -167,7 +182,17 @@ async function runScheduled(options: RunOptions, mode: 'run3' | 'practice-v2', s
       for (const profile of profiles) for (const pick of selections[profile]) {
         const key = `${pick.item.lineageId}@${pick.item.version}#${pick.modelOrder}`;
         row.picks[profile].push({ key: `${pick.item.lineageId}@${pick.item.version}#${pick.angle}`,
-          angle: pick.angle, score: pick.score, brief: pick.brief });
+          angle: pick.angle, score: pick.score, brief: pick.brief,
+          ...(version === 'v2.1' ? { profileRecordIds: pick.profileRecordIds ?? [] } : {}) });
+        if (version === 'v2.1' && pick.profileRecordIds?.length) {
+          const currentProfile = demoProfile(profile);
+          const records = pick.profileRecordIds.flatMap(id => {
+            const record = currentProfile.find(value => value.id === id);
+            return record ? [{ id: record.id, text: record.text }] : [];
+          });
+          row.profileBlocks.push({ profile, key, concern: pick.concern.concern,
+            recordIds: records.map(record => record.id), records });
+        }
         const existing = pool.get(key);
         if (existing) existing.profiles.push(profile); else pool.set(key, { pick, profiles: [profile] });
       }
@@ -190,7 +215,7 @@ async function runScheduled(options: RunOptions, mode: 'run3' | 'practice-v2', s
         if (key === targetKey) row.firstTagMs = Math.max(0, now() - started);
       }
       for (const profile of profiles) for (const pick of selections[profile]) {
-        if (pick.brief) continue;
+        if (version === 'v2.1' || pick.brief) continue;
         const key = `${pick.item.lineageId}@${pick.item.version}#${pick.modelOrder}`;
         const question = row.questions.find(value => value.key === key);
         if (!question?.question) continue;

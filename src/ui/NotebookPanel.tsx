@@ -7,6 +7,15 @@ import { containsQuote } from '../pipeline/compare';
 import { calculateStaleness } from '../store/staleness';
 import type { Feedback } from '../store/triageTypes';
 
+export function ProfileBlock({ card, profile }: { card: ThoughtCard; profile: ProfileRecord[] }) {
+  if (card.triageVersion !== 'v2.1' || card.brief) return null;
+  const records = (card.profileRecordIds ?? []).flatMap(id => {
+    const record = profile.find(value => value.id === id);
+    return record ? [record] : [];
+  });
+  return records.length ? <div><p>From your profile:</p><ul>{records.map(record =>
+    <li key={record.id} style={{ whiteSpace: 'pre-wrap' }}>{record.text}</li>)}</ul></div> : null;
+}
 export function WhyContent({ card, profile }: { card: ThoughtCard; profile: ProfileRecord[] }) {
   if (!card.why) return null;
   const cited = card.triageVersion === 'v2' ? card.why.used.flatMap(id => {
@@ -130,7 +139,8 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
             {card.brief ? <p><strong>{card.angle}:</strong> {card.concern} · {questionStatus}</p> : <>
               <div><strong>{card.angle}</strong> · <span className="muted">on device</span></div>
               <blockquote>“{card.itemQuote}”</blockquote><p>{card.concern}</p>
-              <FreshWhy card={card} profile={snapshot.profile} />
+              {card.triageVersion === 'v2.1' ? <ProfileBlock card={card} profile={snapshot.profile} /> :
+                <FreshWhy card={card} profile={snapshot.profile} />}
               <p>{outbox ? `${outbox.question} · ${outbox.status}` : questionStatus}</p>
               <p>Research comes in a later version.</p>
               {feedback && <div>{(['useful', 'already knew', 'not relevant', 'wrong'] as Feedback[]).map(value =>

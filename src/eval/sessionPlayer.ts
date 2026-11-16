@@ -62,7 +62,9 @@ export function buildSessionStepLog(step: number, startedAt: number, finishedAt:
       lineageVersion: snapshot.lineages?.find(lineage => lineage.itemId === item.id)?.version })),
     cards: cards.map(card => ({ id: card.id, itemQuote: card.itemQuote, angle: card.angle,
       sourceAngle: card.sourceAngle, concern: card.concern, score: card.score, brief: card.brief,
-      why: card.why, feedback: card.feedback, questionStatus: card.questionStatus,
+      why: card.why, profileRecordIds: (card.profileRecordIds ?? [])
+        .filter(id => snapshot.profile.some(record => record.id === id)),
+      feedback: card.feedback, questionStatus: card.questionStatus,
       staleness: calculateStaleness(card.id, snapshot.dependencies ?? [], snapshot.lineages ?? []) })),
     outbox: (snapshot.outbox ?? []).filter(entry => cardIds.has(entry.cardId)).map(entry => ({ id: entry.id,
       cardId: entry.cardId, question: entry.question, keptOut: entry.keptOut, status: entry.status,

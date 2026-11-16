@@ -9,19 +9,29 @@ export interface Concern { item: number; angle: Angle; concern: string; checkabl
 export interface Pair { lineageId: string; version: number; angle: DisplayAngle; sourceAngle?: Angle }
 export interface PriorLiveCard { quote: string; angle: DisplayAngle; sourceAngle: Angle }
 export interface Pick { item: SelectionItem; concern: Concern; angle: DisplayAngle; score: number;
-  lessonId: string | null; modelOrder: number; brief: boolean }
+  lessonId: string | null; modelOrder: number; brief: boolean; profileRecordIds?: string[] }
 export type HeldReason = 'invalid-item' | 'unverified-quote' | 'only-you' | 'repeat' | 'over-limit' |
-  'held back: decision respected';
+  'held back: decision respected' | 'held back: incomplete';
 export interface Held { concern: Concern; modelOrder: number; reason: HeldReason }
 
 const levels = { new: 2, some: 1, deep: 0 } as const;
+export function unfamiliarityDetail(topics: readonly string[], profile: readonly ProfileRecord[]):
+  { score: number; skillId: string | null } {
+  if (!topics.length) return { score: 1, skillId: null };
+  const perTopic = topics.map(topic => {
+    const skills = profile.filter(record => record.type === 'skill' && record.topics.includes(topic))
+      .sort((a, b) => (a.depth ? levels[a.depth] : 1) - (b.depth ? levels[b.depth] : 1) || a.id.localeCompare(b.id));
+    const skill = skills[0];
+    return { score: skill?.depth ? levels[skill.depth] : 1, skill };
+  });
+  const score = Math.max(...perTopic.map(value => value.score));
+  const skill = perTopic.filter(value => value.score === score && value.skill &&
+    (value.skill.depth === 'new' || value.skill.depth === 'some'))
+    .map(value => value.skill!).sort((a, b) => a.id.localeCompare(b.id))[0];
+  return { score, skillId: skill?.id ?? null };
+}
 export function unfamiliarity(topics: readonly string[], profile: readonly ProfileRecord[]): number {
-  if (!topics.length) return 1;
-  return Math.max(...topics.map(topic => {
-    const skills = profile.filter(record => record.type === 'skill' && record.topics.includes(topic));
-    if (!skills.length) return 1;
-    return Math.min(...skills.map(record => record.depth ? levels[record.depth] : 1));
-  }));
+  return unfamiliarityDetail(topics, profile).score;
 }
 function hasPair(pairs: readonly Pair[], item: SelectionItem, angle: DisplayAngle, sourceAngle: Angle): boolean {
   return pairs.some(pair => pair.lineageId === item.lineageId && pair.version === item.version &&
@@ -38,14 +48,17 @@ export function selectConcerns(options: {
   options.concerns.forEach((concern, modelOrder) => {
     const item = Number.isInteger(concern.item) && concern.item > 0 ? options.items[concern.item - 1] : undefined;
     const version = options.version ?? TRIAGE_PROMPT_SET;
-    const kinds = version === 'v2' ? ['assumption', 'decision', 'constraint', 'open-question']
+    const kinds = version !== 'v1' ? ['assumption', 'decision', 'constraint', 'open-question']
       : ['assumption', 'decision', 'constraint'];
     if (!item || !kinds.includes(item.kind)) {
       held.push({ concern, modelOrder, reason: 'invalid-item' }); return;
     }
     const quote = normalizeQuote(item.quote);
     if (!quote || !body.includes(quote)) { held.push({ concern, modelOrder, reason: 'unverified-quote' }); return; }
-    if (version === 'v2' && item.kind === 'decision' && concern.angle === 'alternatives') {
+    if (version === 'v2.1' && concern.concern.trim().length < 20) {
+      held.push({ concern, modelOrder, reason: 'held back: incomplete' }); return;
+    }
+    if (version !== 'v1' && item.kind === 'decision' && concern.angle === 'alternatives') {
       held.push({ concern, modelOrder, reason: 'held back: decision respected' }); return;
     }
     if (!concern.checkable) { held.push({ concern, modelOrder, reason: 'only-you' }); return; }
@@ -61,8 +74,14 @@ export function selectConcerns(options: {
     if (duplicate || hasPair(options.used, item, angle, concern.angle)) {
       held.push({ concern, modelOrder, reason: 'repeat' }); return;
     }
-    const score = unfamiliarity(item.topics, options.profile) + (lesson ? 1 : 0);
-    candidates.push({ item, concern, angle, score, lessonId: lesson?.id ?? null, modelOrder, brief: score === 0 });
+    const detail = unfamiliarityDetail(item.topics, options.profile);
+    const score = detail.score + (lesson ? 1 : 0);
+    const preference = options.profile.filter(record => record.type === 'preference' && shared(record) > 0)
+      .sort((a, b) => shared(b) - shared(a) || a.id.localeCompare(b.id))[0];
+    const selectedRecords = [lesson?.id, detail.skillId].filter((id): id is string => Boolean(id));
+    if (!selectedRecords.length && preference) selectedRecords.push(preference.id);
+    candidates.push({ item, concern, angle, score, lessonId: lesson?.id ?? null, modelOrder, brief: score === 0,
+      ...(version === 'v2.1' ? { profileRecordIds: score === 0 ? [] : selectedRecords } : {}) });
   });
   const picked: Pick[] = [];
   const counts = { ...options.angleCounts };

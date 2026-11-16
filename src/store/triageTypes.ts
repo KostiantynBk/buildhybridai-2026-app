@@ -6,6 +6,7 @@ export type Feedback = 'useful' | 'already knew' | 'not relevant' | 'wrong';
 export interface ThoughtCard {
   id: string; paragraphId: string; paragraphVersion: number; itemLineageId: string; itemVersion: number;
   itemText: string; itemQuote: string; itemKind?: string; triageVersion?: TriageVersion;
+  profileRecordIds?: string[];
   topics: string[]; angle: DisplayAngle; sourceAngle: Angle;
   concern: string; score: number; lessonId: string | null; brief: boolean; sessionId: string;
   questionStatus: 'waiting' | 'blocked' | 'ready';
@@ -25,5 +26,5 @@ export interface FunnelEvent {
     'question' | 'outbox' | 'feedback' | 'why'; at: number; reason?: string; score?: number; angle?: DisplayAngle;
   sourceAngle?: Angle; lessonId?: string; cardId?: string; concern?: string; itemLineageId?: string;
   itemVersion?: number; modelOrder?: number; itemIndex?: number; checkable?: boolean;
-  promptVersions?: { angles: string; question: string; whynote: string };
+  promptVersions?: { angles: string; question: string; whynote: string | null };
 }

@@ -4,6 +4,7 @@ import { extract, type ExtractVersion } from '../pipeline/extract';
 import { compare } from '../pipeline/compare';
 import { chooseProfileRecords, runAngles, runQuestion, runWhyNote } from '../pipeline/triage';
 import { fingerprintRecords } from './fingerprint';
+import { versionFromPrompt } from '../pipeline/triageVersion';
 import { type LocalStore, type StoredJob } from './index';
 import { matchParagraphs, type Paragraph } from './matcher';
 
@@ -112,7 +113,7 @@ export class Scheduler {
           const input = await this.store.anglesInput(claimed.job);
           if (!input) { await this.store.supersedeJob(claimed.job); return; }
           const result = await runAngles(job => this.service.runLocal(job), input.paragraph, input.items,
-            controller.signal, () => { dispatched = true; }, claimed.job.promptVersion === 'angles.v1' ? 'v1' : 'v2');
+            controller.signal, () => { dispatched = true; }, versionFromPrompt(claimed.job.promptVersion));
           if (this.stopped || controller.signal.aborted || generation !== this.generation) {
             await this.store.fail(claimed.job, 'AbortError', true, this.now(), false, dispatched);
           } else {
@@ -124,7 +125,7 @@ export class Scheduler {
           const card = input.card;
           const result = await runQuestion(job => this.service.runLocal(job),
             { text: card.itemText, quote: card.itemQuote }, card.sourceAngle, card.concern, input.neverSend, [],
-            controller.signal, () => { dispatched = true; }, claimed.job.promptVersion === 'question.v1' ? 'v1' : 'v2');
+            controller.signal, () => { dispatched = true; }, versionFromPrompt(claimed.job.promptVersion));
           if (this.stopped || controller.signal.aborted || generation !== this.generation) {
             await this.store.fail(claimed.job, 'AbortError', true, this.now(), false, dispatched);
           } else {
@@ -141,7 +142,7 @@ export class Scheduler {
           const result = await runWhyNote(job => this.service.runLocal(job), card.itemQuote, card.angle,
             card.concern, input.question, card.topics, supplied, controller.signal, card.lessonId,
             () => { dispatched = true; }, card.itemKind ?? 'assumption',
-            claimed.job.promptVersion === 'whynote.v1' ? 'v1' : 'v2');
+            versionFromPrompt(claimed.job.promptVersion));
           if (this.stopped || controller.signal.aborted || generation !== this.generation) {
             await this.store.fail(claimed.job, 'AbortError', true, this.now(), false, dispatched);
           } else {
