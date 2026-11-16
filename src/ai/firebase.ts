@@ -8,9 +8,6 @@ import { getAI, getGenerativeModel, GoogleAIBackend, InferenceMode } from 'fireb
 import type { AppConfig } from '../config';
 import { languageOptions, LocalError, type Model, type PromptContext } from './localModel';
 
-export type CloudPlaceholder = { status: 'not-implemented' };
-export const cloud: CloudPlaceholder = { status: 'not-implemented' };
-
 type PromptApi = { availability(options: typeof languageOptions): Promise<string> };
 export function browserApi(): PromptApi | undefined {
   return (globalThis as typeof globalThis & { LanguageModel?: PromptApi }).LanguageModel;
@@ -18,10 +15,7 @@ export function browserApi(): PromptApi | undefined {
 
 let instance: ReturnType<typeof getAI> | undefined;
 const models = new Map<string, ReturnType<typeof getGenerativeModel>>();
-export function makeFirebaseModel(config: AppConfig): Model {
-  if (!browserApi()) {
-    throw new LocalError('unsupported', 'The local model API is unavailable.');
-  }
+export function firebaseAI(config: AppConfig): ReturnType<typeof getAI> {
   if (!instance) {
     const app = initializeApp(
       {
@@ -46,9 +40,15 @@ export function makeFirebaseModel(config: AppConfig): Model {
           })
         : new ReCaptchaEnterpriseProvider(config.siteKey);
     initializeAppCheck(app, { provider, isTokenAutoRefreshEnabled: true });
-    instance = getAI(app, { backend: new GoogleAIBackend() });
+    instance = getAI(app, { backend: new GoogleAIBackend(), useLimitedUseAppCheckTokens: true });
   }
-  const ai = instance;
+  return instance;
+}
+export function makeFirebaseModel(config: AppConfig): Model {
+  if (!browserApi()) {
+    throw new LocalError('unsupported', 'The local model API is unavailable.');
+  }
+  const ai = firebaseAI(config);
   function local(schema: object, instructions?: PromptContext) {
     if (!browserApi()) {
       throw new LocalError('unsupported', 'The local model API is unavailable.');

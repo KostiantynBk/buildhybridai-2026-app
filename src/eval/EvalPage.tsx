@@ -32,6 +32,7 @@ import type { ExtractVersion } from '../pipeline/extract';
 import { TRIAGE_PROMPT_SET } from '../pipeline/triageVersion';
 import { runChangeEvaluation, type Run2Evaluation } from './run2';
 import { runGate2, runPracticeV2, type Run3Evaluation } from './run3';
+import { Run4Runner } from './Run4Runner';
 
 export default function EvalPage() {
   const service = useMemo(createService, []);
@@ -233,6 +234,7 @@ export default function EvalPage() {
       </header>
       <Notices configured={config !== null} state={service.state} />
       <main>
+        <Run4Runner />
         <section className="panel">
           <label htmlFor="extract-version">Extraction prompt version</label>{' '}
           <select

@@ -39,7 +39,7 @@ export interface StoredJob {
     'question.v1' | 'question.v2' | 'question.v2.1' | 'whynote.v1' | 'whynote.v2';
   lineageId?: string; cardId?: string;
   status: 'pending' | 'running' | 'done' | 'superseded' | 'failed'; attempts: number; createdAt: number;
-  nextRunAt: number; errorName?: string;
+  nextRunAt: number; errorName?: string; measuredSource?: 'on_device';
   failureReason?: 'interrupted-at-attempt-limit' | 'revalidation-failed';
 }
 interface ComparisonBatch {
@@ -62,8 +62,10 @@ interface Database extends DBSchema {
   privacy: { key: string; value: { key: string; terms: string[] } };
   anglesConsidered: { key: [string, number]; value: { lineageId: string; version: number; recordedAt: number;
     source: 'adopted' | 'migrated-card' | 'migrated-current' } };
+  research: { key: number; value: ResearchReceipt };
 }
-export const STORE_VERSION = 4;
+export type ResearchReceipt = { entryId: string; sentAt: number; status: 'sent' | 'completed' | 'failed' };
+export const STORE_VERSION = 5;
 export const LEGACY_KEY = 'thoughtpartner-notebook';
 export const SETTLE_MS = 4000;
 export const MIN_WORDS = 12;
@@ -75,7 +77,7 @@ export const wordCount = (text: string) => text.trim() ? text.trim().split(/\s+/
 const id = () => crypto.randomUUID();
 export type Snapshot = { paragraphs: Paragraph[]; items: StoredItem[]; profile: ProfileRecord[]; jobs: StoredJob[];
   lineages?: LineageVersion[]; neverSend?: string[]; cards?: ThoughtCard[]; outbox?: OutboxEntry[];
-  dependencies?: Dependency[] };
+  dependencies?: Dependency[]; researchReceipts?: ResearchReceipt[] };
 type LegacyStorage = Pick<Storage, 'getItem' | 'removeItem'>;
 function currentTriageItems(paragraph: Paragraph, items: StoredItem[], versions: LineageVersion[],
   version: TriageVersion = TRIAGE_PROMPT_SET): TriageItem[] {
@@ -170,24 +172,50 @@ export class LocalStore {
   close() { this.db.close(); }
   async snapshot(): Promise<Snapshot> {
     const tx = this.db.transaction(['paragraphs', 'items', 'profile', 'jobs', 'lineageVersions', 'privacy',
-      'cards', 'outbox', 'dependencies'], 'readonly');
+      'cards', 'outbox', 'dependencies', 'research'], 'readonly');
     void tx.done.catch(() => undefined);
     try {
-      const [paragraphs, items, profile, jobs, lineages, privacy, cards, outbox, dependencies] = await Promise.all([
+      const [paragraphs, items, profile, jobs, lineages, privacy, cards, outbox, dependencies, researchReceipts] =
+        await Promise.all([
         tx.objectStore('paragraphs').getAll(), tx.objectStore('items').getAll(),
         tx.objectStore('profile').getAll(), tx.objectStore('jobs').getAll(), tx.objectStore('lineageVersions').getAll(),
         tx.objectStore('privacy').get('never-send'), tx.objectStore('cards').getAll(),
         tx.objectStore('outbox').getAll(), tx.objectStore('dependencies').getAll(),
+        tx.objectStore('research').getAll(),
       ]);
       await tx.done;
       paragraphs.sort((a, b) => a.order - b.order);
       return { paragraphs, items, profile, jobs, lineages, neverSend: privacy?.terms ?? [], cards, outbox,
-        dependencies };
+        dependencies, researchReceipts };
     } catch (error) {
       try { tx.abort(); } catch { /* Already finished or aborted. */ }
       await tx.done.catch(() => undefined);
       throw error;
     }
+  }
+  async cloudConsent(): Promise<boolean> {
+    return (await this.db.get('meta', 'cloud-consent'))?.value === true;
+  }
+  async setCloudConsent(value: boolean): Promise<void> {
+    await this.db.put('meta', { key: 'cloud-consent', value });
+  }
+  async reserveResearch(entryId: string, limit: number, now = Date.now()): Promise<number | null> {
+    const tx = this.db.transaction('research', 'readwrite');
+    const start = new Date(now); start.setHours(0, 0, 0, 0);
+    const end = new Date(start); end.setDate(end.getDate() + 1);
+    const existing = await tx.store.getAll();
+    if (existing.filter(item => item.sentAt >= start.getTime() && item.sentAt < end.getTime()).length >= limit) {
+      await tx.done; return null;
+    }
+    const key = await tx.store.add({ entryId, sentAt: now, status: 'sent' });
+    await tx.done; return key;
+  }
+  async cancelResearch(key: number): Promise<void> { await this.db.delete('research', key); }
+  async finishResearch(key: number, status: 'completed' | 'failed'): Promise<void> {
+    const tx = this.db.transaction('research', 'readwrite');
+    const receipt = await tx.store.get(key);
+    if (receipt) await tx.store.put({ ...receipt, status }, key);
+    await tx.done;
   }
   async enqueueAngles(now: number): Promise<void> {
     const tx = this.db.transaction(['paragraphs', 'items', 'jobs', 'lineageVersions', 'comparisonBatches',
@@ -240,7 +268,7 @@ export class LocalStore {
     }
   }
   async completeAngles(job: StoredJob, input: { paragraph: string; items: TriageItem[] }, concerns: Concern[],
-    sessionId: string, now = Date.now()): Promise<boolean> {
+    sessionId: string, now = Date.now(), measuredSource?: 'on_device'): Promise<boolean> {
     const tx = this.db.transaction(['jobs', 'paragraphs', 'items', 'lineageVersions', 'comparisonBatches', 'profile',
       'cards', 'dependencies', 'funnel', 'anglesConsidered'], 'readwrite');
     void tx.done.catch(() => undefined);
@@ -316,7 +344,7 @@ export class LocalStore {
           promptVersion: triagePromptVersions(version).question,
           cardId: card.id, status: 'pending', attempts: 0, createdAt: now, nextRunAt: now });
       }
-      await tx.objectStore('jobs').put({ ...current, status: 'done' });
+      await tx.objectStore('jobs').put({ ...current, status: 'done', measuredSource });
       await tx.done; return true;
     } catch (error) {
       try { tx.abort(); } catch { /* Already finished or aborted. */ }
@@ -346,7 +374,7 @@ export class LocalStore {
     }
   }
   async completeQuestion(job: StoredJob, question: string, keptOut: string[], passedAtGeneration: boolean,
-    now = Date.now()): Promise<boolean> {
+    now = Date.now(), measuredSource?: 'on_device'): Promise<boolean> {
     const tx = this.db.transaction(['jobs', 'paragraphs', 'cards', 'lineageVersions', 'privacy', 'outbox', 'funnel'],
       'readwrite');
     void tx.done.catch(() => undefined);
@@ -384,7 +412,7 @@ export class LocalStore {
           promptVersion: whyPromptVersion, cardId: card.id,
           status: 'pending', attempts: 0, createdAt: now, nextRunAt: now });
       }
-      await tx.objectStore('jobs').put({ ...current, status: 'done' });
+      await tx.objectStore('jobs').put({ ...current, status: 'done', measuredSource });
       await tx.done; return true;
     } catch (error) {
       try { tx.abort(); } catch { /* Already finished or aborted. */ }
@@ -703,7 +731,7 @@ export class LocalStore {
     }
   }
   async complete(job: StoredJob, result: { kind: string; text: string; quote: string; topics: string[] }[],
-    now = Date.now()): Promise<boolean> {
+    now = Date.now(), measuredSource?: 'on_device'): Promise<boolean> {
     const tx = this.db.transaction(['jobs', 'paragraphs', 'items', 'lineageVersions', 'comparisonBatches'],
       'readwrite');
     void tx.done.catch(() => undefined);
@@ -748,7 +776,7 @@ export class LocalStore {
       }
       await tx.objectStore('comparisonBatches').put({ key: batchKey(paragraph.id, paragraph.version),
         paragraphId: paragraph.id, paragraphVersion: paragraph.version, old: previous, items, decisions });
-      await tx.objectStore('jobs').put({ ...currentJob, status: 'done' });
+      await tx.objectStore('jobs').put({ ...currentJob, status: 'done', measuredSource });
       await tx.done;
       return true;
     } catch (error) {
@@ -1162,7 +1190,8 @@ export class LocalStore {
   async clearAll(storage: LegacyStorage): Promise<void> {
     storage.removeItem(LEGACY_KEY);
     const tx = this.db.transaction(['paragraphs', 'paragraphVersions', 'items', 'profile', 'jobs', 'outbox', 'meta',
-      'lineageVersions', 'dependencies', 'comparisonBatches', 'privacy', 'cards', 'funnel', 'anglesConsidered'],
+      'lineageVersions', 'dependencies', 'comparisonBatches', 'privacy', 'cards', 'funnel', 'anglesConsidered',
+      'research'],
       'readwrite');
     void tx.done.catch(() => undefined);
     try {
@@ -1185,6 +1214,7 @@ export async function openLocalStore(name = 'thoughtpartner', events: {
     blocking() { db?.close(); events.onVersionChange?.(); },
     upgrade(database, oldVersion, _newVersion, tx) {
       void tx.done.catch(() => undefined);
+      if (oldVersion < 5) database.createObjectStore('research', { autoIncrement: true });
       if (oldVersion < 1) {
         database.createObjectStore('paragraphs', { keyPath: 'id' });
         database.createObjectStore('paragraphVersions', { keyPath: ['id', 'version'] });

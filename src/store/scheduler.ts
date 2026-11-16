@@ -94,7 +94,8 @@ export class Scheduler {
           if (this.stopped || controller.signal.aborted || generation !== this.generation) {
             await this.store.fail(claimed.job, 'AbortError', true, this.now());
           } else {
-            await this.store.complete(claimed.job, result.items, this.now());
+            await this.store.complete(claimed.job, result.items, this.now(),
+              result.source === 'on_device' ? 'on_device' : undefined);
           }
         } else if (claimed.job.step === 'compare') {
           const prior = await this.store.comparisonInput(claimed.job);
@@ -117,7 +118,8 @@ export class Scheduler {
           if (this.stopped || controller.signal.aborted || generation !== this.generation) {
             await this.store.fail(claimed.job, 'AbortError', true, this.now(), false, dispatched);
           } else {
-            await this.store.completeAngles(claimed.job, input, result.concerns, this.sessionId, this.now());
+            await this.store.completeAngles(claimed.job, input, result.concerns, this.sessionId, this.now(),
+              result.source === 'on_device' ? 'on_device' : undefined);
           }
         } else if (claimed.job.step === 'question') {
           const input = await this.store.questionInput(claimed.job);
@@ -130,7 +132,7 @@ export class Scheduler {
             await this.store.fail(claimed.job, 'AbortError', true, this.now(), false, dispatched);
           } else {
             await this.store.completeQuestion(claimed.job, result.question, result.keptOut, result.leak.passed,
-              this.now());
+              this.now(), result.source === 'on_device' ? 'on_device' : undefined);
           }
         } else if (claimed.job.step === 'whynote') {
           const input = await this.store.whyInput(claimed.job);

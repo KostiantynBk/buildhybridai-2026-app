@@ -10,7 +10,7 @@ it('keeps settings and Remote Config outside the guarded local model service and
     expect(source).not.toMatch(/(?:from\s*|import\s*\()['"][^'"]*(?:settings|remote-config)/);
   }
 });
-it('excludes remote settings, Remote Config and Installations from the transitive eval graph', async () => {
+it('excludes remote settings, Remote Config and Installations from local scored runner graphs', async () => {
   const result = await build({
     configFile: false,
     envFile: false,
@@ -19,8 +19,8 @@ it('excludes remote settings, Remote Config and Installations from the transitiv
       write: false,
       emptyOutDir: false,
       minify: false,
-      rollupOptions: { input: fileURLToPath(new URL('../eval/EvalPage.tsx', import.meta.url)),
-        treeshake: false },
+      rollupOptions: { input: ['runner.ts', 'run2.ts', 'run3.ts'].map(name =>
+        fileURLToPath(new URL(`../eval/${name}`, import.meta.url))), treeshake: false },
     },
   });
   const outputs = Array.isArray(result) ? result : [result];
@@ -28,7 +28,8 @@ it('excludes remote settings, Remote Config and Installations from the transitiv
     if (!('output' in output)) throw new Error('Expected a completed in-memory build');
     return output.output.flatMap(chunk => chunk.type === 'chunk' ? Object.keys(chunk.modules) : []);
   });
-  expect(modules.some(path => path.includes('/eval/EvalPage.tsx'))).toBe(true);
+  expect(modules.some(path => path.includes('/eval/runner.ts'))).toBe(true);
+  expect(modules.some(path => path.includes('/eval/run3.ts'))).toBe(true);
   expect(modules.filter(path => /remoteSettings|remote-config|installations/i.test(path))).toEqual([]);
 }, 30000);
 

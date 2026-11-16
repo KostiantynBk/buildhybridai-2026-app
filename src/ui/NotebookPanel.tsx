@@ -6,6 +6,14 @@ import { lineageHeads } from '../store/lineage';
 import { containsQuote } from '../pipeline/compare';
 import { calculateStaleness } from '../store/staleness';
 import type { Feedback } from '../store/triageTypes';
+import type { DisplayAngle } from '../pipeline/selectConcerns';
+import type { ResearchView } from '../ai/researchFlow';
+import { ResearchBlock } from './ResearchBlock';
+import { isGrounded } from '../ai/suggestionsSafety';
+
+const angleLabels: Record<DisplayAngle, string> = { 'end-user': 'For the user',
+  'cost-at-scale': 'Costs at scale', 'limits-operations': 'Limits and operations',
+  'security-privacy': 'Security and privacy', alternatives: 'Alternatives', 'track-record': 'From your experience' };
 
 export function ProfileBlock({ card, profile }: { card: ThoughtCard; profile: ProfileRecord[] }) {
   if (card.triageVersion !== 'v2.1' || card.brief) return null;
@@ -62,11 +70,14 @@ export function emptyReason(snapshot: Snapshot, configured: boolean, ready: bool
   }
   return 'Nothing found in the current paragraphs.';
 }
-export function NotebookPanel({ text, save, storageStatus, snapshot, configured, ready, feedback }: {
+export function NotebookPanel({ text, save, storageStatus, snapshot, configured, ready, feedback, research,
+  researchAgain }: {
   text: string; save: (value: string) => void; storageStatus: 'loading' | 'saving' | 'saved' | 'error';
   snapshot: Snapshot; configured: boolean; ready: boolean;
-  feedback?: (cardId: string, value: Feedback) => void;
+  feedback?: (cardId: string, value: Feedback) => void; research?: Record<string, ResearchView>;
+  researchAgain?: (id: string) => Promise<void>;
 }) {
+  const [researchError, setResearchError] = useState('');
   const heads = lineageHeads(snapshot.lineages ?? []);
   const removed = heads.filter(lineage => lineage.status === 'removed' &&
     (!snapshot.paragraphs.some(p => p.id === lineage.paragraphId) || snapshot.paragraphs.some(p =>
@@ -131,22 +142,55 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
               ? 'question unavailable: the statement changed' : card.questionReason === 'revalidation-failed'
                 ? 'question unavailable: an earlier check stopped' : 'question unavailable after local error'
             : outbox?.status ?? 'preparing';
+          const receipt = outbox && (snapshot.researchReceipts ?? []).filter(value =>
+            value.entryId === outbox.id && value.status === 'completed').sort((a, b) => b.sentAt - a.sentAt)[0];
+          const questionJob = snapshot.jobs.find(job => job.cardId === card.id && job.step === 'question' &&
+            job.status === 'done' && job.measuredSource === 'on_device');
+          const angleJob = questionJob && snapshot.jobs.find(job =>
+            questionJob.key.startsWith(`${job.key}#question#`) && job.step === 'angles' &&
+            job.measuredSource === 'on_device' && job.status === 'done');
+          const extractJob = angleJob && snapshot.jobs.find(job => job.step === 'extract' &&
+            job.paragraphId === angleJob.paragraphId && job.paragraphVersion === angleJob.paragraphVersion &&
+            job.measuredSource === 'on_device' && job.status === 'done');
+          const cloudMeasured = !!receipt || !!(outbox && research?.[outbox.id]);
+          const route = [extractJob && 'Read on this device',
+            outbox && (outbox.status === 'approved' || cloudMeasured) && 'Question approved by you',
+            cloudMeasured && 'Researched in the cloud'].filter(Boolean).join(' · ');
           return <article className="item-card" key={card.id}>
+            {route && <p className="muted">{route}</p>}
             {failedCheckVisible && <p role="status">May have changed: couldn't re-check your edit.</p>}
             {stale.stale && <p role="status">Depends on “{card.itemQuote}” — {stale.reasons.map(reason =>
               reason.kind === 'needsConfirmation' ? 'may have changed' :
                 reason.kind === 'removed' ? 'no longer in your plan' : 'changed').join(', ')}</p>}
-            {card.brief ? <p><strong>{card.angle}:</strong> {card.concern} · {questionStatus}</p> : <>
-              <div><strong>{card.angle}</strong> · <span className="muted">on device</span></div>
+            {card.brief ? <p><strong>{angleLabels[card.angle]}:</strong> {card.concern} · {questionStatus}</p> : <>
+              <div><strong>{angleLabels[card.angle]}</strong></div>
               <blockquote>“{card.itemQuote}”</blockquote><p>{card.concern}</p>
+              <h4>Why this matters for you</h4>
               {card.triageVersion === 'v2.1' ? <ProfileBlock card={card} profile={snapshot.profile} /> :
                 <FreshWhy card={card} profile={snapshot.profile} />}
               <p>{outbox ? `${outbox.question} · ${outbox.status}` : questionStatus}</p>
-              <p>Research comes in a later version.</p>
-              {feedback && <div>{(['useful', 'already knew', 'not relevant', 'wrong'] as Feedback[]).map(value =>
+            </>}
+            {outbox && research?.[outbox.id] && <section><h4>What the research found</h4>
+              {stale.stale && <p role="status">Your plan changed since this was researched.</p>}
+              {!isGrounded(research[outbox.id].result) && <p>This answer used no web sources.</p>}
+              {research[outbox.id].changedAfterSend && <p role="status">Your plan changed (or you added a
+                never-send term) after this question was sent.</p>}
+              <ResearchBlock result={research[outbox.id].result} />
+              <button onClick={() => { void navigator.clipboard.writeText(research[outbox.id].result.text); }}>
+                Copy</button></section>}
+            {outbox && !research?.[outbox.id] && receipt && <div>
+              <p>Researched on {new Date(receipt.sentAt).toLocaleDateString()}.
+                Results aren't kept on this device.</p>
+              {researchAgain && outbox.status === 'approved' && <button disabled={storageStatus !== 'saved'}
+                onClick={() => { void researchAgain(outbox.id).then(() => setResearchError('')).catch(error =>
+                  setResearchError(error instanceof Error ? error.message : 'Research could not be completed.')); }}>
+                Research again</button>}
+              {researchError && <p role="alert">{researchError}</p>}
+            </div>}
+            {feedback && <div><h4>Was this question useful?</h4>
+              {(['useful', 'already knew', 'not relevant', 'wrong'] as Feedback[]).map(value =>
                 <button key={value} aria-pressed={card.feedback === value}
                   onClick={() => feedback(card.id, value)}>{value}</button>)}</div>}
-            </>}
           </article>;
         })}
         {storageStatus === 'saved' && unchecked.map(lineage => {

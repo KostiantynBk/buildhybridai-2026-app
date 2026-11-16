@@ -3,8 +3,8 @@ import type { OutboxEntry } from '../store/triageTypes';
 import type { Snapshot } from '../store';
 import { lineageEligibility } from '../store/eligibility';
 
-export function OutboxPage({ entries, decide, remove, snapshot, saving = false }: { entries: OutboxEntry[];
-  snapshot?: Snapshot; saving?: boolean;
+export function OutboxPage({ entries, decide, remove, snapshot, saving = false, research }: { entries: OutboxEntry[];
+  snapshot?: Snapshot; saving?: boolean; research?: (id: string) => Promise<void>;
   decide(id: string, value: 'approved' | 'rejected'): Promise<boolean>; remove(id: string): Promise<void> }) {
   const [error, setError] = useState('');
   const respond = (id: string, value: 'approved' | 'rejected') => {
@@ -13,7 +13,7 @@ export function OutboxPage({ entries, decide, remove, snapshot, saving = false }
   };
   return <section className="panel placeholder">
     <span className="eyebrow">Local review</span><h2>Outbox</h2>
-    <p>Nothing is sent in this version. Approved questions will be researched once cloud research is enabled.</p>
+    <p>Only an approved question can be researched in the cloud.</p>
     {entries.length === 0 && <p>No questions are waiting.</p>}
     {error && <p role="alert">{error}</p>}
     {[...entries].sort((a, b) => b.createdAt - a.createdAt).map(entry => <article className="item-card" key={entry.id}>
@@ -23,7 +23,7 @@ export function OutboxPage({ entries, decide, remove, snapshot, saving = false }
         : entry.withdrawReason === 'stale' ? 'Withdrawn: the statement changed or needs checking.'
           : 'Withdrawn: the question did not pass the privacy filter.'
         : `Status: ${entry.status}`}</p>
-      {entry.keptOut.length > 0 && <p>Kept out: {entry.keptOut.join(', ')}</p>}
+      {entry.keptOut.length > 0 && <p>Left out of the question: {entry.keptOut.join(', ')}</p>}
       {entry.status === 'pending' && (() => {
         const eligibility = saving ? 'checking' : snapshot ? lineageEligibility(entry.itemLineageId, entry.itemVersion,
           snapshot.paragraphs, snapshot.lineages ?? [], snapshot.jobs) : 'checking';
@@ -34,6 +34,10 @@ export function OutboxPage({ entries, decide, remove, snapshot, saving = false }
           <button onClick={() => respond(entry.id, 'rejected')}>Reject</button>
         </div>;
       })()}
+      {entry.status === 'approved' && research && <button disabled={saving} onClick={() => {
+        void research(entry.id).then(() => setError('')).catch(error => setError(
+          error instanceof Error ? error.message : 'Research could not be completed.'));
+      }}>Research this question</button>}{' '}
       <button onClick={() => {
         if (window.confirm('Delete this local Outbox entry?')) {
           void remove(entry.id).catch(() => setError('Could not delete the local Outbox entry.'));

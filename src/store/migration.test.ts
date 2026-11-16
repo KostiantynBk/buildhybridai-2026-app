@@ -1,7 +1,27 @@
 import 'fake-indexeddb/auto';
 import { openDB } from 'idb';
 import { expect, it, vi } from 'vitest';
-import { openLocalStore } from './index';
+import { openLocalStore, STORE_VERSION } from './index';
+
+it('upgrades v4 to v5 while retaining existing profile and creating an empty receipt store', async () => {
+  const name = `migration-v4-${crypto.randomUUID()}`;
+  const old = await openDB(name, 4, { upgrade(db) {
+    for (const [store, keyPath] of [
+      ['paragraphs', 'id'], ['paragraphVersions', ['id', 'version']], ['items', 'id'], ['profile', 'id'],
+      ['jobs', 'key'], ['outbox', 'id'], ['meta', 'key'], ['lineageVersions', ['lineageId', 'version']],
+      ['dependencies', ['consumerId', 'lineageId', 'version']], ['comparisonBatches', 'key'],
+      ['privacy', 'key'], ['cards', 'id'], ['funnel', 'id'], ['anglesConsidered', ['lineageId', 'version']],
+    ] as Array<[string, string | string[]]>) db.createObjectStore(store, { keyPath });
+  } });
+  const profile = { id: 'skill', type: 'skill', text: 'Existing record', topics: [], tags: [], updatedAt: 1 };
+  await old.put('profile', profile); old.close();
+  const store = await openLocalStore(name);
+  try {
+    expect((await store.snapshot()).profile).toEqual([profile]);
+    expect((await store.snapshot()).researchReceipts).toEqual([]);
+    expect(await store.cloudConsent()).toBe(false);
+  } finally { store.close(); }
+});
 
 it('upgrades a v1 database and migrates only current items into independent v1 lineages', async () => {
   const name = `migration-${crypto.randomUUID()}`;
@@ -95,7 +115,7 @@ it('backfills only provable v3 card and completed-current-angles evidence', asyn
   old.close();
   const store = await openLocalStore(name);
   try {
-    const db = await openDB(name, 4);
+    const db = await openDB(name, STORE_VERSION);
     try {
       expect(await db.getAllKeys('anglesConsidered')).toEqual([['l-a', 1], ['old-card-lineage', 2]]);
       expect(await db.get('anglesConsidered', ['l-b', 1])).toBeUndefined();

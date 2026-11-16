@@ -44,6 +44,9 @@ it('uses a fail-closed custom provider without constructing reCAPTCHA in dev deb
     });
     expect(mocks.custom).toHaveBeenCalledTimes(1);
     expect(mocks.enterprise).not.toHaveBeenCalled();
+    expect(mocks.getAI).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      useLimitedUseAppCheckTokens: true,
+    }));
     const options = mocks.custom.mock.calls[0][0] as { getToken: () => Promise<unknown> };
     await expect(options.getToken()).rejects.toThrow('Debug provider is unavailable.');
   } finally {

@@ -13,7 +13,7 @@ describe('local store', () => {
   it('creates an empty schema and migrates legacy text once after commit', async () => {
     expect(await store.snapshot()).toEqual({ paragraphs: [], items: [], profile: [], jobs: [], lineages: [],
       neverSend: [], cards: [], outbox: [],
-      dependencies: [] });
+      dependencies: [], researchReceipts: [] });
     data.set(LEGACY_KEY, `${long}\n\nanother paragraph`);
     await store.migrate(legacy);
     expect(data.has(LEGACY_KEY)).toBe(false);
@@ -151,7 +151,7 @@ describe('local store', () => {
     await store.clearAll(legacy);
     expect(await store.snapshot()).toEqual({ paragraphs: [], items: [], profile: [], jobs: [], lineages: [],
       neverSend: [], cards: [], outbox: [],
-      dependencies: [] });
+      dependencies: [], researchReceipts: [] });
     expect(await store.versions()).toEqual([]);
     expect(data.has(LEGACY_KEY)).toBe(false);
     await store.saveNotebook(long);
