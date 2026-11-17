@@ -14,9 +14,11 @@ type Props = {
   clearAll(): Promise<void>;
   cloudConsent?: boolean;
   revokeCloudConsent?(): Promise<void>;
+  cloudMode?: boolean;
+  revokeCloudMode?(): Promise<void>;
 };
 export function ProfilePanel({ records, save, remove, replace, neverSend = [], saveNeverSend, clearAll,
-  cloudConsent, revokeCloudConsent }: Props) {
+  cloudConsent, revokeCloudConsent, cloudMode, revokeCloudMode }: Props) {
   const [editing, setEditing] = useState<string | null>(null);
   const [type, setType] = useState<ProfileType>('skill');
   const [depth, setDepth] = useState<Depth>('some');
@@ -81,6 +83,10 @@ export function ProfilePanel({ records, save, remove, replace, neverSend = [], s
       <p>Skills, projects, lessons and preferences stay local. Selected records may be read by the on-device
         why-note model only. They are never put in the public question or any cloud prompt, and they stay on
         this device.</p>
+      {revokeCloudMode && <section><h3>Cloud mode for plan processing</h3>
+        <p>{cloudMode ? 'On: plan processing uses the cloud.' : 'Off: strict on-device mode.'}</p>
+        {cloudMode && <button onClick={() => { void revokeCloudMode().catch(() =>
+          setError('Could not revoke cloud mode.')); }}>Switch off cloud mode</button>}</section>}
       {revokeCloudConsent && <section><h3>Cloud research consent</h3>
         <p>{cloudConsent ? 'Approved for this browser.' : 'Not approved.'}</p>
         {cloudConsent && <button onClick={() => { void revokeCloudConsent().catch(() =>

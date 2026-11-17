@@ -22,16 +22,16 @@ it('reports an upgrade blocked by a v3 connection and proceeds after it closes',
     try { expect((await upgraded.snapshot()).paragraphs).toEqual([]); } finally { upgraded.close(); }
   } finally { old.close(); }
 });
-it('closes an open v5 connection and reports versionchange to the outdated tab', async () => {
+it('closes an open v6 connection and reports versionchange to the outdated tab', async () => {
   const name = `version-change-${crypto.randomUUID()}`;
   const onVersionChange = vi.fn();
   const store = await openLocalStore(name, { onVersionChange });
   try {
-    const upgraded = await openDB(name, 6, { upgrade(db) { db.createObjectStore('future'); } });
+    const upgraded = await openDB(name, 7, { upgrade(db) { db.createObjectStore('future'); } });
     try {
       expect(onVersionChange).toHaveBeenCalledOnce();
       await expect(store.snapshot()).rejects.toBeDefined();
-      expect(upgraded.version).toBe(6);
+      expect(upgraded.version).toBe(7);
     } finally { upgraded.close(); }
   } finally { store.close(); }
 });

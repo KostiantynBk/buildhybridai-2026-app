@@ -14,6 +14,10 @@ export function OutboxPage({ entries, decide, remove, snapshot, saving = false, 
   return <section className="panel placeholder">
     <span className="eyebrow">Local review</span><h2>Outbox</h2>
     <p>Only an approved question can be researched in the cloud.</p>
+    <section><h3>Cloud plan-processing attempts</h3>
+      <p>{snapshot?.cloudProcessingSends?.length ?? 0} attempts. Times only; plan text is not listed.</p>
+      <ul>{(snapshot?.cloudProcessingSends ?? []).map((time, index) =>
+        <li key={`${time}-${index}`}>{new Date(time).toLocaleString()}</li>)}</ul></section>
     {entries.length === 0 && <p>No questions are waiting.</p>}
     {error && <p role="alert">{error}</p>}
     {[...entries].sort((a, b) => b.createdAt - a.createdAt).map(entry => <article className="item-card" key={entry.id}>

@@ -39,7 +39,8 @@ export interface StoredJob {
     'question.v1' | 'question.v2' | 'question.v2.1' | 'whynote.v1' | 'whynote.v2';
   lineageId?: string; cardId?: string;
   status: 'pending' | 'running' | 'done' | 'superseded' | 'failed'; attempts: number; createdAt: number;
-  nextRunAt: number; errorName?: string; measuredSource?: 'on_device';
+  nextRunAt: number; errorName?: string; measuredSource?: 'on_device' | 'in_cloud';
+  runMode?: 'on_device' | 'in_cloud'; cloudEligible?: boolean;
   failureReason?: 'interrupted-at-attempt-limit' | 'revalidation-failed';
 }
 interface ComparisonBatch {
@@ -63,9 +64,11 @@ interface Database extends DBSchema {
   anglesConsidered: { key: [string, number]; value: { lineageId: string; version: number; recordedAt: number;
     source: 'adopted' | 'migrated-card' | 'migrated-current' } };
   research: { key: number; value: ResearchReceipt };
+  cloudProcessing: { key: number; value: { sentAt: number } };
 }
 export type ResearchReceipt = { entryId: string; sentAt: number; status: 'sent' | 'completed' | 'failed' };
-export const STORE_VERSION = 5;
+export const STORE_VERSION = 6;
+export const CLOUD_PROCESSING_DAILY_LIMIT = 150;
 export const LEGACY_KEY = 'thoughtpartner-notebook';
 export const SETTLE_MS = 4000;
 export const MIN_WORDS = 12;
@@ -77,7 +80,8 @@ export const wordCount = (text: string) => text.trim() ? text.trim().split(/\s+/
 const id = () => crypto.randomUUID();
 export type Snapshot = { paragraphs: Paragraph[]; items: StoredItem[]; profile: ProfileRecord[]; jobs: StoredJob[];
   lineages?: LineageVersion[]; neverSend?: string[]; cards?: ThoughtCard[]; outbox?: OutboxEntry[];
-  dependencies?: Dependency[]; researchReceipts?: ResearchReceipt[] };
+  dependencies?: Dependency[]; researchReceipts?: ResearchReceipt[]; cloudProcessingSends?: number[];
+  cloudModeEnabled?: boolean };
 type LegacyStorage = Pick<Storage, 'getItem' | 'removeItem'>;
 function currentTriageItems(paragraph: Paragraph, items: StoredItem[], versions: LineageVersion[],
   version: TriageVersion = TRIAGE_PROMPT_SET): TriageItem[] {
@@ -172,27 +176,86 @@ export class LocalStore {
   close() { this.db.close(); }
   async snapshot(): Promise<Snapshot> {
     const tx = this.db.transaction(['paragraphs', 'items', 'profile', 'jobs', 'lineageVersions', 'privacy',
-      'cards', 'outbox', 'dependencies', 'research'], 'readonly');
+      'cards', 'outbox', 'dependencies', 'research', 'cloudProcessing', 'meta'], 'readonly');
     void tx.done.catch(() => undefined);
     try {
-      const [paragraphs, items, profile, jobs, lineages, privacy, cards, outbox, dependencies, researchReceipts] =
-        await Promise.all([
+      const [paragraphs, items, profile, jobs, lineages, privacy, cards, outbox, dependencies, researchReceipts,
+        cloudSends, cloudMode] = await Promise.all([
         tx.objectStore('paragraphs').getAll(), tx.objectStore('items').getAll(),
         tx.objectStore('profile').getAll(), tx.objectStore('jobs').getAll(), tx.objectStore('lineageVersions').getAll(),
         tx.objectStore('privacy').get('never-send'), tx.objectStore('cards').getAll(),
         tx.objectStore('outbox').getAll(), tx.objectStore('dependencies').getAll(),
-        tx.objectStore('research').getAll(),
+        tx.objectStore('research').getAll(), tx.objectStore('cloudProcessing').getAll(),
+        tx.objectStore('meta').get('cloud-mode-consent'),
       ]);
       await tx.done;
       paragraphs.sort((a, b) => a.order - b.order);
       return { paragraphs, items, profile, jobs, lineages, neverSend: privacy?.terms ?? [], cards, outbox,
-        dependencies, researchReceipts };
+        dependencies, researchReceipts, cloudProcessingSends: cloudSends.map(send => send.sentAt),
+        cloudModeEnabled: cloudMode?.value === true };
     } catch (error) {
       try { tx.abort(); } catch { /* Already finished or aborted. */ }
       await tx.done.catch(() => undefined);
       throw error;
     }
   }
+  async cloudModeConsent(): Promise<boolean> {
+    return (await this.db.get('meta', 'cloud-mode-consent'))?.value === true;
+  }
+  async setCloudModeConsent(value: boolean): Promise<void> {
+    const tx = this.db.transaction(['meta', 'jobs', 'comparisonBatches', 'cards', 'funnel'], 'readwrite');
+    void tx.done.catch(() => undefined);
+    try {
+      await tx.objectStore('meta').put({ key: 'cloud-mode-consent', value });
+      if (value) for (const job of await tx.objectStore('jobs').getAll()) {
+        if (job.status === 'pending' && job.runMode === 'on_device' && job.cloudEligible &&
+            job.step === 'extract' && job.promptVersion === 'extract.v2') {
+          await tx.objectStore('jobs').put({ ...job, runMode: 'in_cloud' });
+        }
+      }
+      if (!value) for (const job of await tx.objectStore('jobs').getAll()) {
+        if (job.runMode !== 'in_cloud' || !['pending', 'running'].includes(job.status)) continue;
+        await tx.objectStore('jobs').put({ ...job, status: 'failed', errorName: 'CloudModeRevoked' });
+        if (job.step === 'compare' && job.lineageId) {
+          const batch = await tx.objectStore('comparisonBatches').get(batchKey(job.paragraphId, job.paragraphVersion));
+          if (batch) {
+            batch.decisions[job.lineageId] = { status: 'unchecked', reason: 'CloudModeRevoked' };
+            await tx.objectStore('comparisonBatches').put(batch);
+          }
+        }
+        if (['angles', 'question', 'whynote'].includes(job.step)) {
+          const card = job.cardId ? await tx.objectStore('cards').get(job.cardId) : undefined;
+          const failure = triageFailure(job, card, Date.now());
+          if (failure.card) await tx.objectStore('cards').put(failure.card);
+          await tx.objectStore('funnel').put(failure.event);
+        }
+      }
+      await tx.done;
+    } catch (error) {
+      try { tx.abort(); } catch { /* Already finished or aborted. */ }
+      await tx.done.catch(() => undefined);
+      throw error;
+    }
+  }
+  async reserveCloudProcessing(now = Date.now()): Promise<number | null> {
+    const tx = this.db.transaction(['cloudProcessing', 'meta'], 'readwrite');
+    void tx.done.catch(() => undefined);
+    try {
+      const consent = (await tx.objectStore('meta').get('cloud-mode-consent'))?.value === true;
+      const start = new Date(now); start.setHours(0, 0, 0, 0);
+      const end = new Date(start); end.setDate(end.getDate() + 1);
+      const sends = await tx.objectStore('cloudProcessing').getAll();
+      if (!consent || sends.filter(send => send.sentAt >= start.getTime() && send.sentAt < end.getTime()).length >=
+        CLOUD_PROCESSING_DAILY_LIMIT) { await tx.done; return null; }
+      const key = await tx.objectStore('cloudProcessing').add({ sentAt: now });
+      await tx.done; return key;
+    } catch (error) {
+      try { tx.abort(); } catch { /* Already finished or aborted. */ }
+      await tx.done.catch(() => undefined);
+      throw error;
+    }
+  }
+  async cancelCloudProcessingReservation(key: number): Promise<void> { await this.db.delete('cloudProcessing', key); }
   async cloudConsent(): Promise<boolean> {
     return (await this.db.get('meta', 'cloud-consent'))?.value === true;
   }
@@ -217,11 +280,12 @@ export class LocalStore {
     if (receipt) await tx.store.put({ ...receipt, status }, key);
     await tx.done;
   }
-  async enqueueAngles(now: number): Promise<void> {
+  async enqueueAngles(now: number, _mode: 'on_device' | 'in_cloud' = 'on_device'): Promise<void> {
     const tx = this.db.transaction(['paragraphs', 'items', 'jobs', 'lineageVersions', 'comparisonBatches',
-      'anglesConsidered'], 'readwrite');
+      'anglesConsidered', 'meta'], 'readwrite');
     void tx.done.catch(() => undefined);
     try {
+      const mode = (await tx.objectStore('meta').get('cloud-mode-consent'))?.value ? 'in_cloud' : 'on_device';
       const [paragraphs, items, versions, jobs, considered] = await Promise.all([
         tx.objectStore('paragraphs').getAll(), tx.objectStore('items').getAll(),
         tx.objectStore('lineageVersions').getAll(), tx.objectStore('jobs').getAll(),
@@ -229,14 +293,15 @@ export class LocalStore {
       for (const paragraph of paragraphs) {
         const key = `${paragraph.id}@${paragraph.version}#angles`;
         const extract = jobs.find(job => job.key === jobKey(paragraph.id, paragraph.version));
-        if (extract?.status !== 'done' || jobs.some(job => job.key === key) ||
+        if (extract?.status !== 'done' || (extract.runMode ?? 'on_device') !== mode ||
+            jobs.some(job => job.key === key) ||
             await tx.objectStore('comparisonBatches').get(batchKey(paragraph.id, paragraph.version)) ||
             !unconsideredItems(currentTriageItems(paragraph, items, versions, TRIAGE_PROMPT_SET), considered).length) {
           continue;
         }
         await tx.objectStore('jobs').put({ key, paragraphId: paragraph.id, paragraphVersion: paragraph.version,
           step: 'angles', promptVersion: triagePromptVersions(TRIAGE_PROMPT_SET).angles, status: 'pending', attempts: 0,
-          createdAt: now, nextRunAt: now });
+          createdAt: now, nextRunAt: now, runMode: mode });
       }
       await tx.done;
     } catch (error) {
@@ -268,7 +333,7 @@ export class LocalStore {
     }
   }
   async completeAngles(job: StoredJob, input: { paragraph: string; items: TriageItem[] }, concerns: Concern[],
-    sessionId: string, now = Date.now(), measuredSource?: 'on_device'): Promise<boolean> {
+    sessionId: string, now = Date.now(), measuredSource?: 'on_device' | 'in_cloud'): Promise<boolean> {
     const tx = this.db.transaction(['jobs', 'paragraphs', 'items', 'lineageVersions', 'comparisonBatches', 'profile',
       'cards', 'dependencies', 'funnel', 'anglesConsidered'], 'readwrite');
     void tx.done.catch(() => undefined);
@@ -342,7 +407,8 @@ export class LocalStore {
         await tx.objectStore('jobs').put({ key: `${job.key}#question#${card.id}`,
           paragraphId: paragraph.id, paragraphVersion: paragraph.version, step: 'question',
           promptVersion: triagePromptVersions(version).question,
-          cardId: card.id, status: 'pending', attempts: 0, createdAt: now, nextRunAt: now });
+          cardId: card.id, status: 'pending', attempts: 0, createdAt: now, nextRunAt: now,
+          runMode: job.runMode ?? 'on_device' });
       }
       await tx.objectStore('jobs').put({ ...current, status: 'done', measuredSource });
       await tx.done; return true;
@@ -374,7 +440,7 @@ export class LocalStore {
     }
   }
   async completeQuestion(job: StoredJob, question: string, keptOut: string[], passedAtGeneration: boolean,
-    now = Date.now(), measuredSource?: 'on_device'): Promise<boolean> {
+    now = Date.now(), measuredSource?: 'on_device' | 'in_cloud'): Promise<boolean> {
     const tx = this.db.transaction(['jobs', 'paragraphs', 'cards', 'lineageVersions', 'privacy', 'outbox', 'funnel'],
       'readwrite');
     void tx.done.catch(() => undefined);
@@ -619,16 +685,25 @@ export class LocalStore {
       throw error;
     }
   }
-  async enqueueSettled(now: number, promptVersion: 'extract.v1' | 'extract.v2'): Promise<void> {
-    const tx = this.db.transaction(['paragraphs', 'jobs'], 'readwrite');
+  async enqueueSettled(now: number, promptVersion: 'extract.v1' | 'extract.v2',
+    _mode: 'on_device' | 'in_cloud' = 'on_device'): Promise<void> {
+    const tx = this.db.transaction(['paragraphs', 'jobs', 'meta'], 'readwrite');
     void tx.done.catch(() => undefined);
     try {
+      const mode = (await tx.objectStore('meta').get('cloud-mode-consent'))?.value ? 'in_cloud' : 'on_device';
+      const actualPrompt = mode === 'in_cloud' ? 'extract.v2' : promptVersion;
       for (const p of await tx.objectStore('paragraphs').getAll()) {
         if (now - p.updatedAt < SETTLE_MS || wordCount(p.text) < MIN_WORDS) continue;
         const key = jobKey(p.id, p.version);
-        if (!(await tx.objectStore('jobs').get(key))) {
+        const existing = await tx.objectStore('jobs').get(key);
+        if (!existing) {
           await tx.objectStore('jobs').put({ key, paragraphId: p.id, paragraphVersion: p.version,
-            step: 'extract', promptVersion, status: 'pending', attempts: 0, createdAt: now, nextRunAt: now });
+            step: 'extract', promptVersion: actualPrompt, status: 'pending', attempts: 0, createdAt: now,
+            nextRunAt: now, runMode: mode,
+            cloudEligible: actualPrompt === 'extract.v2' && TRIAGE_PROMPT_SET === 'v2.1' });
+        } else if (mode === 'in_cloud' && existing.status === 'pending' && existing.runMode === 'on_device' &&
+            existing.cloudEligible && existing.promptVersion === 'extract.v2') {
+          await tx.objectStore('jobs').put({ ...existing, runMode: 'in_cloud' });
         }
       }
       await tx.done;
@@ -671,14 +746,22 @@ export class LocalStore {
       throw error;
     }
   }
-  async claim(now: number): Promise<{ job: StoredJob; paragraph: Paragraph } | null> {
-    const tx = this.db.transaction(['jobs', 'paragraphs', 'comparisonBatches', 'cards', 'funnel', 'lineageVersions'],
-      'readwrite');
+  async claim(now: number, mode: 'on_device' | 'in_cloud' = 'on_device'):
+    Promise<{ job: StoredJob; paragraph: Paragraph } | null> {
+    const tx = this.db.transaction(['jobs', 'paragraphs', 'comparisonBatches', 'cards', 'funnel', 'lineageVersions',
+      'meta'], 'readwrite');
     void tx.done.catch(() => undefined);
     try {
+      const storedMode = (await tx.objectStore('meta').get('cloud-mode-consent'))?.value ? 'in_cloud' : 'on_device';
+      if (mode !== storedMode) { await tx.done; return null; }
       const jobs = (await tx.objectStore('jobs').getAll()).filter(j => j.status === 'pending' && j.nextRunAt <= now)
         .sort((a, b) => a.createdAt - b.createdAt || a.key.localeCompare(b.key));
       for (const job of jobs) {
+        if ((job.runMode ?? 'on_device') !== mode) continue;
+        if (mode === 'in_cloud' && !((job.step === 'extract' && job.promptVersion === 'extract.v2') ||
+            (job.step === 'compare' && job.promptVersion === 'compare.v1') ||
+            (job.step === 'angles' && job.promptVersion === 'angles.v2.1') ||
+            (job.step === 'question' && job.promptVersion === 'question.v2.1'))) continue;
         if (job.attempts >= MAX_ATTEMPTS) {
           await tx.objectStore('jobs').put({ ...job, status: 'failed',
             failureReason: 'interrupted-at-attempt-limit' });
@@ -717,7 +800,7 @@ export class LocalStore {
             continue;
           }
         }
-        const claimed: StoredJob = { ...job, status: 'running', attempts: job.attempts + 1 };
+        const claimed: StoredJob = { ...job, status: 'running', attempts: job.attempts + 1, runMode: mode };
         await tx.objectStore('jobs').put(claimed);
         await tx.done;
         return { job: claimed, paragraph };
@@ -731,7 +814,7 @@ export class LocalStore {
     }
   }
   async complete(job: StoredJob, result: { kind: string; text: string; quote: string; topics: string[] }[],
-    now = Date.now(), measuredSource?: 'on_device'): Promise<boolean> {
+    now = Date.now(), measuredSource?: 'on_device' | 'in_cloud'): Promise<boolean> {
     const tx = this.db.transaction(['jobs', 'paragraphs', 'items', 'lineageVersions', 'comparisonBatches'],
       'readwrite');
     void tx.done.catch(() => undefined);
@@ -771,7 +854,7 @@ export class LocalStore {
           const key = compareJobKey(paragraph.id, paragraph.version, lineage.lineageId);
           await tx.objectStore('jobs').put({ key, paragraphId: paragraph.id, paragraphVersion: paragraph.version,
             step: 'compare', lineageId: lineage.lineageId, promptVersion: 'compare.v1', status: 'pending',
-            attempts: 0, createdAt: now, nextRunAt: now });
+            attempts: 0, createdAt: now, nextRunAt: now, runMode: job.runMode ?? 'on_device' });
         }
       }
       await tx.objectStore('comparisonBatches').put({ key: batchKey(paragraph.id, paragraph.version),
@@ -898,7 +981,8 @@ export class LocalStore {
       batch.decisions[current.lineageId] = { status: result.status, newQuote: result.newQuote,
         newQuoteFound: result.newQuoteFound, needsConfirmation: result.needsConfirmation };
       await tx.objectStore('comparisonBatches').put(batch);
-      await tx.objectStore('jobs').put({ ...current, status: 'done' });
+      await tx.objectStore('jobs').put({ ...current, status: 'done',
+        ...(result.source === 'code' ? {} : { measuredSource: result.source }) });
       await tx.done;
       return true;
     } catch (error) {
@@ -1191,7 +1275,7 @@ export class LocalStore {
     storage.removeItem(LEGACY_KEY);
     const tx = this.db.transaction(['paragraphs', 'paragraphVersions', 'items', 'profile', 'jobs', 'outbox', 'meta',
       'lineageVersions', 'dependencies', 'comparisonBatches', 'privacy', 'cards', 'funnel', 'anglesConsidered',
-      'research'],
+      'research', 'cloudProcessing'],
       'readwrite');
     void tx.done.catch(() => undefined);
     try {
@@ -1214,6 +1298,7 @@ export async function openLocalStore(name = 'thoughtpartner', events: {
     blocking() { db?.close(); events.onVersionChange?.(); },
     upgrade(database, oldVersion, _newVersion, tx) {
       void tx.done.catch(() => undefined);
+      if (oldVersion < 6) database.createObjectStore('cloudProcessing', { autoIncrement: true });
       if (oldVersion < 5) database.createObjectStore('research', { autoIncrement: true });
       if (oldVersion < 1) {
         database.createObjectStore('paragraphs', { keyPath: 'id' });

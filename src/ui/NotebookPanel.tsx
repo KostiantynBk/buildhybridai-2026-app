@@ -50,19 +50,21 @@ function FreshWhy({ card, profile }: { card: ThoughtCard; profile: ProfileRecord
   }, [signature]);
   return card.why && checked === signature ? <WhyContent card={card} profile={profile} /> : null;
 }
-export function emptyReason(snapshot: Snapshot, configured: boolean, ready: boolean): string {
+export function emptyReason(snapshot: Snapshot, configured: boolean, ready: boolean,
+  cloudMode = false): string {
   if (!snapshot.paragraphs.length) return 'Start writing a plan to see what it relies on.';
   if (snapshot.paragraphs.every(p => wordCount(p.text) < MIN_WORDS)) {
     return `A paragraph needs at least ${MIN_WORDS} words before it can be checked.`;
   }
   if (!configured) return 'Waiting: Firebase is not configured. Your notebook stays local.';
-  if (!ready) return 'Waiting for the on-device model. Prepare the model to continue.';
+  if (!ready) return cloudMode ? 'Cloud processing is disabled; cloud jobs are paused.' :
+    'Waiting for the on-device model. Prepare the model to continue.';
   if (snapshot.jobs.some(job => job.step === 'extract' && job.status === 'failed' &&
       snapshot.paragraphs.some(p => p.id === job.paragraphId && p.version === job.paragraphVersion))) {
     return 'An extraction stopped after bounded retries.';
   }
   if (snapshot.jobs.some(job => job.status === 'pending' || job.status === 'running')) {
-    return 'Checking settled paragraphs on device.';
+    return cloudMode ? 'Checking settled paragraphs in cloud mode.' : 'Checking settled paragraphs on device.';
   }
   if (snapshot.paragraphs.some(p => wordCount(p.text) >= MIN_WORDS && !snapshot.jobs.some(j =>
     j.paragraphId === p.id && j.paragraphVersion === p.version && j.status === 'done'))) {
@@ -71,11 +73,11 @@ export function emptyReason(snapshot: Snapshot, configured: boolean, ready: bool
   return 'Nothing found in the current paragraphs.';
 }
 export function NotebookPanel({ text, save, storageStatus, snapshot, configured, ready, feedback, research,
-  researchAgain }: {
+  researchAgain, cloudMode = false }: {
   text: string; save: (value: string) => void; storageStatus: 'loading' | 'saving' | 'saved' | 'error';
   snapshot: Snapshot; configured: boolean; ready: boolean;
   feedback?: (cardId: string, value: Feedback) => void; research?: Record<string, ResearchView>;
-  researchAgain?: (id: string) => Promise<void>;
+  researchAgain?: (id: string) => Promise<void>; cloudMode?: boolean;
 }) {
   const [researchError, setResearchError] = useState('');
   const heads = lineageHeads(snapshot.lineages ?? []);
@@ -111,14 +113,17 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
         {currentExtractionFailed && <p role="status">An extraction stopped after bounded retries.</p>}
         {!hasItems && !currentExtractionFailed && <div className="empty" role="status"><p>{storageStatus === 'saving'
           ? 'Saving changes before checking this plan.' : storageStatus === 'error'
-            ? 'Cannot check unsaved changes.' : emptyReason(snapshot, configured, ready)}</p></div>}
+            ? 'Cannot check unsaved changes.' : emptyReason(snapshot, configured, ready, cloudMode)}</p></div>}
         {visibleGroups.map(({ paragraph, items }) => <section key={paragraph.id}>
           <h3>Paragraph {paragraph.order + 1}</h3>
           {items.map(item => {
             const head = heads.find(lineage => lineage.lineageId === item.lineageId);
             const previous = snapshot.items.find(candidate => candidate.id === head?.changedFrom);
+            const source = snapshot.jobs.find(job => job.step === 'extract' && job.status === 'done' &&
+              job.paragraphId === item.paragraphId && job.paragraphVersion === item.paragraphVersion)?.measuredSource;
             return <article className="item-card" key={item.id}>
-              <div><strong>{item.kind}</strong> · <span className="muted">on device</span></div>
+              <div><strong>{item.kind}</strong>{source && <span className="muted"> · {
+                source === 'in_cloud' ? 'in the cloud' : 'on device'}</span>}</div>
               <p>{item.text}</p><blockquote>“{item.quote}”</blockquote>
               {head?.status === 'changed' && !head.needsConfirmation && head.paragraphVersion === paragraph.version &&
                 <p>Changed: was “{previous?.text ?? 'earlier statement'}”</p>}
@@ -145,15 +150,16 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
           const receipt = outbox && (snapshot.researchReceipts ?? []).filter(value =>
             value.entryId === outbox.id && value.status === 'completed').sort((a, b) => b.sentAt - a.sentAt)[0];
           const questionJob = snapshot.jobs.find(job => job.cardId === card.id && job.step === 'question' &&
-            job.status === 'done' && job.measuredSource === 'on_device');
+            job.status === 'done' && job.measuredSource);
           const angleJob = questionJob && snapshot.jobs.find(job =>
             questionJob.key.startsWith(`${job.key}#question#`) && job.step === 'angles' &&
-            job.measuredSource === 'on_device' && job.status === 'done');
+            job.measuredSource === questionJob.measuredSource && job.status === 'done');
           const extractJob = angleJob && snapshot.jobs.find(job => job.step === 'extract' &&
             job.paragraphId === angleJob.paragraphId && job.paragraphVersion === angleJob.paragraphVersion &&
-            job.measuredSource === 'on_device' && job.status === 'done');
+            job.measuredSource === questionJob?.measuredSource && job.status === 'done');
           const cloudMeasured = !!receipt || !!(outbox && research?.[outbox.id]);
-          const route = [extractJob && 'Read on this device',
+          const route = [extractJob && (extractJob.measuredSource === 'in_cloud' ? 'Read in the cloud' :
+            'Read on this device'),
             outbox && (outbox.status === 'approved' || cloudMeasured) && 'Question approved by you',
             cloudMeasured && 'Researched in the cloud'].filter(Boolean).join(' · ');
           return <article className="item-card" key={card.id}>

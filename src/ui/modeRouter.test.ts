@@ -1,0 +1,42 @@
+import { expect, it, vi } from 'vitest';
+import { modeRouter } from './modeRouter';
+import type { LocalService } from '../store/scheduler';
+
+it('waits for the visible mode to reconcile and never routes a pinned job through the opposite mode', async () => {
+  let stored = false;
+  let shown = false;
+  const localRun = vi.fn().mockResolvedValue({ data: {}, latencyMs: 1, source: 'on_device', raw: '{}' });
+  const cloudRun = vi.fn().mockResolvedValue({ data: {}, latencyMs: 1, source: 'in_cloud', raw: '{}' });
+  const local = { state: { kind: 'ready' }, subscribe: () => () => {}, runLocal: localRun } as LocalService;
+  const cloud = { subscribe: () => () => {}, runLocal: cloudRun } as Pick<LocalService, 'subscribe' | 'runLocal'>;
+  const router = modeRouter(local, cloud, async () => stored, () => true, () => true, mode => shown === mode);
+  expect(await router.isReadyFor?.('on_device')).toBe(true);
+  stored = true;
+  expect(await router.isReadyFor?.('in_cloud')).toBe(false);
+  await expect(router.runLocal({ prompt: 'x', schema: {}, requiredMode: 'in_cloud' })).rejects.toThrow('changed');
+  expect(cloudRun).not.toHaveBeenCalled();
+  shown = true;
+  expect(await router.isReadyFor?.('in_cloud')).toBe(true);
+  await expect(router.runLocal({ prompt: 'x', schema: {}, requiredMode: 'on_device' })).rejects.toThrow('changed');
+  expect(localRun).not.toHaveBeenCalled();
+  await router.runLocal({ prompt: 'x', schema: {}, requiredMode: 'in_cloud' });
+  expect(cloudRun).toHaveBeenCalledOnce();
+});
+it('defaults to local and never calls cloud after local failure or vice versa', async () => {
+  let selected = false;
+  let enabled = true;
+  const localRun = vi.fn().mockRejectedValue(new Error('local failed'));
+  const cloudRun = vi.fn().mockRejectedValue(new Error('cloud failed'));
+  const local = { state: { kind: 'ready' }, subscribe: () => () => {}, runLocal: localRun } as LocalService;
+  const cloud = { subscribe: () => () => {}, runLocal: cloudRun } as Pick<LocalService, 'subscribe' | 'runLocal'>;
+  const router = modeRouter(local, cloud, async () => selected, () => enabled, () => true);
+  await expect(router.runLocal({ prompt: 'local', schema: {} })).rejects.toThrow('local failed');
+  expect(cloudRun).not.toHaveBeenCalled();
+  selected = true;
+  await expect(router.runLocal({ prompt: 'cloud', schema: {} })).rejects.toThrow('cloud failed');
+  expect(localRun).toHaveBeenCalledTimes(1);
+  enabled = false;
+  expect(await router.isReadyFor?.('in_cloud')).toBe(false);
+  await expect(router.runLocal({ prompt: 'cloud', schema: {} })).rejects.toThrow('paused');
+  expect(cloudRun).toHaveBeenCalledTimes(1);
+});

@@ -57,16 +57,22 @@ export function StatusBar({
   configured,
   foreground,
   settings = builtInSettings(),
+  cloudMode = false,
+  cloudMessage = '',
 }: {
   service: LocalModelService;
   configured: boolean;
   foreground: boolean;
   settings?: SettingsSnapshot;
+  cloudMode?: boolean;
+  cloudMessage?: string;
 }) {
   return (
     <footer className="status" aria-live="polite">
       <div>
-        <span className="status-dot" /> <strong>On-device</strong>
+        <span className="status-dot" /> <strong>{cloudMode
+          ? "Cloud mode: your paragraphs are sent to Google's Gemini API" : 'On-device'}</strong>
+        {cloudMessage && <span role="status"> · {cloudMessage}</span>}
         <span className="separator">·</span>Local model: {modelLabel(service.state)}
         <span className="separator">·</span>Browser availability: {service.browserAvailability}
         {service.warmLatencyMs !== null && ` · Warm-up ${Math.round(service.warmLatencyMs)} ms`}
@@ -75,7 +81,7 @@ export function StatusBar({
         <span className="separator">·</span>
         Settings: {settingsLabel(settings)}
       </div>
-      {showPrepare(service.state, service.browserAvailability, service.retryRequired) && <div>
+      {!cloudMode && showPrepare(service.state, service.browserAvailability, service.retryRequired) && <div>
         <button
           disabled={!canPrepare(configured, foreground, service.preparing, service.state)}
           onClick={() => { void service.prepare().catch(() => undefined); }}

@@ -14,6 +14,8 @@ import { createCloudAdapter } from '../ai/cloudResearch';
 import { researchApproved, type ResearchView } from '../ai/researchFlow';
 import type { ResearchMetric } from '../eval/Run4Panel';
 import { run4Provenance } from '../eval/run4Provenance';
+import { CloudProcessingService, createProcessingAdapter } from '../ai/cloudProcessing';
+import { modeRouter } from './modeRouter';
 
 const emptySnapshot = (): Snapshot => ({ paragraphs: [], items: [], profile: [], jobs: [] });
 export function StorageNotice({ notice }: { notice: string }) {
@@ -32,6 +34,11 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
   const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
   const [research, setResearch] = useState<Record<string, ResearchView>>({});
   const [cloudConsent, setCloudConsent] = useState(false);
+  const [cloudMode, setCloudMode] = useState(false);
+  const renderedModeRef = useRef(false);
+  renderedModeRef.current = cloudMode;
+  const cloudModeRef = useRef(false);
+  const cloudServiceRef = useRef<CloudProcessingService | null>(null);
   const cloudConsentRef = useRef(false);
   const [researchMetrics, setResearchMetrics] = useState<ResearchMetric[]>([]);
   const inFlight = useRef(new Set<string>());
@@ -47,7 +54,26 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
   const revision = useRef(0);
   const mounted = useRef(true);
   const clearing = useRef(false);
+  const refreshSeq = useRef(0);
+  const channelRef = useRef<BroadcastChannel | null>(null);
   const foreground = useForeground();
+  const reconcile = (next: Snapshot) => {
+    const selected = next.cloudModeEnabled === true;
+    if (selected !== cloudModeRef.current) {
+      cloudModeRef.current = selected;
+      schedulerRef.current?.modeChanged();
+      setCloudMode(selected);
+    }
+    snapshotRef.current = next;
+    setSnapshot(next);
+  };
+  const refreshData = async () => {
+    const store = storeRef.current;
+    if (!store) throw new Error('Local storage unavailable.');
+    const sequence = ++refreshSeq.current;
+    const next = await store.snapshot();
+    if (mounted.current && storeRef.current === store && sequence === refreshSeq.current) reconcile(next);
+  };
   useEffect(() => {
     const unsubscribe = service.subscribe(() => refresh(n => n + 1));
     const stopReadiness = startReadiness(service);
@@ -64,11 +90,8 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
     let scheduler: Scheduler | null = null;
     let outdated = false;
     const update = () => {
-      if (!opened) return;
-      void opened.snapshot().then(value => {
-        if (mounted.current) { snapshotRef.current = value; setSnapshot(value); }
-      })
-        .catch(() => { if (mounted.current) setStorageStatus('error'); });
+      if (!opened || !storeRef.current) return;
+      void refreshData().catch(() => { if (mounted.current) setStorageStatus('error'); });
     };
     void (async () => {
       try {
@@ -91,11 +114,18 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
         setStorageNotice('');
         cloudConsentRef.current = consent; setCloudConsent(consent);
         storeRef.current = opened;
-        snapshotRef.current = initial;
-        setSnapshot(initial);
+        reconcile(initial);
         setText(initial.paragraphs.map(p => p.text).join('\n\n'));
         setStorageStatus('saved');
-        scheduler = new Scheduler(opened, service,
+        const cloud = config ? new CloudProcessingService(opened, createProcessingAdapter(config),
+          () => settingsRef.current.values.cloud_enabled,
+          () => settingsRef.current.values.cloud_model, update, Date.now,
+          () => document.visibilityState === 'visible') : null;
+        cloudServiceRef.current = cloud;
+        const pipeline = modeRouter(service, cloud, () => opened!.cloudModeConsent(),
+          () => settingsRef.current.values.cloud_enabled, () => document.visibilityState === 'visible',
+          mode => renderedModeRef.current === mode);
+        scheduler = new Scheduler(opened, pipeline,
           () => settingsRef.current.values.prompt_set === 'v1' ? 'extract.v1' : 'extract.v2', update,
           Date.now, () => { if (mounted.current) setStorageStatus('error'); });
         schedulerRef.current = scheduler;
@@ -105,13 +135,32 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
       }
     })();
     return () => { mounted.current = false; scheduler?.stop(); schedulerRef.current = null;
-      storeRef.current = null; opened?.close(); };
+      storeRef.current = null; cloudServiceRef.current = null; opened?.close(); };
   }, [service]);
-  const refreshData = async () => {
-    const store = storeRef.current;
-    if (!store) throw new Error('Local storage unavailable.');
-    const next = await store.snapshot();
-    if (mounted.current) { snapshotRef.current = next; setSnapshot(next); }
+  useEffect(() => {
+    let channel: BroadcastChannel | null = null;
+    try {
+      channel = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel('thoughtpartner-cloud-mode');
+      channelRef.current = channel;
+      if (channel) channel.onmessage = () => {
+        if (storeRef.current) void refreshData().catch(() => setStorageStatus('error'));
+      };
+    } catch { channelRef.current = null; }
+    const sync = () => {
+      if (storeRef.current) void refreshData().then(() => {
+        if (document.visibilityState === 'visible') void schedulerRef.current?.tick();
+      }).catch(() => setStorageStatus('error'));
+    };
+    window.addEventListener('focus', sync);
+    document.addEventListener('visibilitychange', sync);
+    return () => {
+      window.removeEventListener('focus', sync);
+      document.removeEventListener('visibilitychange', sync);
+      channel?.close(); channelRef.current = null;
+    };
+  }, []);
+  const announceMode = () => {
+    try { channelRef.current?.postMessage('mode-changed'); } catch { /* Focus resyncs. */ }
   };
   const save = (value: string) => {
     if (clearing.current) return;
@@ -147,7 +196,9 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
       const store = storeRef.current;
       if (!store) throw new Error('Local storage unavailable.');
       await store.clearAll(localStorage);
-      cloudConsentRef.current = false; setCloudConsent(false); setResearch({}); setResearchMetrics([]);
+      cloudConsentRef.current = false; setCloudConsent(false);
+      announceMode();
+      setResearch({}); setResearchMetrics([]);
       setText('');
       await refreshData();
       setStorageStatus('saved');
@@ -158,6 +209,31 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
     } finally {
       clearing.current = false;
     }
+  };
+  const enableCloudMode = async () => {
+    const store = storeRef.current;
+    if (!store || !config || !settingsRef.current.values.cloud_enabled) {
+      throw new Error('Cloud mode is unavailable.');
+    }
+    if (!window.confirm("In cloud mode, the parts of your plan that ThoughtPartner works on are sent to " +
+      "Google's Gemini API (through Firebase AI Logic): each paragraph you write, the earlier wording of a " +
+      'statement when it checks what changed, and the statements and concerns it derives from them to write ' +
+      'questions. Your profile and your never-send list are not sent.')) return;
+    schedulerRef.current?.modeChanged();
+    await store.setCloudModeConsent(true);
+    announceMode();
+    await refreshData();
+    void schedulerRef.current?.tick();
+  };
+  const disableCloudMode = async () => {
+    const store = storeRef.current;
+    if (!store) throw new Error('Local storage unavailable.');
+    schedulerRef.current?.modeChanged();
+    await store.setCloudModeConsent(false);
+    announceMode();
+    await store.finalizeReady();
+    await refreshData();
+    void schedulerRef.current?.tick();
   };
   const researchQuestion = async (id: string) => {
     const store = storeRef.current;
@@ -210,11 +286,15 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
           <button key={item} aria-current={page === item ? 'page' : undefined} onClick={() => setPage(item)}>
             {item}
           </button>))}</nav></header>
-      <Notices configured={config !== null} state={service.state} />
+      <Notices configured={config !== null} state={service.state} cloudMode={cloudMode}
+        cloudEnabled={settings.values.cloud_enabled} chooseCloud={() => {
+          void enableCloudMode().catch(() => setStorageNotice('Could not enable cloud mode.'));
+        }} />
       <StorageNotice notice={storageNotice} />
       <main>{page === 'Notebook' ? <NotebookPanel text={text} save={save} storageStatus={storageStatus}
-        snapshot={snapshot} configured={config !== null} ready={service.state.kind === 'ready'} research={research}
-        researchAgain={researchQuestion}
+        snapshot={snapshot} configured={config !== null}
+        ready={cloudMode ? settings.values.cloud_enabled : service.state.kind === 'ready'} cloudMode={cloudMode}
+        research={research} researchAgain={researchQuestion}
         feedback={(cardId, value) => {
           void changeProfile(async store => { await store.setFeedback(cardId, value); })
             .catch(() => setStorageStatus('error'));
@@ -225,6 +305,7 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
           replace={(records, terms) => changeProfile(store => store.replaceProfile(records, terms))}
           neverSend={snapshot.neverSend ?? []}
           saveNeverSend={terms => changeProfile(store => store.putNeverSend(terms))} clearAll={clearAll}
+          cloudMode={cloudMode} revokeCloudMode={disableCloudMode}
           cloudConsent={cloudConsent} revokeCloudConsent={async () => {
             const store = storeRef.current;
             if (!store) throw new Error('Local storage unavailable.');
@@ -256,7 +337,9 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
               return storeRef.current.funnel();
             }} />
         </Suspense>}</main>
-      <StatusBar service={service} configured={config !== null} foreground={foreground} settings={settings} />
+      <StatusBar service={service} configured={config !== null} foreground={foreground} settings={settings}
+        cloudMode={cloudMode} cloudMessage={!settings.values.cloud_enabled && cloudMode
+          ? 'Cloud processing is disabled; queued cloud jobs are paused.' : cloudServiceRef.current?.message ?? ''} />
     </div>
   );
 }

@@ -47,6 +47,7 @@ export interface Job<T> {
   instructions?: PromptContext;
   signal?: AbortSignal;
   onDispatch?: () => void;
+  requiredMode?: 'on_device' | 'in_cloud';
   validate?: (value: unknown) => value is T;
 }
 export interface Model {

@@ -20,9 +20,9 @@ async function checked<T>(runner: LocalRunner, prompt: string,
   definition: typeof anglesV1 | typeof questionV1 | typeof whynoteV1 |
     typeof anglesV2 | typeof questionV2 | typeof whynoteV2 | typeof anglesV21 | typeof questionV21,
   signal?: AbortSignal,
-  onDispatch?: () => void): Promise<LocalOutput<T>> {
+  onDispatch?: () => void, expectedSource: 'on_device' | 'in_cloud' = 'on_device'): Promise<LocalOutput<T>> {
   const result = await runner<T>({ prompt, schema: definition.schema, instructions: definition, signal, onDispatch });
-  if (result.source !== 'on_device') throw new LocalError('privacy-fault', 'Local inference source not verified.',
+  if (result.source !== expectedSource) throw new LocalError('privacy-fault', 'Inference source not verified.',
     { source: result.source === 'in_cloud' ? 'in_cloud' : 'not reported' });
   return { data: result.data, latencyMs: result.latencyMs, source: result.source };
 }
@@ -35,7 +35,8 @@ export function eligibleItems(paragraph: string, items: readonly TriageItem[],
     normalizeQuote(item.quote).length > 0 && body.includes(normalizeQuote(item.quote)));
 }
 export async function runAngles(runner: LocalRunner, paragraph: string, items: readonly TriageItem[],
-  signal?: AbortSignal, onDispatch?: () => void, version: TriageVersion = TRIAGE_PROMPT_SET):
+  signal?: AbortSignal, onDispatch?: () => void, version: TriageVersion = TRIAGE_PROMPT_SET,
+  expectedSource: 'on_device' | 'in_cloud' = 'on_device'):
   Promise<{ items: TriageItem[]; concerns: Concern[]; latencyMs: number; source: string }> {
   const eligible = eligibleItems(paragraph, items, version);
   if (!eligible.length) return { items: [], concerns: [], latencyMs: 0, source: 'code' };
@@ -45,19 +46,21 @@ export async function runAngles(runner: LocalRunner, paragraph: string, items: r
     ? '{numbered list: "{n}. ({kind}) {text}" for each item of kind assumption, decision, constraint or open-question}'
     : '{numbered list: "{n}. ({kind}) {text}" for each item of kind assumption, decision or constraint}';
   const prompt = bindTemplate(definition.inputTemplate, { '{paragraph}': paragraph, [key]: numbered });
-  const result = await checked<{ concerns: Concern[] }>(runner, prompt, definition, signal, onDispatch);
+  const result = await checked<{ concerns: Concern[] }>(runner, prompt, definition, signal, onDispatch,
+    expectedSource);
   return { items: eligible, concerns: result.data.concerns, latencyMs: result.latencyMs, source: result.source };
 }
 export async function runQuestion(runner: LocalRunner, item: Pick<TriageItem, 'text' | 'quote'>,
   angle: DisplayAngle, concern: string, neverSend: readonly string[], privateTokens: readonly string[] = [],
-  signal?: AbortSignal, onDispatch?: () => void, version: TriageVersion = TRIAGE_PROMPT_SET):
+  signal?: AbortSignal, onDispatch?: () => void, version: TriageVersion = TRIAGE_PROMPT_SET,
+  expectedSource: 'on_device' | 'in_cloud' = 'on_device'):
   Promise<{ question: string; keptOut: string[]; leak: LeakResult;
     latencyMs: number; source: string }> {
   const definition = version === 'v2.1' ? questionV21 : version === 'v2' ? questionV2 : questionV1;
   const prompt = bindTemplate(definition.inputTemplate, { '{item.text}': item.text, '{item.quote}': item.quote,
     '{angle}': angle, '{concern}': concern });
   const result = await checked<{ question: string; keptOut: string[] }>(runner, prompt, definition, signal,
-    onDispatch);
+    onDispatch, expectedSource);
   const leak = filterQuestion(result.data.question, neverSend, privateTokens);
   const keptOut = result.data.keptOut.filter(value => filterQuestion(value, neverSend, privateTokens).passed);
   return { question: result.data.question, keptOut, leak, latencyMs: result.latencyMs, source: result.source };

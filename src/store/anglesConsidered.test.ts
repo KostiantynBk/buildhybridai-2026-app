@@ -48,7 +48,7 @@ it('rolls back considered pairs when angles adoption fails', async () => {
   try {
     await expect(store.completeAngles(angles.job, input, [], 'test-session', 4000)).rejects.toBeDefined();
     spy.mockRestore();
-    const raw = await openDB(name, 5);
+    const raw = await openDB(name, 6);
     try { expect(await raw.count('anglesConsidered')).toBe(0); } finally { raw.close(); }
     expect((await store.snapshot()).jobs.find(job => job.key === angles.job.key)?.status).toBe('running');
     expect(await store.completeAngles(angles.job, input, [], 'test-session', 4000)).toBe(true);
@@ -83,13 +83,13 @@ it('skips angles entirely on an edit with no newly eligible lineage versions', a
     }, { timeout: 5000 });
     for (let i = 0; i < 2; i++) await scheduler.tick();
     expect(run.mock.calls.filter(call => call[0].instructions === anglesV2)).toHaveLength(1);
-    const raw = await openDB(name, 5);
+    const raw = await openDB(name, 6);
     try { expect(await raw.count('anglesConsidered')).toBe(2); } finally { raw.close(); }
     const snapshot = await store.snapshot();
     expect(snapshot.jobs.some(job => job.step === 'angles' &&
       job.paragraphVersion === snapshot.paragraphs[0].version)).toBe(false);
     await store.clearAll({ getItem: () => null, removeItem: () => {} });
-    const cleared = await openDB(name, 5);
+    const cleared = await openDB(name, 6);
     try { expect(await cleared.count('anglesConsidered')).toBe(0); } finally { cleared.close(); }
   } finally { scheduler.stop(); store.close(); }
 });

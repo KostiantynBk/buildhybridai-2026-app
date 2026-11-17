@@ -27,7 +27,7 @@ it.each(['v1', 'v2'] as const)('keeps a previously queued %s job pinned includin
   await store.complete(extract.job, [{ kind: 'assumption', text: 'Fifty visitors', quote, topics: ['hosting'] }], 4000);
   await store.finalizeReady();
   const p = (await store.snapshot()).paragraphs[0];
-  const db = await openDB(name, 5);
+  const db = await openDB(name, 6);
   try {
     await db.put('jobs', { key: `${p.id}@${p.version}#angles`, paragraphId: p.id, paragraphVersion: p.version,
       step: 'angles', promptVersion: `angles.${version}`, status: 'pending', attempts: 0,

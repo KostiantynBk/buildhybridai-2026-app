@@ -1,4 +1,5 @@
 import { LocalError, type Job } from '../ai/localModel';
+import { CloudProcessingError } from '../ai/cloudProcessing';
 import { safeErrorName } from '../ai/errorMetadata';
 import { extract, type ExtractVersion } from '../pipeline/extract';
 import { compare } from '../pipeline/compare';
@@ -11,6 +12,7 @@ import { matchParagraphs, type Paragraph } from './matcher';
 export interface LocalService {
   state: { kind: string };
   subscribe(listener: () => void): () => void;
+  isReadyFor?(mode: 'on_device' | 'in_cloud'): Promise<boolean>;
   runLocal<T>(job: Job<T>): Promise<{ data: T; latencyMs: number; source: string; raw: string }>;
 }
 export class Scheduler {
@@ -42,6 +44,7 @@ export class Scheduler {
     if (this.timer) clearInterval(this.timer);
     this.unsubscribe?.();
   }
+  modeChanged(): void { this.generation++; this.blocked = false; this.active?.abort(); }
   edited(nextText?: string, previous?: Paragraph[]): void {
     this.paused = true;
     let unchangedCompare = false;
@@ -69,14 +72,15 @@ export class Scheduler {
     this.busy = true;
     const generation = this.generation;
     try {
+      const mode = await this.store.cloudModeConsent() ? 'in_cloud' : 'on_device';
       await this.store.finalizeReady();
       await this.store.reconcileOutbox();
       await this.store.reconcileWhyNotes();
-      await this.store.enqueueSettled(this.now(), this.version());
-      await this.store.enqueueAngles(this.now());
-      if (this.stopped || this.paused || this.blocked || this.service.state.kind !== 'ready' ||
-          generation !== this.generation) return;
-      const claimed = await this.store.claim(this.now());
+      await this.store.enqueueSettled(this.now(), mode === 'in_cloud' ? 'extract.v2' : this.version(), mode);
+      await this.store.enqueueAngles(this.now(), mode);
+      const ready = this.service.isReadyFor ? await this.service.isReadyFor(mode) : this.service.state.kind === 'ready';
+      if (this.stopped || this.paused || this.blocked || !ready || generation !== this.generation) return;
+      const claimed = await this.store.claim(this.now(), mode);
       if (!claimed) return;
       const controller = new AbortController();
       let dispatched = false;
@@ -84,18 +88,19 @@ export class Scheduler {
       this.activeJob = claimed;
       if (this.stopped || generation !== this.generation) controller.abort();
       try {
+        const run = <T,>(job: Job<T>) => this.service.runLocal({ ...job, requiredMode: mode });
         if (controller.signal.aborted) throw new LocalError('cancelled', 'Cancelled before dispatch.');
         if (claimed.job.step === 'extract') {
           if (claimed.job.promptVersion !== 'extract.v1' && claimed.job.promptVersion !== 'extract.v2') {
             throw new Error('Invalid extract prompt version.');
           }
-          const result = await extract(job => this.service.runLocal(job), 'My plan', claimed.paragraph.text,
+          const result = await extract(run, 'My plan', claimed.paragraph.text,
             controller.signal, claimed.job.promptVersion);
           if (this.stopped || controller.signal.aborted || generation !== this.generation) {
             await this.store.fail(claimed.job, 'AbortError', true, this.now());
           } else {
             await this.store.complete(claimed.job, result.items, this.now(),
-              result.source === 'on_device' ? 'on_device' : undefined);
+              result.source === mode ? mode : undefined);
           }
         } else if (claimed.job.step === 'compare') {
           const prior = await this.store.comparisonInput(claimed.job);
@@ -103,8 +108,8 @@ export class Scheduler {
           if (controller.signal.aborted || generation !== this.generation) {
             throw new LocalError('cancelled', 'Cancelled before dispatch.');
           }
-          const result = await compare(job => this.service.runLocal(job), prior.item, claimed.paragraph.text,
-            controller.signal, () => { dispatched = true; });
+          const result = await compare(run, prior.item, claimed.paragraph.text,
+            controller.signal, () => { dispatched = true; }, mode);
           if (this.stopped || controller.signal.aborted || generation !== this.generation) {
             await this.store.fail(claimed.job, 'AbortError', true, this.now(), false, dispatched);
           } else {
@@ -113,26 +118,26 @@ export class Scheduler {
         } else if (claimed.job.step === 'angles') {
           const input = await this.store.anglesInput(claimed.job);
           if (!input) { await this.store.supersedeJob(claimed.job); return; }
-          const result = await runAngles(job => this.service.runLocal(job), input.paragraph, input.items,
-            controller.signal, () => { dispatched = true; }, versionFromPrompt(claimed.job.promptVersion));
+          const result = await runAngles(run, input.paragraph, input.items,
+            controller.signal, () => { dispatched = true; }, versionFromPrompt(claimed.job.promptVersion), mode);
           if (this.stopped || controller.signal.aborted || generation !== this.generation) {
             await this.store.fail(claimed.job, 'AbortError', true, this.now(), false, dispatched);
           } else {
             await this.store.completeAngles(claimed.job, input, result.concerns, this.sessionId, this.now(),
-              result.source === 'on_device' ? 'on_device' : undefined);
+              result.source === mode ? mode : undefined);
           }
         } else if (claimed.job.step === 'question') {
           const input = await this.store.questionInput(claimed.job);
           if (!input) { await this.store.supersedeJob(claimed.job); return; }
           const card = input.card;
-          const result = await runQuestion(job => this.service.runLocal(job),
+          const result = await runQuestion(run,
             { text: card.itemText, quote: card.itemQuote }, card.sourceAngle, card.concern, input.neverSend, [],
-            controller.signal, () => { dispatched = true; }, versionFromPrompt(claimed.job.promptVersion));
+            controller.signal, () => { dispatched = true; }, versionFromPrompt(claimed.job.promptVersion), mode);
           if (this.stopped || controller.signal.aborted || generation !== this.generation) {
             await this.store.fail(claimed.job, 'AbortError', true, this.now(), false, dispatched);
           } else {
             await this.store.completeQuestion(claimed.job, result.question, result.keptOut, result.leak.passed,
-              this.now(), result.source === 'on_device' ? 'on_device' : undefined);
+              this.now(), result.source === mode ? mode : undefined);
           }
         } else if (claimed.job.step === 'whynote') {
           const input = await this.store.whyInput(claimed.job);
@@ -141,7 +146,7 @@ export class Scheduler {
           const supplied = chooseProfileRecords(card.topics, input.profile,
             card.angle === 'track-record' ? card.lessonId : undefined);
           const fingerprints = await fingerprintRecords(supplied);
-          const result = await runWhyNote(job => this.service.runLocal(job), card.itemQuote, card.angle,
+          const result = await runWhyNote(run, card.itemQuote, card.angle,
             card.concern, input.question, card.topics, supplied, controller.signal, card.lessonId,
             () => { dispatched = true; }, card.itemKind ?? 'assumption',
             versionFromPrompt(claimed.job.promptVersion));
@@ -156,11 +161,13 @@ export class Scheduler {
         await this.store.finalizeReady();
         await this.store.reconcileOutbox();
       } catch (error) {
-        const cancelled = controller.signal.aborted || (error instanceof LocalError && error.code === 'cancelled');
+        const cancelled = controller.signal.aborted || (error instanceof LocalError && error.code === 'cancelled') ||
+          (error instanceof CloudProcessingError && error.deferred);
         const name = error instanceof LocalError && error.diagnostics?.errorName
           ? safeErrorName({ name: error.diagnostics.errorName }) : safeErrorName(error);
-        const fatal = error instanceof LocalError &&
-          ['privacy-fault', 'not-configured', 'unsupported'].includes(error.code);
+        const fatal = (error instanceof LocalError &&
+          ['privacy-fault', 'not-configured', 'unsupported'].includes(error.code)) ||
+          (error instanceof CloudProcessingError && !error.deferred);
         if (error instanceof LocalError && error.code === 'privacy-fault') this.blocked = true;
         await this.store.fail(claimed.job, name, cancelled, this.now(), fatal,
           claimed.job.step !== 'extract' && dispatched);
