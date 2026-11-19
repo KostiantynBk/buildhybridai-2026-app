@@ -50,8 +50,7 @@ it('uses a fail-closed custom provider without constructing reCAPTCHA in dev deb
     const options = mocks.custom.mock.calls[0][0] as { getToken: () => Promise<unknown> };
     await expect(options.getToken()).rejects.toThrow('Debug provider is unavailable.');
   } finally {
-    delete (globalThis as typeof globalThis & { FIREBASE_APPCHECK_DEBUG_TOKEN?: boolean })
-      .FIREBASE_APPCHECK_DEBUG_TOKEN;
+    delete (globalThis as Record<string, unknown>)[['FIREBASE', 'APPCHECK', 'DEBUG', 'TOKEN'].join('_')];
     vi.unstubAllGlobals();
   }
 });

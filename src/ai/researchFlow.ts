@@ -36,6 +36,21 @@ export function researchError(error: unknown): { network: boolean; message: stri
   return { network: code === 'network', code, message: researchFailureMessage(code) };
 }
 
+// An idea uses the same attempt/budget machinery, with its own basis-aware pre-send boundary.
+export async function researchIdea(store: LocalStore, adapter: CloudAdapter, ideaId: string, model: string,
+  options: { budget: number; enabled?: boolean; canSend?: () => boolean; planUnchanged?: () => boolean;
+    onAttempt?: () => void; onResponse?: (measurement: { latencyMs: number; sourceCount: number;
+      suggestionsPresent: boolean; inCloud: boolean; grounded: boolean }) => void }): Promise<ResearchView> {
+  const snapshot = await store.snapshot();
+  const idea = snapshot.ideas?.find(value => value.id === ideaId);
+  if (!idea?.outboxId) throw new Error('Approve this description before researching it.');
+  const entryId = idea.outboxId;
+  const guarded: Store = { snapshot: () => store.snapshot(), cloudConsent: () => store.cloudConsent(),
+    preSendCheck: () => store.preSendIdeaCheck(ideaId), reserveResearch: (...args) => store.reserveResearch(...args),
+    finishResearch: (...args) => store.finishResearch(...args), cancelResearch: key => store.cancelResearch(key) };
+  return researchApproved(guarded, adapter, entryId, model, options);
+}
+
 // Only the stored approved question crosses the adapter boundary. Reservations serialize across tabs.
 export async function researchApproved(
   store: Store, adapter: CloudAdapter, entryId: string, model: string,

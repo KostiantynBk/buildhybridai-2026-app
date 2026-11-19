@@ -9,6 +9,7 @@ import { extractV2 } from '../pipeline/prompts/extract.v2';
 import { compareV1 } from '../pipeline/prompts/compare.v1';
 import { anglesV21 } from '../pipeline/prompts/angles.v2.1';
 import { questionV21 } from '../pipeline/prompts/question.v2.1';
+import { describeV1 } from '../pipeline/prompts/describe.v1';
 
 export class CloudProcessingError extends Error {
   constructor(message: string, public readonly deferred = false) { super(message); this.name = 'CloudProcessingError'; }
@@ -22,8 +23,9 @@ export function createProcessingAdapter(config: AppConfig): CloudProcessingAdapt
       inCloudParams: { model, systemInstruction: instructions.system,
         generationConfig: { responseMimeType: 'application/json',
           responseJsonSchema: job.schema as Record<string, unknown> } } });
-    const examples = [{ input: instructions.exampleInput, output: instructions.exampleOutput },
-      ...(instructions.additionalExamples ?? [])];
+    const examples = [...(instructions.exampleInput !== undefined && instructions.exampleOutput !== undefined
+      ? [{ input: instructions.exampleInput, output: instructions.exampleOutput }] : []),
+    ...(instructions.additionalExamples ?? [])];
     const contents = examples.flatMap(example => [
       { role: 'user' as const, parts: [{ type: 'text' as const, text: example.input }] },
       { role: 'model' as const, parts: [{ type: 'text' as const, text: example.output }] },
@@ -49,7 +51,7 @@ export class CloudProcessingService {
   };
   private notify(message: string) { this.message = message; this.listeners.forEach(listener => listener()); }
   async runLocal<T>(job: Job<T>): Promise<{ data: T; latencyMs: number; source: string; raw: string }> {
-    const allowed = [extractV2, compareV1, anglesV21, questionV21].some(prompt =>
+    const allowed = [extractV2, compareV1, anglesV21, questionV21, describeV1].some(prompt =>
       job.instructions === prompt && job.schema === prompt.schema);
     if (!allowed) throw new CloudProcessingError('This legacy or unrecognized prompt cannot use cloud mode.');
     for (let attempt = 0; attempt < 2; attempt++) {

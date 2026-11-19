@@ -37,8 +37,8 @@ export class LocalError extends Error {
 }
 export interface PromptContext {
   system: string;
-  exampleInput: string;
-  exampleOutput: string;
+  exampleInput?: string;
+  exampleOutput?: string;
   additionalExamples?: readonly { input: string; output: string }[];
 }
 export interface Job<T> {

@@ -38,15 +38,17 @@ export function OutboxPage({ entries, decide, remove, snapshot, saving = false, 
     {entries.length === 0 && <p>No questions are waiting.</p>}
     {error && <p role="alert">{error}</p>}
     {[...entries].sort((a, b) => b.createdAt - a.createdAt).map(entry => <article className="item-card" key={entry.id}>
+      {entry.kind === 'idea' && <p>Idea research</p>}
       <p>{entry.question}</p>
       <p>{statusText(entry, snapshot, researchErrors?.[entry.id])}</p>
       {entry.keptOut.length > 0 && <p>Left out of the question: {entry.keptOut.join(', ')}</p>}
       {entry.questionOrigin === 'manual' ? <p>Question written by you.</p> : entry.questionPromptVersion &&
         <p>Question prompt: {entry.questionPromptVersion}
           {entry.triageVersion ? ` · Triage: ${entry.triageVersion}` : ''}</p>}
-      {entry.status === 'pending' && (() => {
-        const eligibility = saving ? 'checking' : snapshot ? lineageEligibility(entry.itemLineageId, entry.itemVersion,
-          snapshot.paragraphs, snapshot.lineages ?? [], snapshot.jobs) : 'checking';
+      {entry.kind !== 'idea' && entry.status === 'pending' && entry.itemLineageId && entry.itemVersion !== undefined &&
+        (() => {
+        const eligibility = saving ? 'checking' : snapshot ? lineageEligibility(entry.itemLineageId!,
+          entry.itemVersion!, snapshot.paragraphs, snapshot.lineages ?? [], snapshot.jobs) : 'checking';
         return <div>
           {eligibility === 'checking' && <p>Checking your edit.</p>}
           <button disabled={eligibility !== 'eligible'} onClick={() => respond(entry.id, 'approved')}>

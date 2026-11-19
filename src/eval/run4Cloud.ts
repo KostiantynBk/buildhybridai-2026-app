@@ -5,6 +5,7 @@ import { HARD_DAILY_CLOUD_BUDGET } from '../settings/defaults';
 import type { LocalStore } from '../store';
 
 export type Run4Question = { id: string; profile: 'A' | 'B'; question: string };
+export type Run4Idea = { id: string; description: string };
 type Store = Pick<LocalStore, 'snapshot' | 'cloudConsent' | 'reserveResearch' | 'finishResearch' | 'cancelResearch'>;
 type Measurement = { latencyMs: number; sourceCount: number; suggestionsPresent: boolean;
   inCloud: boolean; grounded: boolean };
@@ -18,6 +19,22 @@ export function validateRun4Questions(value: unknown): Run4Question[] {
     ids.add(item.id);
     return { id: item.id, profile: item.profile, question: item.question };
   });
+}
+export function validateRun4Ideas(value: unknown): Run4Idea[] {
+  if (!Array.isArray(value)) throw new Error('Run 4 idea file must be an array.');
+  const ids = new Set<string>();
+  return value.map(item => {
+    if (!item || typeof item !== 'object' || Object.keys(item).sort().join(',') !== 'description,id' ||
+        typeof item.id !== 'string' || !item.id.trim() || ids.has(item.id) ||
+        typeof item.description !== 'string' || !item.description.trim()) throw new Error('Invalid Run 4 idea.');
+    ids.add(item.id);
+    return { id: item.id, description: item.description };
+  });
+}
+export async function sendRun4Idea(store: Store, adapter: CloudAdapter, item: Run4Idea, model: string,
+  options: { enabled: boolean; budget: number; canSend?: () => boolean; now?: () => number;
+    onAttempt?: () => void; onResponse?: (value: Measurement) => void }): Promise<ResearchView> {
+  return sendRun4Question(store, adapter, { id: item.id, profile: 'A', question: item.description }, model, options);
 }
 export async function sendRun4Question(store: Store, adapter: CloudAdapter, item: Run4Question, model: string,
   options: { enabled: boolean; budget: number; canSend?: () => boolean; now?: () => number;

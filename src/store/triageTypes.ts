@@ -19,7 +19,9 @@ export interface ThoughtCard {
   outboxId?: string; feedback?: Feedback; createdAt: number;
 }
 export interface OutboxEntry {
-  id: string; question: string; keptOut: string[]; cardId: string; itemLineageId: string; itemVersion: number;
+  id: string; question: string; keptOut: string[]; cardId?: string; itemLineageId?: string; itemVersion?: number;
+  kind?: 'question' | 'idea'; ideaId?: string; basis?: Array<{ lineageId: string; version: number }>;
+  describePromptVersion?: string; researchPromptVersion?: string;
   status: 'pending' | 'approved' | 'rejected' | 'withdrawn'; createdAt: number; decidedAt?: number;
   withdrawReason?: 'listed-term' | 'stale' | 'private-detail'; edited?: boolean;
   triageVersion?: TriageVersion; questionPromptVersion?: string; questionOrigin?: 'manual' | 'model';

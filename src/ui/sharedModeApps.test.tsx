@@ -61,6 +61,7 @@ vi.mock('../settings/remoteSettings', async () => {
 import App from './App';
 import { DraftControls } from './DraftControls';
 import { OutboxPage } from './OutboxPage';
+import { IdeaPanel } from './IdeaPanel';
 
 type Instance = ReturnType<typeof h.newInstance>;
 function render(instance: Instance): ReactElement {
@@ -131,7 +132,8 @@ it('reconciles two mounted App instances on opt-in, opt-out and a missed broadca
       expect(component(b, 'StatusBar').cloudMode).toBe(true);
     });
     await vi.waitFor(() => expect(adapter).toHaveBeenCalled());
-    expect((await seed.snapshot()).jobs[0]).toMatchObject({ runMode: 'in_cloud', measuredSource: 'in_cloud' });
+    await vi.waitFor(async () => expect((await seed.snapshot()).jobs[0])
+      .toMatchObject({ runMode: 'in_cloud', measuredSource: 'in_cloud' }));
     component(a, 'NotebookPanel').save(
       'This initial paragraph has enough words to create a waiting extraction for the cloud test.');
     await vi.waitFor(() => expect(component(a, 'NotebookPanel').storageStatus).toBe('saved'));
@@ -254,6 +256,86 @@ it('shows the persisted withdrawal after a never-send edit immediately after res
   } finally {
     spy.mockRestore();
     for (const cleanup of app.cleanups) cleanup();
+    seed.close();
+  }
+}, 15000);
+
+it('shows a completed receipt on a fresh App even if the idea-phase write was missed', async () => {
+  vi.stubGlobal('BroadcastChannel', Channel);
+  vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('localStorage', { getItem: () => null, removeItem: () => {} });
+  const seed = await openLocalStore();
+  await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+  const paragraph = 'The hosting plan supports visitors while a payment service handles purchases for people.';
+  await seed.saveNotebook(paragraph, 0); await seed.enqueueSettled(4000, 'extract.v2');
+  const extract = await seed.claim(4000);
+  await seed.complete(extract!.job, [
+    { kind: 'assumption', text: 'Hosting supports visitors', quote: 'The hosting plan supports visitors', topics: [] },
+    { kind: 'decision', text: 'Payment handles purchases', quote: 'a payment service handles purchases', topics: [] },
+    { kind: 'constraint', text: 'Purchases are for people', quote: 'purchases for people', topics: [] },
+  ], 4000); await seed.finalizeReady();
+  const idea = (await seed.startIdea(5000)).idea!;
+  await seed.finishIdeaDraft((await seed.claim(5000))!.job,
+    'A notebook helps builders understand the decisions behind their product plans.', []);
+  const approval = await seed.approveIdea(idea.id, 'A notebook helps builders understand their product plans.');
+  const receipt = await seed.reserveResearch(approval.entryId!, 20);
+  await seed.finishResearch(receipt!, 'completed');
+  expect((await seed.snapshot()).ideas![0].status).toBe('approved');
+  const app = h.newInstance();
+  try {
+    mount(app);
+    await vi.waitFor(() => expect(component(app, 'IdeaPanel').snapshot.researchReceipts)
+      .toMatchObject([{ status: 'completed' }]));
+    const panel = component(app, 'IdeaPanel');
+    h.enter(h.newInstance());
+    const html = renderToStaticMarkup(IdeaPanel(panel as Parameters<typeof IdeaPanel>[0]));
+    expect(html).toContain('Research completed');
+    expect(html).not.toContain('Approved, not sent');
+    expect(html).not.toContain('Try again');
+    await vi.waitFor(async () => expect((await seed.snapshot()).ideas![0].status).toBe('sent'));
+    expect(researchAdapter).not.toHaveBeenCalled();
+  } finally {
+    for (const cleanup of app.cleanups) cleanup();
+    seed.close();
+  }
+}, 15000);
+
+it('approves and researches one idea from two App trees without sending the notebook', async () => {
+  vi.stubGlobal('BroadcastChannel', Channel);
+  vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('localStorage', { getItem: () => null, removeItem: () => {} });
+  const seed = await openLocalStore();
+  await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+  const paragraph = 'The hosting plan supports visitors while a payment service handles purchases for people.';
+  await seed.saveNotebook(paragraph, 0); await seed.enqueueSettled(4000, 'extract.v2');
+  const extract = await seed.claim(4000);
+  await seed.complete(extract!.job, [
+    { kind: 'assumption', text: 'Hosting supports visitors', quote: 'The hosting plan supports visitors', topics: [] },
+    { kind: 'decision', text: 'A payment service handles purchases', quote: 'a payment service handles purchases',
+      topics: [] },
+    { kind: 'constraint', text: 'Purchases are for people', quote: 'purchases for people', topics: [] },
+  ], 4000); await seed.finalizeReady();
+  const idea = (await seed.startIdea(5000)).idea!;
+  const job = await seed.claim(5000);
+  const description = 'A notebook helps builders understand the decisions behind their product plans.';
+  await seed.finishIdeaDraft(job!.job, description, []);
+  const a = h.newInstance(); const b = h.newInstance();
+  try {
+    mount(a); mount(b);
+    await vi.waitFor(() => {
+      expect(component(a, 'IdeaPanel').snapshot.ideas).toHaveLength(1);
+      expect(component(b, 'IdeaPanel').snapshot.ideas).toHaveLength(1);
+    });
+    const results = await Promise.allSettled([component(a, 'IdeaPanel').send(idea.id, description),
+      component(b, 'IdeaPanel').send(idea.id, description)]);
+    expect(results.filter(value => value.status === 'fulfilled')).toHaveLength(1);
+    expect(researchAdapter).toHaveBeenCalledOnce();
+    expect(researchAdapter.mock.calls[0][0]).toBe(description);
+    expect((await seed.snapshot()).outbox).toMatchObject([{ kind: 'idea', question: description }]);
+  } finally {
+    for (const cleanup of [...a.cleanups, ...b.cleanups]) cleanup();
     seed.close();
   }
 }, 15000);

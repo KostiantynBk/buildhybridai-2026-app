@@ -10,8 +10,9 @@ import { OutboxPage } from './OutboxPage';
 import { Notices } from './Notices';
 import { StatusBar } from './StatusBar';
 import { STORAGE_BLOCKED_NOTICE, STORAGE_OUTDATED_NOTICE } from './storageNotices';
-import { createCloudAdapter } from '../ai/cloudResearch';
-import { researchApproved, type ResearchView } from '../ai/researchFlow';
+import { createCloudAdapter, IDEA_RESEARCH } from '../ai/cloudResearch';
+import { researchApproved, researchIdea, type ResearchView } from '../ai/researchFlow';
+import { IdeaPanel } from './IdeaPanel';
 import { safeResearchErrorMessage } from '../ai/researchFailure';
 import type { ResearchMetric } from '../eval/Run4Panel';
 import { run4Provenance } from '../eval/run4Provenance';
@@ -34,6 +35,7 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
   const [storageNotice, setStorageNotice] = useState('');
   const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
   const [research, setResearch] = useState<Record<string, ResearchView>>({});
+  const [ideaResearch, setIdeaResearch] = useState<Record<string, ResearchView>>({});
   const [researchErrors, setResearchErrors] = useState<Record<string, string>>({});
   const [cloudConsent, setCloudConsent] = useState(false);
   const [cloudMode, setCloudMode] = useState(false);
@@ -202,7 +204,7 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
       await store.clearAll(localStorage);
       cloudConsentRef.current = false; setCloudConsent(false);
       announceMode();
-      setResearch({}); setResearchErrors({}); setResearchMetrics([]);
+      setResearch({}); setIdeaResearch({}); setResearchErrors({}); setResearchMetrics([]);
       setText('');
       await refreshData();
       storageStatusRef.current = 'saved'; setStorageStatus('saved');
@@ -221,8 +223,8 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
     }
     if (!window.confirm("In cloud mode, the parts of your plan that ThoughtPartner works on are sent to " +
       "Google's Gemini API (through Firebase AI Logic): each paragraph you write, the earlier wording of a " +
-      'statement when it checks what changed, and the statements and concerns it derives from them to write ' +
-      'questions. Your profile and your never-send list are not sent.')) return;
+      'statement when it checks what changed, and the statements and concerns it derives from them, to write ' +
+      'questions and a short description of your idea. Your profile and your never-send list are not sent.')) return;
     schedulerRef.current?.modeChanged();
     await store.setCloudModeConsent(true);
     announceMode();
@@ -294,6 +296,52 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
       throw new Error(message);
     } finally { inFlight.current.delete(id); }
   };
+  const researchIdeaAction = async (ideaId: string) => {
+    const key = `idea:${ideaId}`;
+    if (inFlight.current.has(key)) throw new Error('Research is already in progress for this idea.');
+    inFlight.current.add(key);
+    const store = storeRef.current;
+    let attempted = false;
+    try {
+      if (!config || !store) throw new Error('Firebase or local storage is unavailable.');
+      if (!settingsRef.current.values.cloud_enabled) throw new Error('Cloud research is currently disabled.');
+      const idea = (await store.snapshot()).ideas?.find(value => value.id === ideaId);
+      if (!idea?.finalText) throw new Error('Approve this description before researching it.');
+      if (!await store.cloudConsent()) {
+        if (!window.confirm("This description, and nothing else from your notebook or profile, goes to " +
+            `Google's Gemini API with Google Search:\n\n${idea.finalText}\n\nContinue?`)) {
+          throw new Error('Research consent was not granted.');
+        }
+        await store.setCloudConsent(true);
+      }
+      cloudConsentRef.current = true; setCloudConsent(true);
+      const initialRevision = revision.current;
+      const settings = settingsRef.current;
+      const view = await researchIdea(store, createCloudAdapter(config, IDEA_RESEARCH), ideaId,
+        settings.values.cloud_model, { enabled: settings.values.cloud_enabled,
+          budget: settings.values.daily_cloud_budget,
+          canSend: () => document.visibilityState === 'visible' && storageStatusRef.current === 'saved' &&
+            revision.current === initialRevision && cloudConsentRef.current && storeRef.current === store &&
+            settingsRef.current.values.cloud_enabled &&
+            settingsRef.current.values.daily_cloud_budget >= settings.values.daily_cloud_budget,
+          planUnchanged: () => storageStatusRef.current === 'saved' && revision.current === initialRevision,
+          onAttempt: () => {
+            attempted = true;
+            void refreshData().catch(() => { storageStatusRef.current = 'error'; setStorageStatus('error'); });
+          } });
+      setIdeaResearch(current => ({ ...current, [ideaId]: view }));
+      try { await store.finishIdeaResearch(ideaId, 'sent'); await refreshData(); } catch {
+        storageStatusRef.current = 'error'; setStorageStatus('error');
+      }
+    } catch (error) {
+      if (attempted && store) await store.finishIdeaResearch(ideaId, 'failed').catch(() => undefined);
+      try { if (store && storeRef.current === store) await refreshData(); } catch { /* Keep original error. */ }
+      throw new Error(`${attempted ? 'Sent, but the search failed' : 'Approved, not sent'}: ` +
+        safeResearchErrorMessage(error));
+    } finally { inFlight.current.delete(key); }
+  };
+  const latestIdea = [...(snapshot.ideas ?? [])].sort((a, b) => b.createdAt - a.createdAt ||
+    b.id.localeCompare(a.id))[0];
   return (
     <div className="app">
       <header className="header"><div><div className="eyebrow">A quieter way to think</div><h1>ThoughtPartner</h1></div>
@@ -306,7 +354,27 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
           void enableCloudMode().catch(() => setStorageNotice('Could not enable cloud mode.'));
         }} />
       <StorageNotice notice={storageNotice} />
-      <main>{page === 'Notebook' ? <NotebookPanel text={text} save={save} storageStatus={storageStatus}
+      <main>{page === 'Notebook' ? <><IdeaPanel snapshot={snapshot} idea={latestIdea}
+        view={latestIdea && ideaResearch[latestIdea.id]} busy={storageStatus !== 'saved'} start={async () => {
+          const store = storeRef.current;
+          if (!store) throw new Error('Local storage unavailable.');
+          if (storageStatusRef.current !== 'saved') throw new Error('Checking your latest change…');
+          const result = await store.startIdea();
+          if (result.reason) throw new Error(result.reason);
+          await refreshData(); void schedulerRef.current?.tick();
+        }} send={async (id, text) => {
+          const store = storeRef.current;
+          if (!store) throw new Error('Local storage unavailable.');
+          if (storageStatusRef.current !== 'saved') throw new Error('Checking your latest change…');
+          const result = await store.approveIdea(id, text);
+          if (!result.entryId) throw new Error(result.reason ?? 'Could not approve this description.');
+          await refreshData(); await researchIdeaAction(id);
+        }} retry={researchIdeaAction} decline={async id => {
+          const store = storeRef.current;
+          if (!store || !await store.declineIdea(id)) throw new Error('Could not decline this description.');
+          await refreshData();
+        }} />
+        <NotebookPanel text={text} save={save} storageStatus={storageStatus}
         snapshot={snapshot} configured={config !== null}
         ready={cloudMode ? settings.values.cloud_enabled : service.state.kind === 'ready'} cloudMode={cloudMode}
         research={research} researchErrors={researchErrors} researchAgain={researchQuestion}
@@ -335,7 +403,7 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
         }} feedback={(cardId, value) => {
           void changeProfile(async store => { await store.setFeedback(cardId, value); })
             .catch(() => setStorageStatus('error'));
-        }} /> :
+        }} /></> :
         page === 'Profile' ? <ProfilePanel records={snapshot.profile}
           save={(record: ProfileRecord) => changeProfile(store => store.putProfile(record))}
           remove={id => changeProfile(store => store.deleteProfile(id))}

@@ -7,6 +7,7 @@ import {
 import { getAI, getGenerativeModel, GoogleAIBackend, InferenceMode } from 'firebase/ai';
 import type { AppConfig } from '../config';
 import { languageOptions, LocalError, type Model, type PromptContext } from './localModel';
+import { enableDevelopmentAppCheckDebug } from './debugDev';
 
 type PromptApi = { availability(options: typeof languageOptions): Promise<string> };
 export function browserApi(): PromptApi | undefined {
@@ -26,11 +27,7 @@ export function firebaseAI(config: AppConfig): ReturnType<typeof getAI> {
       },
       'thoughtpartner',
     );
-    if (import.meta.env.DEV && config.dev && config.debug) {
-      (
-        self as typeof self & { FIREBASE_APPCHECK_DEBUG_TOKEN?: boolean }
-      ).FIREBASE_APPCHECK_DEBUG_TOKEN = true;
-    }
+    if (import.meta.env.DEV && config.dev && config.debug) enableDevelopmentAppCheckDebug();
     const provider =
       import.meta.env.DEV && config.dev && config.debug
         ? new CustomProvider({
@@ -62,14 +59,10 @@ export function makeFirebaseModel(config: AppConfig): Model {
               role: 'system' as const,
               content: [{ type: 'text' as const, value: instructions.system }],
             },
-            {
-              role: 'user' as const,
-              content: [{ type: 'text' as const, value: instructions.exampleInput }],
-            },
-            {
-              role: 'assistant' as const,
-              content: [{ type: 'text' as const, value: instructions.exampleOutput }],
-            },
+            ...(instructions.exampleInput !== undefined && instructions.exampleOutput !== undefined ? [
+              { role: 'user' as const, content: [{ type: 'text' as const, value: instructions.exampleInput }] },
+              { role: 'assistant' as const, content: [{ type: 'text' as const, value: instructions.exampleOutput }] },
+            ] : []),
             ...(instructions.additionalExamples ?? []).flatMap((example) => [
               { role: 'user' as const, content: [{ type: 'text' as const, value: example.input }] },
               {

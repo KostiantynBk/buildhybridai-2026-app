@@ -1,0 +1,6 @@
+[
+  { "id": "I1", "description": "A planning notebook for solo software builders. An AI model running in the browser on the user's own machine reads the plan, picks out assumptions and decisions, and drafts short public questions. Only questions the user approves go to a cloud model that researches them with web search. Earlier findings are flagged when the plan changes." },
+  { "id": "I2", "description": "A writing or note-taking tool whose AI raises questions, critique or research on its own while a person writes a plan, without being asked." },
+  { "id": "I3", "description": "An assistant that keeps a person's private notes on their own device and uses a local AI model to turn them into a public research request, which a more capable cloud model researches in depth." },
+  { "id": "I4", "description": "A tool that links each piece of AI advice to the specific assumption it depends on, and marks the advice as out of date when the person changes that assumption." }
+]

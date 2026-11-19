@@ -5,9 +5,9 @@ beforeEach(stubSafeSuggestionParser);
 afterEach(() => vi.unstubAllGlobals());
 const mocks = vi.hoisted(() => ({ getGenerativeModel: vi.fn(), generateContent: vi.fn(), firebaseAI: vi.fn() }));
 vi.mock('firebase/ai', () => ({ getGenerativeModel: mocks.getGenerativeModel,
-  InferenceMode: { ONLY_IN_CLOUD: 'only-cloud' } }));
+  InferenceMode: { ONLY_IN_CLOUD: 'only-cloud' }, ThinkingLevel: { HIGH: 'HIGH' } }));
 vi.mock('./firebase', () => ({ firebaseAI: mocks.firebaseAI }));
-import { createCloudAdapter, RESEARCH_SYSTEM, safeSuggestions, sendChecked } from './cloudResearch';
+import { createCloudAdapter, IDEA_RESEARCH, RESEARCH_SYSTEM, safeSuggestions, sendChecked } from './cloudResearch';
 import type { AppConfig } from '../config';
 
 it('calls the SDK with only the approved question and the canonical system instruction', async () => {
@@ -26,6 +26,18 @@ it('calls the SDK with only the approved question and the canonical system instr
   } });
   expect(mocks.generateContent).toHaveBeenCalledWith('Approved public question?');
   expect(mocks.generateContent.mock.calls[0]).toEqual(['Approved public question?']);
+});
+it('sends idea research with HIGH thinking and does not show thought parts', async () => {
+  mocks.getGenerativeModel.mockClear(); mocks.generateContent.mockClear();
+  mocks.getGenerativeModel.mockReturnValue({ generateContent: mocks.generateContent });
+  mocks.generateContent.mockResolvedValue({ response: { inferenceSource: 'in_cloud', text: () => 'Public answer',
+    candidates: [{ content: { parts: [{ text: 'PRIVATE_THOUGHT', thought: true }, { text: 'Public answer' }] } }] } });
+  const result = await createCloudAdapter({} as AppConfig, IDEA_RESEARCH)('Approved description', 'model');
+  const params = mocks.getGenerativeModel.mock.calls[0][1].inCloudParams;
+  expect(params.generationConfig.thinkingConfig).toEqual({ thinkingLevel: 'HIGH' });
+  expect(params.generationConfig.thinkingConfig).not.toHaveProperty('thinkingBudget');
+  expect(mocks.generateContent).toHaveBeenCalledWith('Approved description');
+  expect(JSON.stringify(result.result)).not.toContain('PRIVATE_THOUGHT');
 });
 it('accepts reconstructed Google suggestions with inline SVG logos and rejects SVG links', () => {
   const fixture = '<style>.chip{display:inline-block}</style><svg class="logo-light" ' +

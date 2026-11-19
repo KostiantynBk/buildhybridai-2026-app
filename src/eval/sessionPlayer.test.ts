@@ -10,7 +10,8 @@ it('records the required step evidence without copying the private list', () => 
     items: [{ id: 'i', paragraphId: 'p', kind: 'assumption', quote: 'quote', topics: ['hosting'] }],
     jobs: [{ paragraphId: 'p', step: 'extract', promptVersion: 'extract.v2', status: 'done', attempts: 1 }],
     cards: [{ id: 'c', paragraphId: 'p', itemQuote: 'quote', angle: 'end-user', concern: 'concern', score: 1 }],
-    outbox: [{ id: 'o', cardId: 'c', question: 'Question?', keptOut: ['name'], status: 'pending' }],
+    outbox: [{ id: 'o', cardId: 'c', question: 'Question?', keptOut: ['name'], status: 'pending' },
+      { id: 'idea', kind: 'idea', question: 'IDEA_EXPORT_SENTINEL', keptOut: [], status: 'approved' }],
     dependencies: [], lineages: [] } as unknown as Snapshot;
   const log = buildSessionStepLog(1, 100, 250, false, baseline, snapshot, [], []);
   expect(log.elapsedMs).toBe(150);
@@ -19,6 +20,7 @@ it('records the required step evidence without copying the private list', () => 
   expect(log.outbox[0]).toMatchObject({ question: 'Question?', keptOut: ['name'], status: 'pending' });
   expect(log.jobs[0]).toMatchObject({ promptVersion: 'extract.v2' });
   expect(JSON.stringify(log)).not.toContain('SENTINEL_LIST');
+  expect(JSON.stringify(log)).not.toContain('IDEA_EXPORT_SENTINEL');
 });
 it('refuses held-back S2 and S3 without a runtime override', () => {
   expect(ALLOW_HELD_BACK).toBe(false);

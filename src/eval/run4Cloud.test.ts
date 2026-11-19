@@ -1,5 +1,8 @@
 import { expect, it, vi } from 'vitest';
-import { sendRun4Question, validateRun4Questions } from './run4Cloud';
+import { sendRun4Idea, sendRun4Question, validateRun4Ideas, validateRun4Questions } from './run4Cloud';
+import ideas from '../../eval/run4-ideas.json';
+import { run4Provenance } from './run4Provenance';
+import { builtInSettings } from '../settings/defaults';
 import type { CloudAdapter, ResearchResult } from '../ai/cloudResearch';
 
 const item = { id: 'example', profile: 'A' as const, question: 'What are hosting limits?' };
@@ -13,6 +16,18 @@ function fixture(terms: string[] = []) {
 it('validates frozen items and rejects duplicate IDs', () => {
   expect(validateRun4Questions([item])).toEqual([item]);
   expect(() => validateRun4Questions([item, item])).toThrow('duplicate');
+});
+it('validates separate idea descriptions and records HIGH-thinking provenance', async () => {
+  const rows = validateRun4Ideas(ideas);
+  expect(rows.map(row => row.id)).toEqual(['I1', 'I2', 'I3', 'I4']);
+  expect(() => validateRun4Ideas([{ ...rows[0], profile: 'A' }])).toThrow();
+  const store = fixture();
+  const adapter = vi.fn<CloudAdapter>().mockResolvedValue({ source: 'in_cloud', result });
+  await sendRun4Idea(store, adapter, rows[0], 'model', { enabled: true, budget: 1 });
+  expect(adapter).toHaveBeenCalledWith(rows[0].description, 'model');
+  expect(run4Provenance(builtInSettings(), 'model', 'research.idea.v1'))
+    .toMatchObject({ promptVersion: 'research.idea.v1', thinkingLevel: 'HIGH' });
+  expect(JSON.stringify(store.finishResearch.mock.calls)).not.toContain('RESULT_SENTINEL');
 });
 it('sends only the approved frozen question and holds the response in memory', async () => {
   const store = fixture();

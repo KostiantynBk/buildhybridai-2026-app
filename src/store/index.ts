@@ -33,12 +33,20 @@ export interface LineageVersion {
   createdAt?: number; order?: number;
 }
 export interface Dependency { consumerId: string; lineageId: string; version: number }
+export type IdeaBasis = { lineageId: string; version: number };
+export interface IdeaRecord {
+  id: string; status: 'ready' | 'approved' | 'declined' | 'sent' | 'failed' | 'withdrawn';
+  draft: string; keptOut: string[]; finalText?: string; edited?: boolean; basis: IdeaBasis[];
+  statements: string[]; mode: 'on_device' | 'in_cloud'; describePromptVersion: 'describe.v1';
+  researchPromptVersion: 'research.idea.v1'; createdAt: number; updatedAt: number; outboxId?: string;
+  describeJobKey: string;
+}
 export interface StoredJob {
   key: string; paragraphId: string; paragraphVersion: number;
-  step: 'extract' | 'compare' | 'angles' | 'question' | 'whynote';
+  step: 'extract' | 'compare' | 'angles' | 'question' | 'whynote' | 'describe';
   promptVersion: 'extract.v1' | 'extract.v2' | 'compare.v1' | 'angles.v1' | 'angles.v2' | 'angles.v2.1' |
-    'question.v1' | 'question.v2' | 'question.v2.1' | 'whynote.v1' | 'whynote.v2';
-  lineageId?: string; cardId?: string; requested?: boolean;
+    'question.v1' | 'question.v2' | 'question.v2.1' | 'whynote.v1' | 'whynote.v2' | 'describe.v1';
+  lineageId?: string; cardId?: string; ideaId?: string; requested?: boolean;
   status: 'pending' | 'running' | 'done' | 'superseded' | 'failed'; attempts: number; createdAt: number;
   nextRunAt: number; errorName?: string; measuredSource?: 'on_device' | 'in_cloud';
   runMode?: 'on_device' | 'in_cloud'; cloudEligible?: boolean;
@@ -66,10 +74,11 @@ interface Database extends DBSchema {
     source: 'adopted' | 'migrated-card' | 'migrated-current' } };
   research: { key: number; value: ResearchReceipt };
   cloudProcessing: { key: number; value: { sentAt: number } };
+  ideas: { key: string; value: IdeaRecord };
 }
 export type ResearchReceipt = { entryId: string; sentAt: number; status: 'sent' | 'completed' | 'failed';
   failureCode?: ResearchFailureCode };
-export const STORE_VERSION = 6;
+export const STORE_VERSION = 7;
 export const CLOUD_PROCESSING_DAILY_LIMIT = 150;
 export const LEGACY_KEY = 'thoughtpartner-notebook';
 export const SETTLE_MS = 4000;
@@ -83,7 +92,7 @@ const id = () => crypto.randomUUID();
 export type Snapshot = { paragraphs: Paragraph[]; items: StoredItem[]; profile: ProfileRecord[]; jobs: StoredJob[];
   lineages?: LineageVersion[]; neverSend?: string[]; cards?: ThoughtCard[]; outbox?: OutboxEntry[];
   dependencies?: Dependency[]; researchReceipts?: ResearchReceipt[]; cloudProcessingSends?: number[];
-  cloudModeEnabled?: boolean };
+  cloudModeEnabled?: boolean; ideas?: IdeaRecord[] };
 type LegacyStorage = Pick<Storage, 'getItem' | 'removeItem'>;
 function currentTriageItems(paragraph: Paragraph, items: StoredItem[], versions: LineageVersion[],
   version: TriageVersion = TRIAGE_PROMPT_SET): TriageItem[] {
@@ -163,7 +172,8 @@ async function resolveTerminalDependents(paragraphs: Paragraph[], versions: Line
     }
   }
   for (const entry of entries) {
-    if ((entry.status !== 'pending' && entry.status !== 'approved') ||
+    if (entry.kind === 'idea' || !entry.itemLineageId || entry.itemVersion === undefined ||
+        (entry.status !== 'pending' && entry.status !== 'approved') ||
         lineageEligibility(entry.itemLineageId, entry.itemVersion, paragraphs, versions, jobs) !== 'terminal') continue;
     await putEntry({ ...entry, status: 'withdrawn', withdrawReason: 'stale', decidedAt: now });
     const card = cards.find(value => value.id === entry.cardId);
@@ -181,28 +191,103 @@ export class LocalStore {
   close() { this.db.close(); }
   async snapshot(): Promise<Snapshot> {
     const tx = this.db.transaction(['paragraphs', 'items', 'profile', 'jobs', 'lineageVersions', 'privacy',
-      'cards', 'outbox', 'dependencies', 'research', 'cloudProcessing', 'meta'], 'readonly');
+      'cards', 'outbox', 'dependencies', 'research', 'cloudProcessing', 'meta', 'ideas'], 'readonly');
     void tx.done.catch(() => undefined);
     try {
       const [paragraphs, items, profile, jobs, lineages, privacy, cards, outbox, dependencies, researchReceipts,
-        cloudSends, cloudMode] = await Promise.all([
+        cloudSends, cloudMode, ideas] = await Promise.all([
         tx.objectStore('paragraphs').getAll(), tx.objectStore('items').getAll(),
         tx.objectStore('profile').getAll(), tx.objectStore('jobs').getAll(), tx.objectStore('lineageVersions').getAll(),
         tx.objectStore('privacy').get('never-send'), tx.objectStore('cards').getAll(),
         tx.objectStore('outbox').getAll(), tx.objectStore('dependencies').getAll(),
         tx.objectStore('research').getAll(), tx.objectStore('cloudProcessing').getAll(),
-        tx.objectStore('meta').get('cloud-mode-consent'),
+        tx.objectStore('meta').get('cloud-mode-consent'), tx.objectStore('ideas').getAll(),
       ]);
       await tx.done;
       paragraphs.sort((a, b) => a.order - b.order);
       return { paragraphs, items, profile, jobs, lineages, neverSend: privacy?.terms ?? [], cards, outbox,
         dependencies, researchReceipts, cloudProcessingSends: cloudSends.map(send => send.sentAt),
-        cloudModeEnabled: cloudMode?.value === true };
+        cloudModeEnabled: cloudMode?.value === true, ideas };
     } catch (error) {
       try { tx.abort(); } catch { /* Already finished or aborted. */ }
       await tx.done.catch(() => undefined);
       throw error;
     }
+  }
+  async startIdea(now = Date.now()): Promise<{ idea?: IdeaRecord; created?: boolean; reason?: string }> {
+    const tx = this.db.transaction(['ideas', 'paragraphs', 'items', 'lineageVersions', 'jobs', 'meta'], 'readwrite');
+    void tx.done.catch(() => undefined);
+    try {
+      const [paragraphs, items, versions, jobs, mode, ideas] = await Promise.all([
+        tx.objectStore('paragraphs').getAll(), tx.objectStore('items').getAll(),
+        tx.objectStore('lineageVersions').getAll(), tx.objectStore('jobs').getAll(),
+        tx.objectStore('meta').get('cloud-mode-consent'), tx.objectStore('ideas').getAll(),
+      ]);
+      const active = jobs.find(job => job.step === 'describe' &&
+        (job.status === 'pending' || job.status === 'running'));
+      if (active?.ideaId) {
+        const existing = await tx.objectStore('ideas').get(active.ideaId);
+        if (existing) { await tx.done; return { idea: existing }; }
+      }
+      const heads = lineageHeads(versions);
+      const current = new Set(paragraphs.flatMap(paragraph => currentTriageItems(paragraph, items, versions, 'v2.1'))
+        .map(item => item.lineageId));
+      const kinds = ['decision', 'constraint', 'assumption', 'open-question'];
+      const selected = items.filter(item => item.status === 'current' && item.lineageId &&
+        current.has(item.lineageId) && kinds.includes(item.kind) &&
+        heads.some(head => head.itemId === item.id && head.lineageId === item.lineageId &&
+          lineageEligibility(head.lineageId, head.version, paragraphs, versions, jobs) === 'eligible'))
+        .sort((a, b) => kinds.indexOf(a.kind) - kinds.indexOf(b.kind) ||
+          (paragraphs.find(p => p.id === a.paragraphId)?.order ?? 0) -
+            (paragraphs.find(p => p.id === b.paragraphId)?.order ?? 0) ||
+          (a.order ?? 0) - (b.order ?? 0) || a.id.localeCompare(b.id)).slice(0, 12);
+      if (selected.length < 3) { await tx.done; return { reason: 'Add at least three current statements first.' }; }
+      const ideaId = id();
+      const describeJobKey = `idea#${ideaId}#describe`;
+      const idea: IdeaRecord = { id: ideaId, status: 'ready', draft: '', keptOut: [], describeJobKey,
+        basis: selected.map(item => { const head = heads.find(value => value.itemId === item.id)!;
+          return { lineageId: head.lineageId, version: head.version }; }),
+        statements: selected.map(item => item.text), mode: mode?.value ? 'in_cloud' : 'on_device',
+        describePromptVersion: 'describe.v1', researchPromptVersion: 'research.idea.v1',
+        createdAt: Math.max(now, ...ideas.map(value => value.createdAt + 1)), updatedAt: now };
+      await tx.objectStore('ideas').put(idea);
+      const paragraph = paragraphs.find(value => value.id === selected[0].paragraphId)!;
+      await tx.objectStore('jobs').put({ key: describeJobKey, paragraphId: paragraph.id,
+        paragraphVersion: paragraph.version, step: 'describe', promptVersion: 'describe.v1', ideaId,
+        status: 'pending', attempts: 0, createdAt: now, nextRunAt: now, runMode: idea.mode });
+      await tx.done; return { idea, created: true };
+    } catch (error) {
+      try { tx.abort(); } catch { /* Already finished or aborted. */ }
+      await tx.done.catch(() => undefined); throw error;
+    }
+  }
+  async finishIdeaDraft(job: StoredJob, description: string, keptOut: string[], now = Date.now()): Promise<boolean> {
+    const tx = this.db.transaction(['ideas', 'jobs'], 'readwrite');
+    void tx.done.catch(() => undefined);
+    try {
+      const current = await tx.objectStore('jobs').get(job.key);
+      const idea = job.ideaId ? await tx.objectStore('ideas').get(job.ideaId) : undefined;
+      if (!idea || idea.status !== 'ready' || !current || current.step !== 'describe' ||
+          current.status !== 'running' || current.attempts !== job.attempts || idea.describeJobKey !== job.key) {
+        await tx.done; return false;
+      }
+      const count = wordCount(description);
+      await tx.objectStore('ideas').put({ ...idea, draft: count >= 8 && count <= 60 ? description : '',
+        keptOut: count >= 8 && count <= 60 ? keptOut : [], updatedAt: now });
+      await tx.objectStore('jobs').put({ ...current, status: 'done' });
+      await tx.done; return true;
+    } catch (error) {
+      try { tx.abort(); } catch { /* Already finished or aborted. */ }
+      await tx.done.catch(() => undefined); throw error;
+    }
+  }
+  async ideaForJob(job: StoredJob): Promise<IdeaRecord | undefined> {
+    const tx = this.db.transaction(['ideas', 'jobs'], 'readonly');
+    const current = await tx.objectStore('jobs').get(job.key);
+    const idea = job.ideaId ? await tx.objectStore('ideas').get(job.ideaId) : undefined;
+    await tx.done;
+    return current?.status === 'running' && current.attempts === job.attempts && idea?.status === 'ready' &&
+      idea.describeJobKey === job.key ? idea : undefined;
   }
   async cloudModeConsent(): Promise<boolean> {
     return (await this.db.get('meta', 'cloud-mode-consent'))?.value === true;
@@ -211,7 +296,14 @@ export class LocalStore {
     const tx = this.db.transaction(['meta', 'jobs', 'comparisonBatches', 'cards', 'funnel'], 'readwrite');
     void tx.done.catch(() => undefined);
     try {
+      const previous = (await tx.objectStore('meta').get('cloud-mode-consent'))?.value === true;
       await tx.objectStore('meta').put({ key: 'cloud-mode-consent', value });
+      if (previous !== value) for (const job of await tx.objectStore('jobs').getAll()) {
+        if (job.step === 'describe' && (job.runMode ?? 'on_device') !== (value ? 'in_cloud' : 'on_device') &&
+            (job.status === 'pending' || job.status === 'running')) {
+          await tx.objectStore('jobs').put({ ...job, status: 'superseded', errorName: 'ModeChanged' });
+        }
+      }
       if (value) for (const job of await tx.objectStore('jobs').getAll()) {
         if (job.status === 'pending' && job.runMode === 'on_device' && job.cloudEligible &&
             job.step === 'extract' && job.promptVersion === 'extract.v2') {
@@ -840,9 +932,19 @@ export class LocalStore {
     }
   }
   async resume(): Promise<void> {
-    const tx = this.db.transaction(['jobs', 'comparisonBatches', 'cards', 'funnel'], 'readwrite');
+    const tx = this.db.transaction(['jobs', 'comparisonBatches', 'cards', 'funnel', 'ideas', 'outbox', 'research'],
+      'readwrite');
     void tx.done.catch(() => undefined);
     try {
+      const receipts = await tx.objectStore('research').getAll();
+      for (const idea of await tx.objectStore('ideas').getAll()) {
+        const entry = idea.outboxId ? await tx.objectStore('outbox').get(idea.outboxId) : undefined;
+        const receipt = entry && receipts.filter(value => value.entryId === entry.id)
+          .sort((a, b) => b.sentAt - a.sentAt)[0];
+        if (entry?.status === 'approved' && receipt?.status === 'completed' && idea.status !== 'sent') {
+          await tx.objectStore('ideas').put({ ...idea, status: 'sent', updatedAt: Date.now() });
+        }
+      }
       for (const job of await tx.objectStore('jobs').getAll()) {
         if (job.status === 'running') {
           const exhausted = job.attempts >= MAX_ATTEMPTS;
@@ -887,7 +989,8 @@ export class LocalStore {
         if (mode === 'in_cloud' && !((job.step === 'extract' && job.promptVersion === 'extract.v2') ||
             (job.step === 'compare' && job.promptVersion === 'compare.v1') ||
             (job.step === 'angles' && job.promptVersion === 'angles.v2.1') ||
-            (job.step === 'question' && job.promptVersion === 'question.v2.1'))) continue;
+            (job.step === 'question' && job.promptVersion === 'question.v2.1') ||
+            (job.step === 'describe' && job.promptVersion === 'describe.v1'))) continue;
         if (job.attempts >= MAX_ATTEMPTS) {
           await tx.objectStore('jobs').put({ ...job, status: 'failed',
             failureReason: 'interrupted-at-attempt-limit' });
@@ -1151,7 +1254,7 @@ export class LocalStore {
     try {
       const current = await tx.objectStore('jobs').get(job.key);
       const paragraph = await tx.objectStore('paragraphs').get(job.paragraphId);
-      if (current?.status === 'running') {
+      if (current?.status === 'running' && (current.step !== 'describe' || current.attempts === job.attempts)) {
         if (!paragraph || paragraph.version !== job.paragraphVersion) {
           await tx.objectStore('jobs').put({ ...current, status: 'superseded' });
         } else if (cancelled && !dispatched) {
@@ -1196,6 +1299,120 @@ export class LocalStore {
       try { tx.abort(); } catch { /* Already finished or aborted. */ }
       await tx.done.catch(() => undefined);
       throw error;
+    }
+  }
+  async approveIdea(ideaId: string, finalText: string, now = Date.now()):
+    Promise<{ entryId?: string; reason?: string }> {
+    const tx = this.db.transaction(['ideas', 'outbox', 'privacy', 'lineageVersions', 'paragraphs', 'jobs'],
+      'readwrite');
+    void tx.done.catch(() => undefined);
+    try {
+      const idea = await tx.objectStore('ideas').get(ideaId);
+      if (!idea || idea.status !== 'ready' || idea.outboxId || !Array.isArray(idea.basis) ||
+          idea.basis.length < 3 || idea.basis.length > 12 ||
+          (await tx.objectStore('jobs').get(idea.describeJobKey))?.status !== 'done') {
+        await tx.done; return { reason: 'This idea was already approved or is not ready.' };
+      }
+      const [paragraphs, versions, jobs, privacy] = await Promise.all([tx.objectStore('paragraphs').getAll(),
+        tx.objectStore('lineageVersions').getAll(), tx.objectStore('jobs').getAll(),
+        tx.objectStore('privacy').get('never-send')]);
+      const statuses = idea.basis.map(value => lineageEligibility(value.lineageId, value.version,
+        paragraphs, versions, jobs));
+      if (statuses.some(status => status !== 'eligible')) {
+        await tx.done; return { reason: statuses.some(status => status === 'stale' || status === 'terminal')
+          ? 'Your plan changed. Draft again.' : 'Checking your latest change…' };
+      }
+      if (!finalText.trim()) { await tx.done; return { reason: 'Write a description before sending.' }; }
+      const terms = privacy?.terms ?? [];
+      const leak = filterQuestion(finalText, terms);
+      if (!leak.passed) {
+        const names = { currency: 'money amount', email: 'email address', url: 'web address',
+          'listed-term': 'never-send term', 'private-token': 'private token' };
+        await tx.done;
+        return { reason: `Description held back: ${leak.reasons.map(reason => names[reason]).join(', ')}.` };
+      }
+      const entryId = id();
+      const keptOut = idea.keptOut.filter(value => filterQuestion(value, terms).passed);
+      const edited = finalText !== idea.draft;
+      await tx.objectStore('outbox').put({ id: entryId, kind: 'idea', ideaId, question: finalText, keptOut,
+        basis: idea.basis, status: 'approved', createdAt: now, decidedAt: now, edited,
+        describePromptVersion: idea.describePromptVersion, researchPromptVersion: idea.researchPromptVersion });
+      await tx.objectStore('ideas').put({ ...idea, status: 'approved', finalText, edited, keptOut,
+        outboxId: entryId, updatedAt: now });
+      await tx.done; return { entryId };
+    } catch (error) {
+      try { tx.abort(); } catch { /* Already finished or aborted. */ }
+      await tx.done.catch(() => undefined); throw error;
+    }
+  }
+  async finishIdeaResearch(ideaId: string, status: 'sent' | 'failed', now = Date.now()): Promise<void> {
+    const tx = this.db.transaction(['ideas', 'outbox'], 'readwrite');
+    void tx.done.catch(() => undefined);
+    try {
+      const idea = await tx.objectStore('ideas').get(ideaId);
+      const entry = idea?.outboxId ? await tx.objectStore('outbox').get(idea.outboxId) : undefined;
+      if (idea && entry?.status === 'approved') {
+        await tx.objectStore('ideas').put({ ...idea, status, updatedAt: now });
+      }
+      await tx.done;
+    } catch (error) {
+      try { tx.abort(); } catch { /* Already finished or aborted. */ }
+      await tx.done.catch(() => undefined); throw error;
+    }
+  }
+  async declineIdea(ideaId: string, now = Date.now()): Promise<boolean> {
+    const tx = this.db.transaction(['ideas', 'funnel', 'jobs'], 'readwrite');
+    void tx.done.catch(() => undefined);
+    try {
+      const idea = await tx.objectStore('ideas').get(ideaId);
+      if (!idea || idea.status !== 'ready' ||
+          (await tx.objectStore('jobs').get(idea.describeJobKey))?.status !== 'done') {
+        await tx.done; return false;
+      }
+      await tx.objectStore('ideas').put({ ...idea, status: 'declined', updatedAt: now });
+      await tx.objectStore('funnel').put({ id: id(), paragraphId: 'idea', paragraphVersion: 0,
+        event: 'outbox', at: now, reason: 'idea-rejected' });
+      await tx.done; return true;
+    } catch (error) {
+      try { tx.abort(); } catch { /* Already finished or aborted. */ }
+      await tx.done.catch(() => undefined); throw error;
+    }
+  }
+  async preSendIdeaCheck(ideaId: string): Promise<{ allowed: boolean; reason: string | null }> {
+    const tx = this.db.transaction(['ideas', 'outbox', 'privacy', 'meta', 'lineageVersions', 'paragraphs', 'jobs'],
+      'readwrite');
+    void tx.done.catch(() => undefined);
+    try {
+      const idea = await tx.objectStore('ideas').get(ideaId);
+      const entry = idea?.outboxId ? await tx.objectStore('outbox').get(idea.outboxId) : undefined;
+      if (!idea || !['approved', 'sent', 'failed'].includes(idea.status) || !Array.isArray(idea.basis) ||
+          idea.basis.length < 3 || idea.basis.length > 12 || !entry || entry.kind !== 'idea' ||
+          entry.status !== 'approved') {
+        await tx.done; return { allowed: false, reason: 'not-approved' };
+      }
+      const [paragraphs, versions, jobs, terms, consent] = await Promise.all([tx.objectStore('paragraphs').getAll(),
+        tx.objectStore('lineageVersions').getAll(), tx.objectStore('jobs').getAll(),
+        tx.objectStore('privacy').get('never-send'), tx.objectStore('meta').get('cloud-consent')]);
+      const statuses = idea.basis.map(value => lineageEligibility(value.lineageId, value.version,
+        paragraphs, versions, jobs));
+      const stale = statuses.some(status => status === 'stale' || status === 'terminal');
+      if (!stale && statuses.some(status => status === 'checking')) {
+        await tx.done; return { allowed: false, reason: 'not-eligible-yet' };
+      }
+      const checks = [entry.question, ...entry.keptOut].map(value => filterQuestion(value, terms?.terms ?? []));
+      const unsafe = checks.some(value => !value.passed);
+      if (stale || unsafe) {
+        const reason = stale ? 'stale' : checks.some(value => value.reasons.includes('listed-term'))
+          ? 'listed-term' : 'private-detail';
+        await tx.objectStore('outbox').put({ ...entry, status: 'withdrawn', withdrawReason: reason,
+          decidedAt: Date.now() });
+        await tx.objectStore('ideas').put({ ...idea, status: 'withdrawn', updatedAt: Date.now() });
+        await tx.done; return { allowed: false, reason };
+      }
+      await tx.done; return { allowed: consent?.value === true, reason: consent?.value ? null : 'no-consent' };
+    } catch (error) {
+      try { tx.abort(); } catch { /* Already finished or aborted. */ }
+      await tx.done.catch(() => undefined); throw error;
     }
   }
   async approveDraft(cardId: string, finalText: string, privateTokens: string[] = [], now = Date.now()):
@@ -1271,7 +1488,8 @@ export class LocalStore {
     void tx.done.catch(() => undefined);
     try {
       const entry = await tx.objectStore('outbox').get(entryId);
-      if (!entry || entry.status !== 'pending') { await tx.done; return false; }
+      if (!entry || entry.kind === 'idea' || !entry.cardId || !entry.itemLineageId || entry.itemVersion === undefined ||
+          entry.status !== 'pending') { await tx.done; return false; }
       const terms = (await tx.objectStore('privacy').get('never-send'))?.terms ?? [];
       const eligibility = lineageEligibility(entry.itemLineageId, entry.itemVersion,
         await tx.objectStore('paragraphs').getAll(), await tx.objectStore('lineageVersions').getAll(),
@@ -1314,7 +1532,8 @@ export class LocalStore {
     void tx.done.catch(() => undefined);
     try {
       const entry = await tx.objectStore('outbox').get(entryId);
-      if (!entry || entry.status !== 'approved') {
+      if (!entry || entry.kind === 'idea' || !entry.cardId || !entry.itemLineageId || entry.itemVersion === undefined ||
+          entry.status !== 'approved') {
         await tx.done;
         return { allowed: false, reason: entry?.status === 'withdrawn' ? entry.withdrawReason ?? 'withdrawn'
           : 'not-approved' };
@@ -1357,7 +1576,8 @@ export class LocalStore {
         value => tx.objectStore('cards').put(value), value => tx.objectStore('jobs').put(value),
         value => tx.objectStore('outbox').put(value), value => tx.objectStore('funnel').put(value));
       for (const entry of entries) {
-        if (entry.status !== 'pending' ||
+        if (entry.kind === 'idea' || !entry.itemLineageId || entry.itemVersion === undefined ||
+            entry.status !== 'pending' ||
             lineageEligibility(entry.itemLineageId, entry.itemVersion, paragraphs, versions, jobs) !== 'stale') {
           continue;
         }
@@ -1427,7 +1647,7 @@ export class LocalStore {
       const now = Date.now();
       for (const entry of withdrawForTerms(entries, validated, now)) {
         await tx.objectStore('outbox').put(entry);
-        const card = await tx.objectStore('cards').get(entry.cardId);
+        const card = entry.cardId ? await tx.objectStore('cards').get(entry.cardId) : undefined;
         if (card) await tx.objectStore('funnel').put(outboxEvent(card, 'withdrawn:listed-term', now));
       }
       await tx.done;
@@ -1459,7 +1679,7 @@ export class LocalStore {
         const now = Date.now();
         for (const entry of withdrawForTerms(entries, validated, now)) {
           await tx.objectStore('outbox').put(entry);
-          const card = await tx.objectStore('cards').get(entry.cardId);
+          const card = entry.cardId ? await tx.objectStore('cards').get(entry.cardId) : undefined;
           if (card) await tx.objectStore('funnel').put(outboxEvent(card, 'withdrawn:listed-term', now));
         }
       }
@@ -1474,7 +1694,7 @@ export class LocalStore {
     storage.removeItem(LEGACY_KEY);
     const tx = this.db.transaction(['paragraphs', 'paragraphVersions', 'items', 'profile', 'jobs', 'outbox', 'meta',
       'lineageVersions', 'dependencies', 'comparisonBatches', 'privacy', 'cards', 'funnel', 'anglesConsidered',
-      'research', 'cloudProcessing'],
+      'research', 'cloudProcessing', 'ideas'],
       'readwrite');
     void tx.done.catch(() => undefined);
     try {
@@ -1497,6 +1717,7 @@ export async function openLocalStore(name = 'thoughtpartner', events: {
     blocking() { db?.close(); events.onVersionChange?.(); },
     upgrade(database, oldVersion, _newVersion, tx) {
       void tx.done.catch(() => undefined);
+      if (oldVersion < 7) database.createObjectStore('ideas', { keyPath: 'id' });
       if (oldVersion < 6) database.createObjectStore('cloudProcessing', { autoIncrement: true });
       if (oldVersion < 5) database.createObjectStore('research', { autoIncrement: true });
       if (oldVersion < 1) {

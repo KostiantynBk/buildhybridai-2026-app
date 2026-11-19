@@ -68,7 +68,8 @@ export function buildSessionStepLog(step: number, startedAt: number, finishedAt:
       questionPromptVersion: card.questionPromptVersion, askedDirectly: card.askedDirectly,
       draftQuestion: card.draftQuestion, draftKeptOut: card.draftKeptOut,
       staleness: calculateStaleness(card.id, snapshot.dependencies ?? [], snapshot.lineages ?? []) })),
-    outbox: (snapshot.outbox ?? []).filter(entry => cardIds.has(entry.cardId)).map(entry => ({ id: entry.id,
+    outbox: (snapshot.outbox ?? []).filter(entry => entry.kind !== 'idea' && !!entry.cardId &&
+      cardIds.has(entry.cardId)).map(entry => ({ id: entry.id,
       cardId: entry.cardId, question: entry.question, keptOut: entry.keptOut, status: entry.status,
       withdrawReason: entry.withdrawReason, edited: entry.edited, triageVersion: entry.triageVersion,
       questionPromptVersion: entry.questionPromptVersion, questionOrigin: entry.questionOrigin })),

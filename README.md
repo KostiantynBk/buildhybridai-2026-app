@@ -2,7 +2,7 @@
 
 ## What it is and who it's for
 
-ThoughtPartner is a planning notebook for solo builders who want another perspective before they write code. It can identify questions locally and research an approved public question, while keeping the relationship to the builder's assumptions visible.
+ThoughtPartner is a planning notebook for solo builders who want another perspective before they write code. It can identify questions locally and research an approved public question or idea description, while keeping the relationship to the builder's assumptions visible. Idea research is marked out of date when a statement used in its description changes or is removed; adding new statements alone does not expire it.
 
 ## How it uses Firebase AI Logic
 

@@ -44,3 +44,11 @@ it('exports per-attempt immutable model/settings provenance and ratings without 
   expect(JSON.stringify(report)).not.toContain('SECRET-ANSWER');
   expect(JSON.stringify(report)).not.toContain('https://secret-source');
 });
+it('exports idea attempt provenance without grounded content', () => {
+  const provenance = run4Provenance(builtInSettings(), 'model', 'research.idea.v1');
+  const report = run4Export([{ id: 'idea-attempt', questionId: 'I1', latencyMs: 5, sourceCount: 3,
+    suggestionsPresent: true, inCloud: true, grounded: true, displayed: true, provenance }], {});
+  expect(report.promptVersion).toBe('research.idea.v1');
+  expect(report.rows[0].provenance).toMatchObject({ thinkingLevel: 'HIGH', promptVersion: 'research.idea.v1' });
+  expect(JSON.stringify(report)).not.toContain('RESULT_SENTINEL');
+});

@@ -3,6 +3,7 @@ import { CloudProcessingError } from '../ai/cloudProcessing';
 import { safeErrorName } from '../ai/errorMetadata';
 import { extract, type ExtractVersion } from '../pipeline/extract';
 import { compare } from '../pipeline/compare';
+import { describeIdea } from '../pipeline/describeIdea';
 import { chooseProfileRecords, runAngles, runQuestion, runWhyNote } from '../pipeline/triage';
 import { fingerprintRecords } from './fingerprint';
 import { versionFromPrompt } from '../pipeline/triageVersion';
@@ -139,6 +140,16 @@ export class Scheduler {
           } else {
             await this.store.completeQuestion(claimed.job, result.question, result.keptOut, result.leak.passed,
               this.now(), result.source === mode ? mode : undefined);
+          }
+        } else if (claimed.job.step === 'describe') {
+          const idea = await this.store.ideaForJob(claimed.job);
+          if (!idea) return;
+          const result = await describeIdea(run, idea.statements, mode, controller.signal,
+            () => { dispatched = true; });
+          if (this.stopped || controller.signal.aborted || generation !== this.generation) {
+            await this.store.fail(claimed.job, 'AbortError', true, this.now(), false, dispatched);
+          } else {
+            await this.store.finishIdeaDraft(claimed.job, result.description, result.keptOut, this.now());
           }
         } else if (claimed.job.step === 'whynote') {
           const input = await this.store.whyInput(claimed.job);

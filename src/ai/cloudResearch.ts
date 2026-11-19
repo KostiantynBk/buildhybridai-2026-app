@@ -1,4 +1,5 @@
-import { getGenerativeModel, InferenceMode } from 'firebase/ai';
+import { getGenerativeModel, InferenceMode, ThinkingLevel } from 'firebase/ai';
+import { RESEARCH_IDEA_SYSTEM } from '../pipeline/prompts/research.idea.v1';
 import type { AppConfig } from '../config';
 import { firebaseAI } from './firebase';
 import { isGrounded, safeSuggestions } from './suggestionsSafety';
@@ -28,11 +29,17 @@ export type ResearchResult = {
 export type CloudReply = { source?: string; result: ResearchResult };
 export type CloudAdapter = (question: string, model: string) => Promise<CloudReply>;
 
-export function createCloudAdapter(config: AppConfig): CloudAdapter {
+export type ResearchPrompt = { id: 'research.v2' | 'research.idea.v1'; system: string; thinkingLevel?: 'HIGH' };
+export const FACT_RESEARCH: ResearchPrompt = { id: 'research.v2', system: RESEARCH_SYSTEM };
+export const IDEA_RESEARCH: ResearchPrompt = { id: 'research.idea.v1', system: RESEARCH_IDEA_SYSTEM,
+  thinkingLevel: 'HIGH' };
+export function createCloudAdapter(config: AppConfig, prompt: ResearchPrompt = FACT_RESEARCH): CloudAdapter {
   return async (question, model) => {
     const generator = getGenerativeModel(firebaseAI(config), {
       mode: InferenceMode.ONLY_IN_CLOUD,
-      inCloudParams: { model, systemInstruction: RESEARCH_SYSTEM, tools: [{ googleSearch: {} }] },
+      inCloudParams: { model, systemInstruction: prompt.system, tools: [{ googleSearch: {} }],
+        ...(prompt.thinkingLevel === 'HIGH' ? { generationConfig: { thinkingConfig: {
+          thinkingLevel: ThinkingLevel.HIGH } } } : {}) },
     });
     const response = (await generator.generateContent(question)).response;
     const candidate = response.candidates?.[0];

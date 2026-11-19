@@ -28,7 +28,7 @@ it('preserves the prompt versions of a previously queued v1 angles job', async (
   await store.complete(extract.job, [{ kind: 'assumption', text: 'Fifty visitors', quote, topics: ['hosting'] }], 4000);
   await store.finalizeReady();
   const paragraph = (await store.snapshot()).paragraphs[0];
-  const db = await openDB(name, 6);
+  const db = await openDB(name, 7);
   try {
     await db.put('jobs', { key: `${paragraph.id}@${paragraph.version}#angles`, paragraphId: paragraph.id,
       paragraphVersion: paragraph.version, step: 'angles', promptVersion: 'angles.v1', status: 'pending',
@@ -70,7 +70,7 @@ it('leaves v1 open questions unconsidered until the next edit, then sends them t
   await store.complete(extract.job, items, 4000); await store.finalizeReady();
   let snapshot = await store.snapshot();
   const paragraph = snapshot.paragraphs[0];
-  const db = await openDB(name, 6);
+  const db = await openDB(name, 7);
   try {
     await db.put('jobs', { key: `${paragraph.id}@${paragraph.version}#angles`, paragraphId: paragraph.id,
       paragraphVersion: paragraph.version, step: 'angles', promptVersion: 'angles.v1', status: 'pending',
@@ -89,7 +89,7 @@ it('leaves v1 open questions unconsidered until the next edit, then sends them t
     snapshot = await store.snapshot();
     const openLineage = snapshot.items.find(item => item.kind === 'open-question')!.lineageId!;
     const assumptionLineage = snapshot.items.find(item => item.kind === 'assumption')!.lineageId!;
-    const raw = await openDB(name, 6);
+    const raw = await openDB(name, 7);
     try {
       expect(await raw.get('anglesConsidered', [assumptionLineage, 1])).toBeDefined();
       expect(await raw.get('anglesConsidered', [openLineage, 1])).toBeUndefined();

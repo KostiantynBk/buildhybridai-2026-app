@@ -2,7 +2,7 @@
   "runner.ts": ["firstEvaluationAfterReload", "recordFirstEvaluation", "markEvaluationCall", "quantile", "median", "paragraphOfLength", "run1LatencyByNote", "latencySummary", "runEvaluation"],
   "run2.ts": ["runChangeEvaluation"],
   "run3.ts": ["runGate2", "runPracticeV2"],
-  "run4Cloud.ts": ["validateRun4Questions", "sendRun4Question"],
+  "run4Cloud.ts": ["validateRun4Questions", "validateRun4Ideas", "sendRun4Question", "sendRun4Idea"],
   "Run4Runner.tsx": ["Run4Runner"],
   "sessionPlayer.ts": ["addSessionTerms", "prepareSessionStart", "removeSessionTerms", "buildSessionStepLog", "ALLOW_HELD_BACK", "sessionForPlay", "applySessionEdit", "nextSessionEdit"]
 }

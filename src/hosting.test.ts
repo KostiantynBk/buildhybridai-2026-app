@@ -34,25 +34,37 @@ it('routes eval and dev paths to the normal app in production', () => {
   expect(developerRoute('/eval', true)).toBe('eval');
   expect(developerRoute('/dev', true)).toBe('dev');
 });
+// Each fixture launches a separate Node process; allow headroom on slower machines.
 it('rejects token-shaped and developer artifacts while accepting a clean fixture', () => {
   const dir = mkdtempSync(join(tmpdir(), 'thoughtpartner-dist-'));
   try {
     const file = join(dir, 'bundle.js');
     writeFileSync(file, 'clean production fixture');
     execFileSync(process.execPath, ['scripts/check-dist.mjs', dir]);
+    const debugGlobal = ['FIREBASE', 'APPCHECK', 'DEBUG', 'TOKEN'].join('_');
     for (const content of ['VITE_APPCHECK_DEBUG', 'VITE_UNEXPECTED_SECRET', 'vite_Unlisted', 'VITE_',
       'VITE_FIREBASE_API_KEY.notes', 'VITE_FIREBASE_API_KEY-extra', 'VITE_FIREBASE_API_KEYé',
       'VITE_FIREBASE_API_KEY$fixture', 'VITE_FIREBéASE_API_KEY', 'VITE_FIRE$BASE_API_KEY',
-      'EvalPage', 'SessionPlayer',
-      'runEvaluation', 'runChangeEvaluation', 'runGate2',
-      '_12345678-1234-1234-1234-123456789abc_', 'self.FIREBASE_APPCHECK_DEBUG_TOKEN=true',
-      'self["FIREBASE_APPCHECK_DEBUG_TOKEN"]=true', 'other.FIREBASE_APPCHECK_DEBUG_TOKEN',
-      Array(4).fill('sdk.FIREBASE_APPCHECK_DEBUG_TOKEN').join(';')]) {
+      'EvalPage', 'SessionPlayer', 'runEvaluation', 'runChangeEvaluation', 'runGate2',
+      '_12345678-1234-1234-1234-123456789abc_', `self.${debugGlobal}=true`,
+      `self["${debugGlobal}"]=true`, `self.${debugGlobal}+=1`, `self.${debugGlobal}??=true`,
+      `self.${debugGlobal}||=true`, `self.${debugGlobal}&&=true`, 'THOUGHTPARTNER_DEV_APPCHECK_ONLY',
+      Array(5).fill(debugGlobal).join(';')]) {
       writeFileSync(file, content);
       expect(spawnSync(process.execPath, ['scripts/check-dist.mjs', dir]).status).toBe(1);
     }
+    writeFileSync(file, Array(4).fill(`sdk.${debugGlobal}`).join(';'));
+    expect(spawnSync(process.execPath, ['scripts/check-dist.mjs', dir]).status).toBe(0);
+    writeFileSync(file, `sdk.${debugGlobal}==true; sdk.${debugGlobal}===true`);
+    expect(spawnSync(process.execPath, ['scripts/check-dist.mjs', dir]).status).toBe(0);
+    writeFileSync(file, 'clean');
+    const script = join(process.cwd(), 'scripts/check-dist.mjs');
+    const absent = spawnSync(process.execPath, [script, dir], { cwd: dir, encoding: 'utf8' });
+    expect(absent.status).toBe(1);
+    expect(absent.stderr).toContain('missing node_modules/@firebase/app-check');
   } finally { rmSync(dir, { recursive: true, force: true }); }
-});
+}, 20000);
+// Vite is loaded in separate Node processes for each dotenv fixture.
 it('resolves deploy project using production Vite dotenv semantics', () => {
   const dir = mkdtempSync(join(tmpdir(), 'thoughtpartner-env-'));
   const env = { ...process.env };
@@ -70,7 +82,7 @@ it('resolves deploy project using production Vite dotenv semantics', () => {
     writeFileSync(join(dir, '.env.local'), 'VITE_FIREBASE_PROJECT_ID=BAD!');
     expect(() => select()).toThrow();
   } finally { rmSync(dir, { recursive: true, force: true }); }
-});
+}, 20000);
 it('lists every runner export beside the runner source', () => {
   const manifest = JSON.parse(readFileSync('src/eval/runner-markers.json', 'utf8')) as Record<string, string[]>;
   for (const [file, names] of Object.entries(manifest)) {

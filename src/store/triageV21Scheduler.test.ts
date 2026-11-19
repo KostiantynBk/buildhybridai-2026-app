@@ -28,7 +28,7 @@ it.each(['v1', 'v2'] as const)('keeps a previously queued %s job pinned includin
   await store.complete(extract.job, [{ kind: 'assumption', text: 'Fifty visitors', quote, topics: ['hosting'] }], 4000);
   await store.finalizeReady();
   const p = (await store.snapshot()).paragraphs[0];
-  const db = await openDB(name, 6);
+  const db = await openDB(name, 7);
   try {
     await db.put('jobs', { key: `${p.id}@${p.version}#angles`, paragraphId: p.id, paragraphVersion: p.version,
       step: 'angles', promptVersion: `angles.${version}`, status: 'pending', attempts: 0,
@@ -48,7 +48,7 @@ it.each(['v1', 'v2'] as const)('keeps a previously queued %s job pinned includin
     await scheduler.start();
     const marked = (await store.snapshot()).cards![0];
     expect(marked).toMatchObject({ triageVersion: version, questionStatus: 'marked' });
-    const raw = await openDB(name, 6);
+    const raw = await openDB(name, 7);
     try {
       await raw.put('cards', { ...marked, questionStatus: 'waiting' });
       await raw.put('jobs', { key: `legacy-question-${version}`, paragraphId: p.id, paragraphVersion: p.version,
