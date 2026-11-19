@@ -64,11 +64,14 @@ export function buildSessionStepLog(step: number, startedAt: number, finishedAt:
       sourceAngle: card.sourceAngle, concern: card.concern, score: card.score, brief: card.brief,
       why: card.why, profileRecordIds: (card.profileRecordIds ?? [])
         .filter(id => snapshot.profile.some(record => record.id === id)),
-      feedback: card.feedback, questionStatus: card.questionStatus,
+      feedback: card.feedback, questionStatus: card.questionStatus, triageVersion: card.triageVersion,
+      questionPromptVersion: card.questionPromptVersion, askedDirectly: card.askedDirectly,
+      draftQuestion: card.draftQuestion, draftKeptOut: card.draftKeptOut,
       staleness: calculateStaleness(card.id, snapshot.dependencies ?? [], snapshot.lineages ?? []) })),
     outbox: (snapshot.outbox ?? []).filter(entry => cardIds.has(entry.cardId)).map(entry => ({ id: entry.id,
       cardId: entry.cardId, question: entry.question, keptOut: entry.keptOut, status: entry.status,
-      withdrawReason: entry.withdrawReason })),
+      withdrawReason: entry.withdrawReason, edited: entry.edited, triageVersion: entry.triageVersion,
+      questionPromptVersion: entry.questionPromptVersion, questionOrigin: entry.questionOrigin })),
     funnel: latestEvents.filter(event => !events.has(event.id)),
     jobs: snapshot.jobs.filter(job => ids.has(job.paragraphId)).map(job => ({ step: job.step,
       promptVersion: job.promptVersion, status: job.status, attempts: job.attempts, errorName: job.errorName })) };

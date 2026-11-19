@@ -1,3 +1,4 @@
+import { seedLegacyPending } from '../store/legacyPendingFixture';
 import 'fake-indexeddb/auto';
 import { openDB } from 'idb';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -24,7 +25,7 @@ async function fixture() {
     quote: 'The hosting service permits fifty visitors at once', topics: ['hosting'] }], 4000);
   await store.finalizeReady();
   const lineageId = (await store.snapshot()).items[0].lineageId!;
-  await store.queueOutbox({ id: 'entry', cardId: 'card', question: 'What are public hosting limits?',
+  await seedLegacyPending(store, { id: 'entry', cardId: 'card', question: 'What are public hosting limits?',
     keptOut: [], itemLineageId: lineageId, itemVersion: 1, createdAt: 10 });
   await store.decideOutbox('entry', 'approved');
   await store.setCloudConsent(true);

@@ -10,6 +10,8 @@ import type { DisplayAngle } from '../pipeline/selectConcerns';
 import type { ResearchView } from '../ai/researchFlow';
 import { ResearchBlock } from './ResearchBlock';
 import { isGrounded } from '../ai/suggestionsSafety';
+import { lineageEligibility } from '../store/eligibility';
+import { DraftControls } from './DraftControls';
 
 const angleLabels: Record<DisplayAngle, string> = { 'end-user': 'For the user',
   'cost-at-scale': 'Costs at scale', 'limits-operations': 'Limits and operations',
@@ -73,11 +75,14 @@ export function emptyReason(snapshot: Snapshot, configured: boolean, ready: bool
   return 'Nothing found in the current paragraphs.';
 }
 export function NotebookPanel({ text, save, storageStatus, snapshot, configured, ready, feedback, research,
-  researchAgain, cloudMode = false }: {
+  researchAgain, researchErrors, cloudMode = false, checkThis, sendDraft, declineDraft, reopenDraft }: {
   text: string; save: (value: string) => void; storageStatus: 'loading' | 'saving' | 'saved' | 'error';
   snapshot: Snapshot; configured: boolean; ready: boolean;
   feedback?: (cardId: string, value: Feedback) => void; research?: Record<string, ResearchView>;
-  researchAgain?: (id: string) => Promise<void>; cloudMode?: boolean;
+  researchAgain?: (id: string) => Promise<void>; researchErrors?: Record<string, string>; cloudMode?: boolean;
+  checkThis?: (itemId: string) => Promise<void>;
+  sendDraft?: (cardId: string, text: string) => Promise<void>;
+  declineDraft?: (cardId: string) => Promise<void>; reopenDraft?: (cardId: string) => Promise<void>;
 }) {
   const [researchError, setResearchError] = useState('');
   const heads = lineageHeads(snapshot.lineages ?? []);
@@ -89,7 +94,7 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
   const visibleGroups = storageStatus === 'saved' ? groups.filter(group => group.items.length > 0) : [];
   const unchecked = heads.filter(lineage => lineage.unchecked && !groups.some(group =>
     group.items.some(item => item.lineageId === lineage.lineageId)));
-  const visibleCards = (snapshot.cards ?? []).filter(card => card.questionStatus !== 'waiting');
+  const visibleCards = (snapshot.cards ?? []).filter(card => card.questionStatus !== 'marked' && !card.supersededMark);
   const currentExtractionFailed = storageStatus === 'saved' && snapshot.jobs.some(job => job.step === 'extract' &&
     job.status === 'failed' && snapshot.paragraphs.some(p => p.id === job.paragraphId &&
       p.version === job.paragraphVersion));
@@ -111,6 +116,7 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
       <aside className="panel thoughts"><span className="eyebrow">Alongside your work</span>
         <h2>What your plan relies on</h2>
         {currentExtractionFailed && <p role="status">An extraction stopped after bounded retries.</p>}
+        {researchError && <p role="alert">{researchError}</p>}
         {!hasItems && !currentExtractionFailed && <div className="empty" role="status"><p>{storageStatus === 'saving'
           ? 'Saving changes before checking this plan.' : storageStatus === 'error'
             ? 'Cannot check unsaved changes.' : emptyReason(snapshot, configured, ready, cloudMode)}</p></div>}
@@ -119,12 +125,22 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
           {items.map(item => {
             const head = heads.find(lineage => lineage.lineageId === item.lineageId);
             const previous = snapshot.items.find(candidate => candidate.id === head?.changedFrom);
+            const mark = (snapshot.cards ?? []).find(card => head?.itemId === item.id &&
+              card.itemLineageId === item.lineageId && card.itemVersion === head.version &&
+              card.questionStatus === 'marked' && !card.supersededMark &&
+              lineageEligibility(card.itemLineageId, card.itemVersion, snapshot.paragraphs,
+                snapshot.lineages ?? [], snapshot.jobs) === 'eligible');
             const source = snapshot.jobs.find(job => job.step === 'extract' && job.status === 'done' &&
               job.paragraphId === item.paragraphId && job.paragraphVersion === item.paragraphVersion)?.measuredSource;
             return <article className="item-card" key={item.id}>
               <div><strong>{item.kind}</strong>{source && <span className="muted"> · {
                 source === 'in_cloud' ? 'in the cloud' : 'on device'}</span>}</div>
               <p>{item.text}</p><blockquote>“{item.quote}”</blockquote>
+              {mark?.angle && <p>Worth checking · {angleLabels[mark.angle]}</p>}
+              {checkThis && <button disabled={storageStatus !== 'saved'} onClick={() => {
+                void checkThis(item.id).catch(error => setResearchError(error instanceof Error
+                  ? error.message : 'Could not start this check.'));
+              }}>Check this</button>}
               {head?.status === 'changed' && !head.needsConfirmation && head.paragraphVersion === paragraph.version &&
                 <p>Changed: was “{previous?.text ?? 'earlier statement'}”</p>}
               {head?.needsConfirmation && <p>{head.conflictingEvidence
@@ -140,6 +156,8 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
           const outbox = snapshot.outbox?.find(entry => entry.id === card.outboxId);
           const paragraph = snapshot.paragraphs.find(value => value.id === card.paragraphId);
           const head = heads.find(value => value.lineageId === card.itemLineageId);
+          const eligibility = lineageEligibility(card.itemLineageId, card.itemVersion, snapshot.paragraphs,
+            snapshot.lineages ?? [], snapshot.jobs);
           const failedCheckVisible = card.recheckFailedVersion !== undefined && paragraph &&
             (paragraph.version === card.recheckFailedVersion || head?.paragraphVersion !== paragraph.version);
           const questionStatus = card.questionStatus === 'blocked' ? card.questionReason === 'private detail'
@@ -147,8 +165,9 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
               ? 'question unavailable: the statement changed' : card.questionReason === 'revalidation-failed'
                 ? 'question unavailable: an earlier check stopped' : 'question unavailable after local error'
             : outbox?.status ?? 'preparing';
-          const receipt = outbox && (snapshot.researchReceipts ?? []).filter(value =>
-            value.entryId === outbox.id && value.status === 'completed').sort((a, b) => b.sentAt - a.sentAt)[0];
+          const receipts = outbox ? (snapshot.researchReceipts ?? []).filter(value => value.entryId === outbox.id)
+            .sort((a, b) => b.sentAt - a.sentAt) : [];
+          const receipt = receipts.find(value => value.status === 'completed');
           const questionJob = snapshot.jobs.find(job => job.cardId === card.id && job.step === 'question' &&
             job.status === 'done' && job.measuredSource);
           const angleJob = questionJob && snapshot.jobs.find(job =>
@@ -168,14 +187,23 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
             {stale.stale && <p role="status">Depends on “{card.itemQuote}” — {stale.reasons.map(reason =>
               reason.kind === 'needsConfirmation' ? 'may have changed' :
                 reason.kind === 'removed' ? 'no longer in your plan' : 'changed').join(', ')}</p>}
-            {card.brief ? <p><strong>{angleLabels[card.angle]}:</strong> {card.concern} · {questionStatus}</p> : <>
-              <div><strong>{angleLabels[card.angle]}</strong></div>
-              <blockquote>“{card.itemQuote}”</blockquote><p>{card.concern}</p>
-              <h4>Why this matters for you</h4>
+            {card.askedDirectly ? <p>You asked to check this</p> : card.angle &&
+              <div><strong>{angleLabels[card.angle]}</strong></div>}
+            <blockquote>“{card.itemQuote}”</blockquote>{card.concern && <p>{card.concern}</p>}
+            {!card.askedDirectly && <><h4>Why this matters for you</h4>
               {card.triageVersion === 'v2.1' ? <ProfileBlock card={card} profile={snapshot.profile} /> :
-                <FreshWhy card={card} profile={snapshot.profile} />}
-              <p>{outbox ? `${outbox.question} · ${outbox.status}` : questionStatus}</p>
-            </>}
+                <FreshWhy card={card} profile={snapshot.profile} />}</>}
+            {card.questionStatus === 'blocked' && <p>{questionStatus}</p>}
+            {(eligibility === 'stale' || eligibility === 'terminal') && <p>Your plan changed. Check again.</p>}
+            {(eligibility === 'stale' || eligibility === 'terminal') && checkThis &&
+              <button disabled={!head?.itemId || head.status === 'removed'} onClick={() => {
+                if (head?.itemId) void checkThis(head.itemId)
+                  .catch(() => setResearchError('Could not check the changed statement.'));
+              }}>Check again</button>}
+            <DraftControls card={card} outbox={outbox} receiptStatus={receipts[0]?.status} send={sendDraft}
+              failureCode={receipts[0]?.failureCode} researchError={outbox && researchErrors?.[outbox.id]}
+              decline={declineDraft} reopen={reopenDraft}
+              research={researchAgain} />
             {outbox && research?.[outbox.id] && <section><h4>What the research found</h4>
               {stale.stale && <p role="status">Your plan changed since this was researched.</p>}
               {!isGrounded(research[outbox.id].result) && <p>This answer used no web sources.</p>}

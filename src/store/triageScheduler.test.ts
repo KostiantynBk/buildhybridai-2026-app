@@ -7,7 +7,8 @@ vi.mock('../pipeline/triageVersion', async importOriginal => ({
 
 import type { Job } from '../ai/localModel';
 import { anglesV2 } from '../pipeline/prompts/angles.v2';
-import { questionV2 } from '../pipeline/prompts/question.v2';
+import { questionV21 as questionV2 } from '../pipeline/prompts/question.v2.1';
+import { checkFirstMark } from './t08Fixtures';
 import { whynoteV2 } from '../pipeline/prompts/whynote.v2';
 import { prepareSessionStart, sessionForPlay } from '../eval/sessionPlayer';
 import { openLocalStore } from './index';
@@ -39,16 +40,16 @@ it('runs the durable local pipeline and keeps profile/list sentinels out of forb
   try {
     await scheduler.start();
     await scheduler.tick();
+    await checkFirstMark(store);
     await scheduler.tick();
     await scheduler.tick();
     const snapshot = await store.snapshot();
     expect(snapshot.cards).toHaveLength(1);
     expect(snapshot.cards![0]).toMatchObject({ angle: 'track-record', questionStatus: 'ready', why: { used: ['s1'] } });
-    expect(snapshot.outbox).toHaveLength(1);
-    expect(snapshot.outbox![0]).toMatchObject({ question: 'Which hosting limits apply?', status: 'pending',
-      keptOut: ['client name'] });
-    expect(JSON.stringify(snapshot.outbox)).not.toContain('PROFILE_SENTINEL');
-    expect(JSON.stringify(snapshot.outbox)).not.toContain('NEVER_SEND_SENTINEL');
+    expect(snapshot.outbox).toHaveLength(0);
+    expect(snapshot.cards![0]).toMatchObject({ draftQuestion: 'Which hosting limits apply?',
+      draftKeptOut: ['client name'] });
+    expect(JSON.stringify(snapshot.cards)).not.toContain('NEVER_SEND_SENTINEL');
     const anglesCall = run.mock.calls.find(call => call[0].instructions === anglesV2)![0];
     const questionCall = run.mock.calls.find(call => call[0].instructions === questionV2)![0];
     const whyCall = run.mock.calls.find(call => call[0].instructions === whynoteV2)![0];
@@ -60,9 +61,9 @@ it('runs the durable local pipeline and keeps profile/list sentinels out of forb
     expect(whyCall.prompt).toContain('LESSON_PROFILE_SENTINEL');
     for (const call of run.mock.calls) expect(call[0].prompt).not.toContain('NEVER_SEND_SENTINEL');
     expect((await store.funnel()).map(event => event.event)).toEqual(expect.arrayContaining([
-      'considered', 'picked', 'question', 'outbox',
+      'considered', 'picked', 'question',
     ]));
-    expect(await store.decideOutbox(snapshot.outbox![0].id, 'approved')).toBe(true);
+    expect((await store.approveDraft(snapshot.cards![0].id, 'Which hosting limits apply?')).entryId).toBeDefined();
     expect(await store.setFeedback(snapshot.cards![0].id, 'useful')).toBe(true);
     await store.putNeverSend(['hosting']);
     const events = await store.funnel();
@@ -88,10 +89,11 @@ it('gives a score-zero brief a filtered Outbox question but no why-note job', as
   const service = { state: { kind: 'ready' }, subscribe: () => () => {}, runLocal: run } as unknown as LocalService;
   const scheduler = new Scheduler(store, service, () => 'extract.v2', () => {}, () => 10000);
   try {
-    await scheduler.start(); await scheduler.tick(); await scheduler.tick(); await scheduler.tick();
+    await scheduler.start(); await scheduler.tick();
+    await checkFirstMark(store); await scheduler.tick(); await scheduler.tick();
     const snapshot = await store.snapshot();
     expect(snapshot.cards?.[0]).toMatchObject({ brief: true, score: 0, questionStatus: 'ready' });
-    expect(snapshot.outbox?.[0].status).toBe('pending');
+    expect(snapshot.outbox).toHaveLength(0);
     expect(snapshot.jobs.some(job => job.step === 'whynote')).toBe(false);
     expect(run.mock.calls.some(call => call[0].instructions === whynoteV2)).toBe(false);
   } finally { scheduler.stop(); store.close(); }
@@ -113,7 +115,8 @@ it('uses S1-added terms to hold back a matching question on the normal scheduler
   const service = { state: { kind: 'ready' }, subscribe: () => () => {}, runLocal: run } as unknown as LocalService;
   const scheduler = new Scheduler(store, service, () => 'extract.v2', () => {}, () => 10000);
   try {
-    await scheduler.start(); await scheduler.tick(); await scheduler.tick(); await scheduler.tick();
+    await scheduler.start(); await scheduler.tick();
+    await checkFirstMark(store); await scheduler.tick();
     const snapshot = await store.snapshot();
     expect(snapshot.cards?.[0]).toMatchObject({ questionStatus: 'blocked', questionReason: 'private detail' });
     expect(snapshot.outbox).toHaveLength(0);
@@ -156,6 +159,7 @@ it('blocks a question if the never-send list changes before the result commits',
   try {
     await scheduler.start();
     await scheduler.tick();
+    await checkFirstMark(store);
     const pending = scheduler.tick();
     await vi.waitFor(() => expect(run.mock.calls.some(call => call[0].instructions === questionV2)).toBe(true));
     await store.putNeverSend(['Acme Service']);

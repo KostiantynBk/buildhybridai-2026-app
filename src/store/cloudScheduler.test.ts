@@ -6,6 +6,7 @@ import { questionV21 } from '../pipeline/prompts/question.v2.1';
 import { openLocalStore } from './index';
 import { Scheduler, type LocalService } from './scheduler';
 import { modeRouter } from '../ui/modeRouter';
+import { checkFirstMark } from './t08Fixtures';
 
 it('pauses hidden work, preserves a raced reservation, and resumes once without a duplicate', async () => {
   const store = await openLocalStore(`cloud-visibility-${crypto.randomUUID()}`);
@@ -105,10 +106,14 @@ it('runs the v2.1 cloud pipeline end to end without sending local profile, terms
   const service = { state: { kind: 'ready' }, subscribe: cloud.subscribe, runLocal: cloud.runLocal.bind(cloud) };
   const scheduler = new Scheduler(store, service, () => 'extract.v2', () => {}, () => 20000);
   try {
-    await scheduler.start(); for (let i = 0; i < 6; i++) await scheduler.tick();
+    await scheduler.start(); for (let i = 0; i < 3; i++) await scheduler.tick();
+    expect((await store.snapshot()).outbox).toHaveLength(0);
+    await checkFirstMark(store);
+    for (let i = 0; i < 3; i++) await scheduler.tick();
     const snapshot = await store.snapshot();
     expect(snapshot.cards).toHaveLength(1);
-    expect(snapshot.outbox).toHaveLength(1);
+    expect(snapshot.cards![0].questionStatus).toBe('ready');
+    expect(snapshot.outbox).toHaveLength(0);
     expect(snapshot.jobs.filter(job => job.status === 'done').map(job => job.measuredSource))
       .toEqual(['in_cloud', 'in_cloud', 'in_cloud']);
     expect(snapshot.cloudProcessingSends).toHaveLength(3);

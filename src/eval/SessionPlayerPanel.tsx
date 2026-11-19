@@ -97,8 +97,8 @@ export default function SessionPlayer({ text, save, snapshot, storageStatus, rea
   return <aside className="panel" aria-label="S1 rehearsal player">
     <h2>Developer rehearsal · S1 only</h2>
     <p>Local-only log; it can contain notebook quotes and profile-derived text. Inspect before sharing.
-      S2 and S3 remain held back. This is an on-device-only rehearsal: approve no questions and give feedback
-      on each card after settling. No cloud research is run.</p>
+      S2 and S3 remain held back. This is an on-device-only rehearsal: use Check this to open a card,
+      but do not send questions. Give feedback after settling. No cloud research is run.</p>
     {!playing ? <><label>Profile <select value={profile} onChange={event => setProfile(event.target.value as Profile)}>
       <option value="A">Demo A</option><option value="B">Demo B</option><option value="own">Own profile</option>
     </select></label> <button disabled={storageStatus !== 'saved'} onClick={() => void begin()}>

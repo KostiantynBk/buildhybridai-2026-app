@@ -1,3 +1,4 @@
+import { seedLegacyPending } from './legacyPendingFixture';
 import 'fake-indexeddb/auto';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { expect, it, vi } from 'vitest';
@@ -9,7 +10,8 @@ vi.mock('../pipeline/triageVersion', async importOriginal => ({
 import type { Job } from '../ai/localModel';
 import { anglesV2 } from '../pipeline/prompts/angles.v2';
 import { compareV1 } from '../pipeline/prompts/compare.v1';
-import { questionV2 } from '../pipeline/prompts/question.v2';
+import { questionV21 as questionV2 } from '../pipeline/prompts/question.v2.1';
+import { checkFirstMark } from './t08Fixtures';
 import { whynoteV2 } from '../pipeline/prompts/whynote.v2';
 import { NotebookPanel } from '../ui/NotebookPanel';
 import { openLocalStore } from './index';
@@ -59,21 +61,25 @@ for (const scenario of ['waiting-extraction', 'ready-extraction', 'ready-compari
     let scheduler = new Scheduler(store, service, () => 'extract.v2', () => {}, () => now);
     try {
       await scheduler.start(); await scheduler.tick();
+      await checkFirstMark(store);
       if (scenario !== 'waiting-extraction') await scheduler.tick();
       const inflight = scheduler.tick();
       await vi.waitFor(() => expect(held).toBe(true));
-      const before = await store.snapshot();
+      let before = await store.snapshot();
       const card = before.cards![0];
-      const originalEntryId = before.outbox?.[0]?.id;
+      const approved = scenario !== 'waiting-extraction'
+        ? await store.approveDraft(card.id, card.draftQuestion!) : {};
+      const originalEntryId = approved.entryId;
+      if (scenario !== 'waiting-extraction') expect(originalEntryId).toBeDefined();
+      before = await store.snapshot();
       const originalLineage = card.itemLineageId;
       if (scenario !== 'waiting-extraction') {
-        expect(await store.decideOutbox(before.outbox![0].id, 'approved')).toBe(true);
         const prior = before.outbox![0];
-        expect(await store.queueOutbox({ ...prior, id: 'history-rejected', question: 'What are public limits?' }))
-          .toBe(true);
+        expect(await seedLegacyPending(store, { ...prior, id: 'history-rejected',
+          question: 'What are public limits?' })).toBe(true);
         expect(await store.decideOutbox('history-rejected', 'rejected')).toBe(true);
-        expect(await store.queueOutbox({ ...prior, id: 'history-withdrawn', question: 'What about Private Example?' }))
-          .toBe(true);
+        expect(await seedLegacyPending(store, { ...prior, id: 'history-withdrawn',
+          question: 'What about Private Example?' })).toBe(true);
         await store.putNeverSend(['Private Example']);
         await store.putNeverSend([]);
       }

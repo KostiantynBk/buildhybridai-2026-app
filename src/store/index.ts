@@ -1,6 +1,7 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import { matchParagraphs, type Paragraph } from './matcher';
 import { safeErrorName } from '../ai/errorMetadata';
+import { isResearchFailureCode, type ResearchFailureCode } from '../ai/researchFailure';
 import { calculateStaleness } from './staleness';
 import { lineageEligibility } from './eligibility';
 import { fingerprintRecords, recordSemantics, type RecordFingerprint } from './fingerprint';
@@ -37,7 +38,7 @@ export interface StoredJob {
   step: 'extract' | 'compare' | 'angles' | 'question' | 'whynote';
   promptVersion: 'extract.v1' | 'extract.v2' | 'compare.v1' | 'angles.v1' | 'angles.v2' | 'angles.v2.1' |
     'question.v1' | 'question.v2' | 'question.v2.1' | 'whynote.v1' | 'whynote.v2';
-  lineageId?: string; cardId?: string;
+  lineageId?: string; cardId?: string; requested?: boolean;
   status: 'pending' | 'running' | 'done' | 'superseded' | 'failed'; attempts: number; createdAt: number;
   nextRunAt: number; errorName?: string; measuredSource?: 'on_device' | 'in_cloud';
   runMode?: 'on_device' | 'in_cloud'; cloudEligible?: boolean;
@@ -66,7 +67,8 @@ interface Database extends DBSchema {
   research: { key: number; value: ResearchReceipt };
   cloudProcessing: { key: number; value: { sentAt: number } };
 }
-export type ResearchReceipt = { entryId: string; sentAt: number; status: 'sent' | 'completed' | 'failed' };
+export type ResearchReceipt = { entryId: string; sentAt: number; status: 'sent' | 'completed' | 'failed';
+  failureCode?: ResearchFailureCode };
 export const STORE_VERSION = 6;
 export const CLOUD_PROCESSING_DAILY_LIMIT = 150;
 export const LEGACY_KEY = 'thoughtpartner-notebook';
@@ -104,7 +106,8 @@ function unconsideredItems(items: TriageItem[], considered: Array<{ lineageId: s
 }
 function triageFailure(job: StoredJob, card: ThoughtCard | undefined, now: number):
   { card?: ThoughtCard; event: FunnelEvent } {
-  const updated = card && job.step === 'question' ? { ...card, questionStatus: 'blocked' as const,
+  const updated = card && (job.step === 'question' || (job.step === 'angles' && job.requested))
+    ? { ...card, questionStatus: 'blocked' as const,
     questionReason: 'local-step-failed' as const }
     : card && job.step === 'whynote' ? { ...card, why: null } : card;
   return { card: updated, event: { id: id(), paragraphId: job.paragraphId, paragraphVersion: job.paragraphVersion,
@@ -135,9 +138,11 @@ async function invalidateProfileNotes(cards: ThoughtCard[], jobs: StoredJob[], p
   }
 }
 function outboxEvent(card: ThoughtCard, reason: string, now: number): FunnelEvent {
+  const versions = triagePromptVersions(card.triageVersion ?? 'v1');
   return { id: id(), paragraphId: card.paragraphId, paragraphVersion: card.paragraphVersion,
     event: 'outbox', at: now, reason, cardId: card.id,
-    promptVersions: triagePromptVersions(card.triageVersion ?? 'v1') };
+    promptVersions: { ...versions,
+      question: card.noCheckable ? null : card.questionPromptVersion ?? versions.question } };
 }
 async function resolveTerminalDependents(paragraphs: Paragraph[], versions: LineageVersion[], jobs: StoredJob[],
   cards: ThoughtCard[], entries: OutboxEntry[], now: number, putCard: (card: ThoughtCard) => Promise<unknown>,
@@ -274,10 +279,12 @@ export class LocalStore {
     await tx.done; return key;
   }
   async cancelResearch(key: number): Promise<void> { await this.db.delete('research', key); }
-  async finishResearch(key: number, status: 'completed' | 'failed'): Promise<void> {
+  async finishResearch(key: number, status: 'completed' | 'failed', failureCode?: ResearchFailureCode): Promise<void> {
     const tx = this.db.transaction('research', 'readwrite');
     const receipt = await tx.store.get(key);
-    if (receipt) await tx.store.put({ ...receipt, status }, key);
+    if (receipt) await tx.store.put({ ...receipt, status,
+      ...(status === 'failed' ? { failureCode: isResearchFailureCode(failureCode) ? failureCode : 'unknown' } : {}) },
+    key);
     await tx.done;
   }
   async enqueueAngles(now: number, _mode: 'on_device' | 'in_cloud' = 'on_device'): Promise<void> {
@@ -324,7 +331,9 @@ export class LocalStore {
       await tx.done;
       if (!paragraph || paragraph.version !== job.paragraphVersion || batch) return null;
       const version = versionFromPrompt(job.promptVersion);
-      const eligible = unconsideredItems(currentTriageItems(paragraph, items, versions, version), considered);
+      const current = currentTriageItems(paragraph, items, versions, version);
+      const eligible = job.requested ? current.filter(item => item.lineageId === job.lineageId)
+        : unconsideredItems(current, considered);
       return eligible.length ? { paragraph: paragraph.text, items: eligible } : null;
     } catch (error) {
       try { tx.abort(); } catch { /* Already finished or aborted. */ }
@@ -335,7 +344,7 @@ export class LocalStore {
   async completeAngles(job: StoredJob, input: { paragraph: string; items: TriageItem[] }, concerns: Concern[],
     sessionId: string, now = Date.now(), measuredSource?: 'on_device' | 'in_cloud'): Promise<boolean> {
     const tx = this.db.transaction(['jobs', 'paragraphs', 'items', 'lineageVersions', 'comparisonBatches', 'profile',
-      'cards', 'dependencies', 'funnel', 'anglesConsidered'], 'readwrite');
+      'cards', 'dependencies', 'funnel', 'anglesConsidered', 'meta'], 'readwrite');
     void tx.done.catch(() => undefined);
     try {
       const [current, paragraph, items, versions, batch, profile, cards, considered] = await Promise.all([
@@ -346,6 +355,44 @@ export class LocalStore {
         tx.objectStore('anglesConsidered').getAll(),
       ]);
       const version = versionFromPrompt(job.promptVersion);
+      if (job.requested) {
+        const card = job.cardId ? cards.find(value => value.id === job.cardId) : undefined;
+        const eligible = paragraph && currentTriageItems(paragraph, items, versions, 'v2.1')
+          .filter(item => item.lineageId === job.lineageId);
+        if (!current || current.status !== 'running' || !card || card.questionStatus !== 'waiting' || !paragraph ||
+            batch || paragraph.version !== job.paragraphVersion || paragraph.text !== input.paragraph ||
+            JSON.stringify(eligible) !== JSON.stringify(input.items) || input.items.length !== 1 ||
+            input.items[0].version !== card.itemVersion) {
+          if (current?.status === 'running') {
+            await tx.objectStore('jobs').put({ ...current, status: 'superseded' });
+            if (card?.questionStatus === 'waiting') await tx.objectStore('cards').put({ ...card,
+              questionStatus: 'blocked', questionReason: 'stale' });
+          }
+          await tx.done; return false;
+        }
+        const picked = selectConcerns({ paragraph: paragraph.text, items: input.items, concerns, profile,
+          used: [], angleCounts: {}, version: 'v2.1' }).picked[0];
+        if (!picked) {
+          await tx.objectStore('cards').put({ ...card, questionStatus: 'ready', noCheckable: true, draftQuestion: '' });
+        } else {
+          for (const other of cards) {
+            if (other.id !== card.id && other.questionStatus === 'marked' && !other.supersededMark &&
+                other.itemLineageId === card.itemLineageId && other.itemVersion === card.itemVersion &&
+                (other.angle === picked.angle || other.angle === picked.concern.angle ||
+                  other.sourceAngle === picked.concern.angle)) {
+              await tx.objectStore('cards').put({ ...other, supersededMark: true });
+            }
+          }
+          await tx.objectStore('cards').put({ ...card, angle: picked.angle, sourceAngle: picked.concern.angle,
+            concern: picked.concern.concern, score: picked.score, lessonId: picked.lessonId, brief: false });
+          const mode = (await tx.objectStore('meta').get('cloud-mode-consent'))?.value ? 'in_cloud' : 'on_device';
+          await tx.objectStore('jobs').put({ key: `${job.key}#question#${card.id}`, paragraphId: paragraph.id,
+            paragraphVersion: paragraph.version, step: 'question', promptVersion: 'question.v2.1', cardId: card.id,
+            status: 'pending', attempts: 0, createdAt: now, nextRunAt: now, runMode: mode });
+        }
+        await tx.objectStore('jobs').put({ ...current, status: 'done', measuredSource });
+        await tx.done; return true;
+      }
       if (!current || current.step !== 'angles' || current.status !== 'running' || !paragraph || batch ||
           paragraph.version !== job.paragraphVersion || paragraph.text !== input.paragraph ||
           JSON.stringify(unconsideredItems(currentTriageItems(paragraph, items, versions, version), considered)) !==
@@ -355,20 +402,23 @@ export class LocalStore {
       }
       for (const item of input.items) await tx.objectStore('anglesConsidered').put({ lineageId: item.lineageId,
         version: item.version, recordedAt: now, source: 'adopted' });
-      const used: Pair[] = cards.map(card => ({ lineageId: card.itemLineageId, version: card.itemVersion,
-        angle: card.angle, sourceAngle: card.sourceAngle }));
+      const used: Pair[] = cards.flatMap(card => card.angle && card.sourceAngle ? [{
+        lineageId: card.itemLineageId, version: card.itemVersion, angle: card.angle, sourceAngle: card.sourceAngle,
+      }] : []);
       const angleCounts: Partial<Record<DisplayAngle, number>> = {};
       for (const card of cards.filter(value => value.sessionId === sessionId)) {
-        angleCounts[card.angle] = (angleCounts[card.angle] ?? 0) + 1;
+        if (card.angle) angleCounts[card.angle] = (angleCounts[card.angle] ?? 0) + 1;
       }
       const heads = lineageHeads(versions);
       const priorLiveCards = cards.filter(card => {
         if (card.paragraphId !== paragraph.id || card.paragraphVersion >= paragraph.version ||
-            card.questionStatus === 'waiting' || card.recheckFailedVersion !== undefined) return false;
+            card.questionStatus === 'waiting' || card.recheckFailedVersion !== undefined ||
+            !card.angle || !card.sourceAngle) return false;
         const head = heads.find(value => value.lineageId === card.itemLineageId);
         return head && head.version === card.itemVersion && head.paragraphVersion === paragraph.version &&
           head.status !== 'removed' && !head.unchecked && !head.needsConfirmation;
-      }).map(card => ({ quote: card.itemQuote, angle: card.angle, sourceAngle: card.sourceAngle }));
+      }).flatMap(card => card.angle && card.sourceAngle
+        ? [{ quote: card.itemQuote, angle: card.angle, sourceAngle: card.sourceAngle }] : []);
       const selection = selectConcerns({ paragraph: input.paragraph, items: input.items, concerns, profile, used,
         priorLiveCards, version, angleCounts, alreadyShown: cards.filter(card => card.paragraphId === paragraph.id &&
           card.paragraphVersion === paragraph.version).length });
@@ -393,8 +443,8 @@ export class LocalStore {
           itemKind: source.kind, triageVersion: version, profileRecordIds: pick.profileRecordIds,
           topics: source.topics, angle: pick.angle,
           sourceAngle: pick.concern.angle, concern: pick.concern.concern,
-          score: pick.score, lessonId: pick.lessonId, brief: pick.brief, sessionId, questionStatus: 'waiting',
-          createdAt: now };
+          score: pick.score, lessonId: pick.lessonId, brief: pick.brief, sessionId, questionStatus: 'marked',
+          markAngleJobKey: job.key, createdAt: now };
         await tx.objectStore('cards').put(card);
         await tx.objectStore('dependencies').put({ consumerId: card.id, lineageId: card.itemLineageId,
           version: card.itemVersion });
@@ -404,11 +454,7 @@ export class LocalStore {
           modelOrder: pick.modelOrder, itemIndex: pick.concern.item, concern: pick.concern.concern,
           ...(card.lessonId ? { lessonId: card.lessonId } : {}), cardId: card.id, itemLineageId: card.itemLineageId,
           itemVersion: card.itemVersion });
-        await tx.objectStore('jobs').put({ key: `${job.key}#question#${card.id}`,
-          paragraphId: paragraph.id, paragraphVersion: paragraph.version, step: 'question',
-          promptVersion: triagePromptVersions(version).question,
-          cardId: card.id, status: 'pending', attempts: 0, createdAt: now, nextRunAt: now,
-          runMode: job.runMode ?? 'on_device' });
+
       }
       await tx.objectStore('jobs').put({ ...current, status: 'done', measuredSource });
       await tx.done; return true;
@@ -416,6 +462,77 @@ export class LocalStore {
       try { tx.abort(); } catch { /* Already finished or aborted. */ }
       await tx.done.catch(() => undefined);
       throw error;
+    }
+  }
+  async requestCheck(itemId: string, now = Date.now()): Promise<{ cardId?: string; reason?: string }> {
+    const tx = this.db.transaction(['items', 'paragraphs', 'lineageVersions', 'jobs', 'cards', 'dependencies', 'meta'],
+      'readwrite');
+    void tx.done.catch(() => undefined);
+    try {
+      const item = await tx.objectStore('items').get(itemId);
+      const paragraphs = await tx.objectStore('paragraphs').getAll();
+      const versions = await tx.objectStore('lineageVersions').getAll();
+      const jobs = await tx.objectStore('jobs').getAll();
+      const head = item?.lineageId && lineageHeads(versions).find(value => value.lineageId === item.lineageId);
+      const paragraph = item && paragraphs.find(value => value.id === item.paragraphId);
+      if (!item || !head || !paragraph || item.status !== 'current' || head.itemId !== item.id ||
+          item.paragraphVersion !== paragraph.version ||
+          lineageEligibility(head.lineageId, head.version, paragraphs, versions, jobs) !== 'eligible') {
+        await tx.done; return { reason: 'Checking your latest change or the statement changed.' };
+      }
+      const cards = await tx.objectStore('cards').getAll();
+      const existing = cards.find(card => card.itemLineageId === head.lineageId && card.itemVersion === head.version &&
+        !card.supersededMark && card.questionStatus !== 'marked');
+      if (existing) {
+        if (existing.questionStatus === 'waiting' && existing.askedDirectly &&
+            !jobs.some(job => job.cardId === existing.id && (job.status === 'pending' || job.status === 'running'))) {
+          const previous = jobs.filter(job => job.cardId === existing.id && job.requested && job.step === 'angles');
+          if (previous.some(job => job.status === 'superseded')) {
+            const mode = (await tx.objectStore('meta').get('cloud-mode-consent'))?.value ? 'in_cloud' : 'on_device';
+            await tx.objectStore('jobs').put({ ...previous[previous.length - 1], key: `${id()}#requested`,
+              paragraphVersion: paragraph.version, status: 'pending',
+            attempts: Math.max(...previous.map(j => j.attempts)),
+              createdAt: now, nextRunAt: now, runMode: mode });
+          }
+        }
+        await tx.done; return { cardId: existing.id };
+      }
+      const mark = cards.find(card => card.itemLineageId === head.lineageId && card.itemVersion === head.version &&
+        card.questionStatus === 'marked' && !card.supersededMark);
+      const validAngles = ['end-user', 'cost-at-scale', 'limits-operations', 'security-privacy', 'alternatives'];
+      const fits = mark && typeof mark.concern === 'string' && !!mark.concern.trim() && !!mark.itemText &&
+        !!mark.itemQuote && !!mark.sourceAngle && validAngles.includes(mark.sourceAngle) &&
+        !(item.kind === 'decision' && mark.sourceAngle === 'alternatives');
+      const mode = (await tx.objectStore('meta').get('cloud-mode-consent'))?.value ? 'in_cloud' : 'on_device';
+      if (mark && fits) {
+        const key = `${mark.markAngleJobKey ?? `${paragraph.id}@${paragraph.version}#check`}#question#${mark.id}`;
+        if (!await tx.objectStore('jobs').get(key)) {
+          await tx.objectStore('cards').put({ ...mark, questionStatus: 'waiting' });
+          await tx.objectStore('jobs').put({ key, paragraphId: paragraph.id, paragraphVersion: paragraph.version,
+            step: 'question', promptVersion: 'question.v2.1', cardId: mark.id, status: 'pending', attempts: 0,
+            createdAt: now, nextRunAt: now, runMode: mode });
+        }
+        await tx.done; return { cardId: mark.id };
+      }
+      if (mark) await tx.objectStore('cards').put({ ...mark, supersededMark: true });
+      const eligible = currentTriageItems(paragraph, [item], versions, 'v2.1').length > 0;
+      const cardId = id();
+      const card: ThoughtCard = { id: cardId, paragraphId: paragraph.id, paragraphVersion: paragraph.version,
+        itemLineageId: head.lineageId, itemVersion: head.version, itemText: item.text, itemQuote: item.quote,
+        itemKind: item.kind, triageVersion: 'v2.1', topics: item.topics, score: 0, lessonId: null, brief: false,
+        sessionId: `requested-${cardId}`, questionStatus: eligible ? 'waiting' : 'ready', askedDirectly: true,
+        ...(!eligible ? { noCheckable: true, draftQuestion: '' } : {}), createdAt: now };
+      await tx.objectStore('cards').put(card);
+      await tx.objectStore('dependencies').put({ consumerId: cardId, lineageId: head.lineageId,
+        version: head.version });
+      if (eligible) await tx.objectStore('jobs').put({ key: `${paragraph.id}@${paragraph.version}#requested#${cardId}`,
+        paragraphId: paragraph.id, paragraphVersion: paragraph.version, step: 'angles', promptVersion: 'angles.v2.1',
+        lineageId: head.lineageId, cardId, requested: true, status: 'pending', attempts: 0, createdAt: now,
+        nextRunAt: now, runMode: mode });
+      await tx.done; return { cardId };
+    } catch (error) {
+      try { tx.abort(); } catch { /* Already finished or aborted. */ }
+      await tx.done.catch(() => undefined); throw error;
     }
   }
   async questionInput(job: StoredJob): Promise<{ card: ThoughtCard; neverSend: string[] } | null> {
@@ -460,23 +577,20 @@ export class LocalStore {
       const terms = privacy?.terms ?? [];
       const leak = filterQuestion(question, terms);
       const eventBase = { paragraphId: paragraph.id, paragraphVersion: paragraph.version, at: now, cardId: card.id,
-        promptVersions: triagePromptVersions(card.triageVersion ?? 'v1') };
+        promptVersions: { ...triagePromptVersions(card.triageVersion ?? 'v1'), question: job.promptVersion } };
       if (!passedAtGeneration || !leak.passed) {
         await tx.objectStore('cards').put({ ...card, questionStatus: 'blocked', questionReason: 'private detail' });
         await tx.objectStore('funnel').put({ ...eventBase, id: id(), event: 'question', reason: 'private detail' });
       } else {
-        const outboxId = id();
-        await tx.objectStore('outbox').put({ id: outboxId, question,
-          keptOut: keptOut.filter(value => filterQuestion(value, terms).passed), cardId: card.id,
-          itemLineageId: card.itemLineageId, itemVersion: card.itemVersion, status: 'pending', createdAt: now });
-        await tx.objectStore('cards').put({ ...card, questionStatus: 'ready', outboxId });
+        await tx.objectStore('cards').put({ ...card, questionStatus: 'ready', draftQuestion: question,
+          questionPromptVersion: job.promptVersion,
+          draftKeptOut: keptOut.filter(value => filterQuestion(value, terms).passed) });
         await tx.objectStore('funnel').put({ ...eventBase, id: id(), event: 'question', reason: 'passed' });
-        await tx.objectStore('funnel').put({ ...eventBase, id: id(), event: 'outbox', reason: 'pending' });
         const whyPromptVersion = triagePromptVersions(card.triageVersion ?? 'v1').whynote;
-        if (!card.brief && whyPromptVersion) await tx.objectStore('jobs').put({ key: `${job.key}#whynote`,
-          paragraphId: paragraph.id, paragraphVersion: paragraph.version, step: 'whynote',
-          promptVersion: whyPromptVersion, cardId: card.id,
-          status: 'pending', attempts: 0, createdAt: now, nextRunAt: now });
+        if (!card.brief && !card.askedDirectly && whyPromptVersion) await tx.objectStore('jobs').put({
+          key: `${job.key}#whynote`, paragraphId: paragraph.id, paragraphVersion: paragraph.version, step: 'whynote',
+          promptVersion: whyPromptVersion, cardId: card.id, status: 'pending', attempts: 0, createdAt: now,
+          nextRunAt: now, runMode: 'on_device' });
       }
       await tx.objectStore('jobs').put({ ...current, status: 'done', measuredSource });
       await tx.done; return true;
@@ -497,11 +611,11 @@ export class LocalStore {
       const outbox = card?.outboxId ? await tx.objectStore('outbox').get(card.outboxId) : undefined;
       await tx.done;
       const head = card && lineageHeads(versions).find(value => value.lineageId === card.itemLineageId);
-      if (!card || !outbox || outbox.status === 'withdrawn' || !paragraph ||
+      if (!card || (!card.draftQuestion && !outbox) || outbox?.status === 'withdrawn' || !paragraph ||
           paragraph.version !== job.paragraphVersion ||
           !head || head.version !== card.itemVersion || head.status === 'removed' || head.needsConfirmation ||
           head.unchecked) return null;
-      return { card, question: outbox.question, profile };
+      return { card, question: card.draftQuestion ?? outbox!.question, profile };
     } catch (error) {
       try { tx.abort(); } catch { /* Already finished or aborted. */ }
       await tx.done.catch(() => undefined);
@@ -540,7 +654,9 @@ export class LocalStore {
           whyRefreshCount: 0 });
         if (whyDropped && note) await tx.objectStore('funnel').put({ id: id(), paragraphId: paragraph.id,
           paragraphVersion: paragraph.version, event: 'why', at: Date.now(), cardId: card.id,
-          reason: 'why dropped: unsupported claim', promptVersions: triagePromptVersions(card.triageVersion ?? 'v1') });
+          reason: 'why dropped: unsupported claim', promptVersions: {
+            ...triagePromptVersions(card.triageVersion ?? 'v1'),
+            question: card.questionPromptVersion ?? triagePromptVersions(card.triageVersion ?? 'v1').question } });
       }
       await tx.objectStore('jobs').put({ ...current, status: 'done' });
       await tx.done; return true;
@@ -661,6 +777,11 @@ export class LocalStore {
         if ((!current || current.version !== job.paragraphVersion) &&
             (job.status === 'pending' || job.status === 'running')) {
           await tx.objectStore('jobs').put({ ...job, status: 'superseded' });
+          if (!current && job.requested && job.cardId) {
+            const card = await tx.objectStore('cards').get(job.cardId);
+            if (card?.questionStatus === 'waiting') await tx.objectStore('cards').put({ ...card,
+              questionStatus: 'blocked', questionReason: 'stale' });
+          }
           if (job.cardId && (job.step === 'question' || job.step === 'whynote')) {
             const card = await tx.objectStore('cards').get(job.cardId);
             if (current && card) {
@@ -670,6 +791,11 @@ export class LocalStore {
               await tx.objectStore('cards').put({ ...card, questionStatus: 'blocked', questionReason: 'stale' });
             }
           }
+        }
+      }
+      for (const card of await tx.objectStore('cards').getAll()) {
+        if (!byId.has(card.paragraphId) && card.askedDirectly && card.questionStatus === 'waiting') {
+          await tx.objectStore('cards').put({ ...card, questionStatus: 'blocked', questionReason: 'stale' });
         }
       }
       for (const item of await tx.objectStore('items').getAll()) {
@@ -872,8 +998,8 @@ export class LocalStore {
     for (const batch of await this.db.getAll('comparisonBatches')) await this.finalizeBatch(batch.key);
   }
   private async finalizeBatch(key: string): Promise<boolean> {
-    const tx = this.db.transaction(['comparisonBatches', 'paragraphs', 'items', 'lineageVersions', 'cards'],
-      'readwrite');
+    const tx = this.db.transaction(['comparisonBatches', 'paragraphs', 'items', 'lineageVersions', 'cards',
+      'jobs', 'meta'], 'readwrite');
     void tx.done.catch(() => undefined);
     try {
       const batch = await tx.objectStore('comparisonBatches').get(key);
@@ -937,6 +1063,25 @@ export class LocalStore {
           createdAt: item.createdAt, order: item.order });
       }
       await tx.objectStore('comparisonBatches').delete(key);
+      const versions = await tx.objectStore('lineageVersions').getAll();
+      const jobs = await tx.objectStore('jobs').getAll();
+      const mode = (await tx.objectStore('meta').get('cloud-mode-consent'))?.value ? 'in_cloud' : 'on_device';
+      for (const card of cards.filter(value => value.paragraphId === paragraph.id && value.askedDirectly &&
+        value.questionStatus === 'waiting')) {
+        const previous = jobs.filter(job => job.cardId === card.id && job.requested && job.step === 'angles');
+        if (!previous.some(job => job.status === 'superseded') || jobs.some(job => job.cardId === card.id &&
+            (job.status === 'pending' || job.status === 'running'))) continue;
+        const eligibility = lineageEligibility(card.itemLineageId, card.itemVersion, [paragraph], versions, jobs);
+        if (eligibility === 'stale' || eligibility === 'terminal') {
+          await tx.objectStore('cards').put({ ...card, questionStatus: 'blocked', questionReason: 'stale' });
+        } else if (eligibility === 'eligible') {
+          const now = Date.now();
+          await tx.objectStore('jobs').put({ ...previous[previous.length - 1], key: `${id()}#requested`,
+            paragraphVersion: paragraph.version, status: 'pending',
+            attempts: Math.max(...previous.map(j => j.attempts)),
+            createdAt: now, nextRunAt: now, runMode: mode });
+        }
+      }
       await tx.done;
       return true;
     } catch (error) {
@@ -946,11 +1091,18 @@ export class LocalStore {
     }
   }
   async supersedeJob(job: StoredJob): Promise<void> {
-    const tx = this.db.transaction('jobs', 'readwrite');
+    const tx = this.db.transaction(['jobs', 'cards'], 'readwrite');
     void tx.done.catch(() => undefined);
     try {
-      const current = await tx.store.get(job.key);
-      if (current?.status === 'running') await tx.store.put({ ...current, status: 'superseded' });
+      const current = await tx.objectStore('jobs').get(job.key);
+      if (current?.status === 'running') {
+        await tx.objectStore('jobs').put({ ...current, status: 'superseded' });
+        if (current.requested && current.cardId) {
+          const card = await tx.objectStore('cards').get(current.cardId);
+          if (card?.questionStatus === 'waiting') await tx.objectStore('cards').put({ ...card,
+            questionStatus: 'blocked', questionReason: 'stale' });
+        }
+      }
       await tx.done;
     } catch (error) {
       try { tx.abort(); } catch { /* Already finished or aborted. */ }
@@ -1046,24 +1198,71 @@ export class LocalStore {
       throw error;
     }
   }
-  async queueOutbox(entry: Omit<OutboxEntry, 'status'>, privateTokens: string[] = []): Promise<boolean> {
-    const tx = this.db.transaction(['outbox', 'privacy', 'lineageVersions'], 'readwrite');
+  async approveDraft(cardId: string, finalText: string, privateTokens: string[] = [], now = Date.now()):
+    Promise<{ entryId?: string; reason?: string }> {
+    const tx = this.db.transaction(['cards', 'outbox', 'privacy', 'lineageVersions', 'paragraphs', 'jobs', 'funnel'],
+      'readwrite');
     void tx.done.catch(() => undefined);
     try {
-      const terms = (await tx.objectStore('privacy').get('never-send'))?.terms ?? [];
-      const head = lineageHeads(await tx.objectStore('lineageVersions').getAll())
-        .find(value => value.lineageId === entry.itemLineageId);
-      if (!head || head.version !== entry.itemVersion || head.status === 'removed' || head.needsConfirmation ||
-          head.unchecked || !filterQuestion(entry.question, terms, privateTokens).passed) {
-        await tx.done; return false;
+      const card = await tx.objectStore('cards').get(cardId);
+      if (!card || card.questionStatus !== 'ready' || card.outboxId) {
+        await tx.done; return { reason: 'This card was already approved or is not ready.' };
       }
-      const keptOut = entry.keptOut.filter(value => filterQuestion(value, terms, privateTokens).passed);
-      await tx.objectStore('outbox').put({ ...entry, keptOut, status: 'pending' });
+      const status = lineageEligibility(card.itemLineageId, card.itemVersion,
+        await tx.objectStore('paragraphs').getAll(), await tx.objectStore('lineageVersions').getAll(),
+        await tx.objectStore('jobs').getAll());
+      if (status !== 'eligible') {
+        await tx.done; return { reason: status === 'checking' ? 'Checking your latest change…'
+          : 'Your plan changed. Check again.' };
+      }
+      if (!finalText.trim()) { await tx.done; return { reason: 'Write a question before sending.' }; }
+      const terms = (await tx.objectStore('privacy').get('never-send'))?.terms ?? [];
+      const leak = filterQuestion(finalText, terms, privateTokens);
+      if (!leak.passed) {
+        const names = { currency: 'money amount', email: 'email address', url: 'web address',
+          'listed-term': 'never-send term', 'private-token': 'private token' };
+        await tx.done;
+        return { reason: `Question held back: ${leak.reasons.map(reason => names[reason]).join(', ')}.` };
+      }
+      const entryId = id();
+      const keptOut = (card.draftKeptOut ?? []).filter(value => filterQuestion(value, terms, privateTokens).passed);
+      await tx.objectStore('outbox').put({ id: entryId, question: finalText, keptOut, cardId: card.id,
+        itemLineageId: card.itemLineageId, itemVersion: card.itemVersion, status: 'approved', createdAt: now,
+        decidedAt: now, edited: finalText !== (card.draftQuestion ?? ''), triageVersion: card.triageVersion,
+        questionPromptVersion: card.questionPromptVersion, questionOrigin: card.noCheckable ? 'manual' : 'model' });
+      await tx.objectStore('cards').put({ ...card, outboxId: entryId });
+      await tx.objectStore('funnel').put(outboxEvent(card, 'approved', now));
+      await tx.done; return { entryId };
+    } catch (error) {
+      try { tx.abort(); } catch { /* Already finished or aborted. */ }
+      await tx.done.catch(() => undefined); throw error;
+    }
+  }
+  async declineDraft(cardId: string, now = Date.now()): Promise<boolean> {
+    const tx = this.db.transaction(['cards', 'funnel'], 'readwrite');
+    void tx.done.catch(() => undefined);
+    try {
+      const card = await tx.objectStore('cards').get(cardId);
+      if (!card || card.questionStatus !== 'ready' || card.outboxId) { await tx.done; return false; }
+      await tx.objectStore('cards').put({ ...card, questionStatus: 'declined' });
+      await tx.objectStore('funnel').put(outboxEvent(card, 'rejected', now));
       await tx.done; return true;
     } catch (error) {
       try { tx.abort(); } catch { /* Already finished or aborted. */ }
-      await tx.done.catch(() => undefined);
-      throw error;
+      await tx.done.catch(() => undefined); throw error;
+    }
+  }
+  async reopenDraft(cardId: string): Promise<boolean> {
+    const tx = this.db.transaction('cards', 'readwrite');
+    void tx.done.catch(() => undefined);
+    try {
+      const card = await tx.store.get(cardId);
+      if (!card || card.questionStatus !== 'declined' || card.outboxId) { await tx.done; return false; }
+      await tx.store.put({ ...card, questionStatus: 'ready' });
+      await tx.done; return true;
+    } catch (error) {
+      try { tx.abort(); } catch { /* Already finished or aborted. */ }
+      await tx.done.catch(() => undefined); throw error;
     }
   }
   async decideOutbox(entryId: string, decision: 'approved' | 'rejected'): Promise<boolean> {

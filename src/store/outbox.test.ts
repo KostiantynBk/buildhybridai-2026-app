@@ -1,3 +1,4 @@
+import { seedLegacyPending } from './legacyPendingFixture';
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { openLocalStore, type LocalStore } from './index';
@@ -23,8 +24,8 @@ function entry(id: string, question: string): Omit<OutboxEntry, 'status'> {
     itemVersion: 1, createdAt: 10 };
 }
 it('withdraws pending and approved entries immediately after adding a matching term', async () => {
-  expect(await store.queueOutbox(entry('pending', 'Does Acme Cloud support this?'))).toBe(true);
-  expect(await store.queueOutbox(entry('approved', 'What are Acme Cloud limits?'))).toBe(true);
+  expect(await seedLegacyPending(store, entry('pending', 'Does Acme Cloud support this?'))).toBe(true);
+  expect(await seedLegacyPending(store, entry('approved', 'What are Acme Cloud limits?'))).toBe(true);
   expect(await store.decideOutbox('approved', 'approved')).toBe(true);
   expect(await store.preSendCheck('approved')).toEqual({ allowed: true, reason: null });
   await store.putNeverSend(['  ACME CLOUD ']);
@@ -37,7 +38,7 @@ it('withdraws pending and approved entries immediately after adding a matching t
   expect(await store.preSendCheck('approved')).toEqual({ allowed: false, reason: 'listed-term' });
 });
 it('withdraws an entry when a newly listed term appears only in kept-out metadata', async () => {
-  expect(await store.queueOutbox({ ...entry('meta', 'What are public hosting limits?'),
+  expect(await seedLegacyPending(store, { ...entry('meta', 'What are public hosting limits?'),
     keptOut: ['client name'] })).toBe(true);
   await store.putNeverSend(['CLIENT NAME']);
   expect((await store.snapshot()).outbox?.[0]).toMatchObject({ status: 'withdrawn', withdrawReason: 'listed-term' });
@@ -45,16 +46,16 @@ it('withdraws an entry when a newly listed term appears only in kept-out metadat
 });
 it('refuses unsafe questions before queueing and never copies private terms into keptOut', async () => {
   await store.putNeverSend(['private-token']);
-  expect(await store.queueOutbox(entry('unsafe', 'Could PRIVATE-TOKEN handle this?'))).toBe(false);
-  expect(await store.queueOutbox({ ...entry('safe', 'What are public service limits?'),
+  expect(await seedLegacyPending(store, entry('unsafe', 'Could PRIVATE-TOKEN handle this?'))).toBe(false);
+  expect(await seedLegacyPending(store, { ...entry('safe', 'What are public service limits?'),
     keptOut: ['client name', 'PRIVATE-TOKEN'] })).toBe(true);
   const outbox = (await store.snapshot()).outbox!;
   expect(outbox).toHaveLength(1);
   expect(outbox[0].keptOut).toEqual(['client name']);
 });
 it('defers approval and pre-send during edit validation, then restores unchanged eligibility', async () => {
-  expect(await store.queueOutbox(entry('pending', 'What are the service limits?'))).toBe(true);
-  expect(await store.queueOutbox(entry('approved', 'How are service limits measured?'))).toBe(true);
+  expect(await seedLegacyPending(store, entry('pending', 'What are the service limits?'))).toBe(true);
+  expect(await seedLegacyPending(store, entry('approved', 'How are service limits measured?'))).toBe(true);
   expect(await store.decideOutbox('approved', 'approved')).toBe(true);
   await store.saveNotebook(`${text} Additional unrelated context.`, 10000);
   expect(await store.decideOutbox('pending', 'approved')).toBe(false);
@@ -72,8 +73,8 @@ it('defers approval and pre-send during edit validation, then restores unchanged
 });
 for (const uncertain of [false, true]) {
   it(`defers during comparison and rejects a ${uncertain ? 'uncertain' : 'changed'} finalized lineage`, async () => {
-    expect(await store.queueOutbox(entry('pending', 'What are the service limits?'))).toBe(true);
-    expect(await store.queueOutbox(entry('approved', 'How are service limits measured?'))).toBe(true);
+    expect(await seedLegacyPending(store, entry('pending', 'What are the service limits?'))).toBe(true);
+    expect(await seedLegacyPending(store, entry('approved', 'How are service limits measured?'))).toBe(true);
     expect(await store.decideOutbox('approved', 'approved')).toBe(true);
     const changed = text.replace('fifty', 'twenty');
     await store.saveNotebook(changed, 10000);
@@ -95,7 +96,7 @@ for (const uncertain of [false, true]) {
   });
 }
 it('keeps a retryable failed comparison in checking rather than withdrawing', async () => {
-  expect(await store.queueOutbox(entry('pending', 'What are the service limits?'))).toBe(true);
+  expect(await seedLegacyPending(store, entry('pending', 'What are the service limits?'))).toBe(true);
   const changed = text.replace('fifty', 'twenty');
   await store.saveNotebook(changed, 10000);
   await store.enqueueSettled(14000, 'extract.v2');
@@ -111,7 +112,7 @@ it('keeps a retryable failed comparison in checking rather than withdrawing', as
   expect(await store.decideOutbox('pending', 'approved')).toBe(false);
 });
 it('keeps approval deferred if a second edit arrives during comparison', async () => {
-  expect(await store.queueOutbox(entry('pending', 'What are the service limits?'))).toBe(true);
+  expect(await seedLegacyPending(store, entry('pending', 'What are the service limits?'))).toBe(true);
   const changed = text.replace('fifty', 'twenty');
   await store.saveNotebook(changed, 10000);
   await store.enqueueSettled(14000, 'extract.v2');
@@ -129,8 +130,8 @@ it('keeps approval deferred if a second edit arrives during comparison', async (
   expect((await store.snapshot()).outbox?.[0].status).toBe('pending');
 });
 it('withdraws stale pending entries and blocks an approved entry at the pre-send hook', async () => {
-  expect(await store.queueOutbox(entry('pending', 'What are the service limits?'))).toBe(true);
-  expect(await store.queueOutbox(entry('approved', 'How are service limits measured?'))).toBe(true);
+  expect(await seedLegacyPending(store, entry('pending', 'What are the service limits?'))).toBe(true);
+  expect(await seedLegacyPending(store, entry('approved', 'How are service limits measured?'))).toBe(true);
   expect(await store.decideOutbox('approved', 'approved')).toBe(true);
   const changed = text.replace('fifty', 'twenty');
   await store.saveNotebook(changed, 10000);

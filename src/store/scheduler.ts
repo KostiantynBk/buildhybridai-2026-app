@@ -130,6 +130,7 @@ export class Scheduler {
           const input = await this.store.questionInput(claimed.job);
           if (!input) { await this.store.supersedeJob(claimed.job); return; }
           const card = input.card;
+          if (!card.sourceAngle || !card.concern) throw new Error('Question concern is unavailable.');
           const result = await runQuestion(run,
             { text: card.itemText, quote: card.itemQuote }, card.sourceAngle, card.concern, input.neverSend, [],
             controller.signal, () => { dispatched = true; }, versionFromPrompt(claimed.job.promptVersion), mode);
@@ -143,6 +144,7 @@ export class Scheduler {
           const input = await this.store.whyInput(claimed.job);
           if (!input) { await this.store.supersedeJob(claimed.job); return; }
           const card = input.card;
+          if (!card.angle || !card.concern) throw new Error('Legacy why-note concern is unavailable.');
           const supplied = chooseProfileRecords(card.topics, input.profile,
             card.angle === 'track-record' ? card.lessonId : undefined);
           const fingerprints = await fingerprintRecords(supplied);

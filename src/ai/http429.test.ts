@@ -27,6 +27,6 @@ it.each(['Too many requests', 'Network request failed'])('does not retry SDK HTT
       finishResearch: vi.fn().mockResolvedValue(undefined) };
     await expect(researchApproved(store, adapter, 'e', 'example')).rejects.toThrow('quota');
     expect(fetch).toHaveBeenCalledOnce();
-    expect(store.finishResearch).toHaveBeenCalledWith(1, 'failed');
+    expect(store.finishResearch).toHaveBeenCalledWith(1, 'failed', 'quota');
   } finally { await deleteApp(app); vi.unstubAllGlobals(); }
 });

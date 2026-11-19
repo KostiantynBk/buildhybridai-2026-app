@@ -1,7 +1,8 @@
 import 'fake-indexeddb/auto';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { ReactElement, ReactNode } from 'react';
-import { openLocalStore, STORE_VERSION } from '../store';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { LocalStore, openLocalStore, STORE_VERSION } from '../store';
 import { openDB } from 'idb';
 
 const h = vi.hoisted(() => {
@@ -38,6 +39,13 @@ const h = vi.hoisted(() => {
 vi.mock('react', async importOriginal => ({ ...await importOriginal<typeof import('react')>(),
   useState: h.useState, useRef: h.useRef, useMemo: h.useMemo, useEffect: h.useEffect }));
 const adapter = vi.hoisted(() => vi.fn().mockResolvedValue({ source: 'in_cloud', text: '{"items":[]}' }));
+const researchAdapter = vi.hoisted(() => vi.fn().mockResolvedValue({ source: 'in_cloud', result: {
+  text: 'Grounded answer fixture', parts: ['Grounded answer fixture'], sources: [], supports: [],
+  suggestions: '', grounded: false,
+} }));
+vi.mock('../ai/cloudResearch', async importOriginal => ({
+  ...await importOriginal<typeof import('../ai/cloudResearch')>(), createCloudAdapter: () => researchAdapter,
+}));
 vi.mock('../ai/cloudProcessing', async importOriginal => ({
   ...await importOriginal<typeof import('../ai/cloudProcessing')>(), createProcessingAdapter: () => adapter,
 }));
@@ -51,6 +59,8 @@ vi.mock('../settings/remoteSettings', async () => {
   return { loadSettings: async () => builtInSettings() };
 });
 import App from './App';
+import { DraftControls } from './DraftControls';
+import { OutboxPage } from './OutboxPage';
 
 type Instance = ReturnType<typeof h.newInstance>;
 function render(instance: Instance): ReactElement {
@@ -93,7 +103,9 @@ function add(type: string, callback: () => void) {
   listeners.get(type)!.add(callback);
 }
 function remove(type: string, callback: () => void) { listeners.get(type)?.delete(callback); }
-afterEach(() => { vi.unstubAllGlobals(); listeners.clear(); Channel.channels.clear(); adapter.mockClear(); });
+afterEach(() => {
+  vi.unstubAllGlobals(); listeners.clear(); Channel.channels.clear(); adapter.mockClear(); researchAdapter.mockClear();
+});
 
 it('reconciles two mounted App instances on opt-in, opt-out and a missed broadcast', async () => {
   vi.stubGlobal('BroadcastChannel', Channel);
@@ -152,6 +164,190 @@ it('reconciles two mounted App instances on opt-in, opt-out and a missed broadca
     await seed.setCloudModeConsent(true);
     for (const callback of listeners.get('visibilitychange') ?? []) callback();
     await vi.waitFor(() => expect(component(b, 'StatusBar').cloudMode).toBe(true));
+  } finally {
+    for (const cleanup of [...a.cleanups, ...b.cleanups]) cleanup();
+    seed.close();
+  }
+}, 15000);
+
+it('queues exactly one question when two App trees check the same mark', async () => {
+  vi.stubGlobal('BroadcastChannel', Channel);
+  vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('localStorage', { getItem: () => null, removeItem: () => {} });
+  const seed = await openLocalStore();
+  await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+  const paragraph = 'The hosting service supports fifty visitors while serving a public catalogue for users.';
+  const quote = 'The hosting service supports fifty visitors';
+  await seed.saveNotebook(paragraph, 0); await seed.enqueueSettled(4000, 'extract.v2');
+  const extract = await seed.claim(4000);
+  await seed.complete(extract!.job, [{ kind: 'assumption', text: 'Fifty visitors', quote, topics: ['hosting'] }], 4000);
+  await seed.finalizeReady(); await seed.enqueueAngles(5000);
+  const angles = await seed.claim(5000);
+  const input = await seed.anglesInput(angles!.job);
+  await seed.completeAngles(angles!.job, input!, [{ item: 1, angle: 'end-user',
+    concern: 'What are the public hosting limits?', checkable: true }], 's', 5000, 'on_device');
+  const state = await seed.snapshot();
+  const item = state.items.find(value => value.lineageId === state.cards![0].itemLineageId)!;
+  const a = h.newInstance(); const b = h.newInstance();
+  try {
+    mount(a); mount(b);
+    await vi.waitFor(() => {
+      expect(component(a, 'NotebookPanel').storageStatus).toBe('saved');
+      expect(component(b, 'NotebookPanel').storageStatus).toBe('saved');
+    });
+    await Promise.all([component(a, 'NotebookPanel').checkThis(item.id),
+      component(b, 'NotebookPanel').checkThis(item.id)]);
+    expect((await seed.snapshot()).jobs.filter(job => job.step === 'question')).toHaveLength(1);
+    expect((await seed.snapshot()).outbox).toHaveLength(0);
+    expect(researchAdapter).not.toHaveBeenCalled();
+  } finally {
+    for (const cleanup of [...a.cleanups, ...b.cleanups]) cleanup();
+    seed.close();
+  }
+}, 15000);
+
+it('shows the persisted withdrawal after a never-send edit immediately after reservation', async () => {
+  vi.stubGlobal('BroadcastChannel', Channel);
+  vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('localStorage', { getItem: () => null, removeItem: () => {} });
+  const seed = await openLocalStore();
+  await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+  const text = 'The hosting service supports fifty visitors while serving a public catalogue for users.';
+  const quote = 'The hosting service supports fifty visitors';
+  await seed.saveNotebook(text, 0); await seed.enqueueSettled(4000, 'extract.v2');
+  const extract = await seed.claim(4000);
+  await seed.complete(extract!.job, [{ kind: 'assumption', text: 'Fifty visitors', quote, topics: ['hosting'] }], 4000);
+  await seed.finalizeReady();
+  const request = await seed.requestCheck((await seed.snapshot()).items[0].id, 5000);
+  const angles = await seed.claim(5000);
+  await seed.completeAngles(angles!.job, (await seed.anglesInput(angles!.job))!, [], 's', 5000, 'on_device');
+  const reserve = LocalStore.prototype.reserveResearch;
+  const spy = vi.spyOn(LocalStore.prototype, 'reserveResearch').mockImplementation(async function (
+    this: LocalStore, entry, limit, now) {
+    const key = await reserve.call(this, entry, limit, now);
+    await this.putNeverSend(['PRIVATE_NAME']);
+    return key;
+  });
+  const app = h.newInstance();
+  try {
+    mount(app);
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').storageStatus).toBe('saved'));
+    await expect(component(app, 'NotebookPanel').sendDraft(request.cardId, 'What about PRIVATE_NAME?'))
+      .rejects.toThrow('Approved, not sent');
+    const panel = component(app, 'NotebookPanel');
+    const snapshot = panel.snapshot;
+    const card = snapshot.cards.find((value: { id: string }) => value.id === request.cardId);
+    const entry = snapshot.outbox[0];
+    expect(entry).toMatchObject({ status: 'withdrawn', withdrawReason: 'listed-term' });
+    h.enter(h.newInstance());
+    const cardTree = DraftControls({ card, outbox: entry, researchError: panel.researchErrors[entry.id] });
+    h.enter(h.newInstance());
+    const outboxTree = OutboxPage({ entries: [entry], snapshot, researchErrors: panel.researchErrors,
+      decide: async () => false, remove: async () => {} });
+    for (const tree of [cardTree, outboxTree]) {
+      expect(JSON.stringify(tree)).toContain('Withdrawn: contains a term on your never-send list.');
+      expect(JSON.stringify(tree)).not.toContain('Approved, not sent');
+    }
+    expect(researchAdapter).not.toHaveBeenCalled();
+  } finally {
+    spy.mockRestore();
+    for (const cleanup of app.cleanups) cleanup();
+    seed.close();
+  }
+}, 15000);
+
+it('shows a failed dispatched search immediately in the actual card and Outbox', async () => {
+  vi.stubGlobal('BroadcastChannel', Channel);
+  vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('localStorage', { getItem: () => null, removeItem: () => {} });
+  researchAdapter.mockRejectedValueOnce(new Error('Research could not be displayed SECRET_PROVIDER_SENTINEL'));
+  const seed = await openLocalStore();
+  await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+  const paragraph = 'The hosting service supports fifty visitors while serving a public catalogue for users.';
+  const quote = 'The hosting service supports fifty visitors';
+  await seed.saveNotebook(paragraph, 0); await seed.enqueueSettled(4000, 'extract.v2');
+  const extract = await seed.claim(4000);
+  await seed.complete(extract!.job, [{ kind: 'assumption', text: 'Fifty visitors', quote, topics: ['hosting'] }], 4000);
+  await seed.finalizeReady();
+  const item = (await seed.snapshot()).items[0];
+  const request = await seed.requestCheck(item.id, 5000);
+  const angles = await seed.claim(5000);
+  await seed.completeAngles(angles!.job, (await seed.anglesInput(angles!.job))!, [], 's', 5000, 'on_device');
+  const app = h.newInstance();
+  try {
+    mount(app);
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').storageStatus).toBe('saved'));
+    await expect(component(app, 'NotebookPanel').sendDraft(request.cardId, 'What are hosting limits?'))
+      .rejects.toThrow('Sent, but the search failed');
+    const snapshot = component(app, 'NotebookPanel').snapshot;
+    expect(snapshot.researchReceipts).toMatchObject([{ status: 'failed', failureCode: 'display-invalid' }]);
+    expect(JSON.stringify(await seed.snapshot())).not.toContain('SECRET_PROVIDER_SENTINEL');
+    const card = snapshot.cards.find((value: { id: string }) => value.id === request.cardId);
+    const entry = snapshot.outbox[0];
+    h.enter(h.newInstance());
+    const cardTree = DraftControls({ card, outbox: entry, receiptStatus: snapshot.researchReceipts[0].status,
+      failureCode: snapshot.researchReceipts[0].failureCode });
+    expect(JSON.stringify(cardTree)).toContain('Sent, but the search failed');
+    h.enter(h.newInstance());
+    const outboxTree = OutboxPage({ entries: [entry], snapshot, decide: async () => false, remove: async () => {} });
+    expect(JSON.stringify(outboxTree)).toContain('Sent, but the search failed');
+    expect(renderToStaticMarkup(cardTree)).not.toContain('SECRET_PROVIDER_SENTINEL');
+    expect(renderToStaticMarkup(outboxTree)).not.toContain('SECRET_PROVIDER_SENTINEL');
+    expect(researchAdapter).toHaveBeenCalledOnce();
+  } finally {
+    for (const cleanup of app.cleanups) cleanup();
+    seed.close();
+  }
+}, 15000);
+
+it('approves and starts research once from two card actions; private edits never reach the adapter', async () => {
+  vi.stubGlobal('BroadcastChannel', Channel);
+  vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('localStorage', { getItem: () => null, removeItem: () => {} });
+  const seed = await openLocalStore();
+  await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+  const paragraph = 'The hosting service supports fifty visitors while serving a public catalogue for users.';
+  const quote = 'The hosting service supports fifty visitors';
+  await seed.saveNotebook(paragraph, 0); await seed.enqueueSettled(4000, 'extract.v2');
+  const extract = await seed.claim(4000);
+  if (!extract) throw new Error('Missing extraction');
+  await seed.complete(extract.job, [{ kind: 'assumption', text: 'Fifty visitors', quote, topics: ['hosting'] }], 4000);
+  await seed.finalizeReady(); await seed.enqueueAngles(5000);
+  const angles = await seed.claim(5000);
+  if (!angles) throw new Error('Missing angles');
+  const input = await seed.anglesInput(angles.job);
+  await seed.completeAngles(angles.job, input!, [{ item: 1, angle: 'end-user',
+    concern: 'What are the public hosting limits?', checkable: true }], 's', 5000, 'on_device');
+  const state = await seed.snapshot();
+  const mark = state.cards![0];
+  const item = state.items.find(value => value.lineageId === mark.itemLineageId)!;
+  await seed.requestCheck(item.id, 6000);
+  const question = await seed.claim(6000);
+  if (!question) throw new Error('Missing question');
+  await seed.completeQuestion(question.job, 'What are hosting limits?', [], true, 7000, 'on_device');
+  await seed.putNeverSend(['SECRET_NAME']);
+  const a = h.newInstance(); const b = h.newInstance();
+  try {
+    mount(a); mount(b);
+    await vi.waitFor(() => {
+      expect(component(a, 'NotebookPanel').storageStatus).toBe('saved');
+      expect(component(b, 'NotebookPanel').storageStatus).toBe('saved');
+    });
+    await expect(component(a, 'NotebookPanel').sendDraft(mark.id, 'What about SECRET_NAME?'))
+      .rejects.toThrow('never-send');
+    expect(researchAdapter).not.toHaveBeenCalled();
+    const results = await Promise.allSettled([
+      component(a, 'NotebookPanel').sendDraft(mark.id, 'What are hosting limits today?'),
+      component(b, 'NotebookPanel').sendDraft(mark.id, 'What are hosting limits today?'),
+    ]);
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    expect(researchAdapter).toHaveBeenCalledOnce();
+    expect(researchAdapter).toHaveBeenCalledWith('What are hosting limits today?', 'gemini-3.5-flash-lite');
+    expect((await seed.snapshot()).outbox).toMatchObject([{ status: 'approved', edited: true }]);
   } finally {
     for (const cleanup of [...a.cleanups, ...b.cleanups]) cleanup();
     seed.close();

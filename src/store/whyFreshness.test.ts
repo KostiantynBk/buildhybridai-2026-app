@@ -7,7 +7,8 @@ vi.mock('../pipeline/triageVersion', async importOriginal => ({
 
 import type { Job } from '../ai/localModel';
 import { anglesV2 } from '../pipeline/prompts/angles.v2';
-import { questionV2 } from '../pipeline/prompts/question.v2';
+import { questionV21 as questionV2 } from '../pipeline/prompts/question.v2.1';
+import { checkFirstMark } from './t08Fixtures';
 import { whynoteV2 } from '../pipeline/prompts/whynote.v2';
 import { openLocalStore, type ProfileRecord } from './index';
 import { Scheduler, type LocalService } from './scheduler';
@@ -41,7 +42,8 @@ for (const { used, initialDelete } of [{ used: [] as string[], initialDelete: fa
     const service = { state: { kind: 'ready' }, subscribe: () => () => {}, runLocal: run } as unknown as LocalService;
     const scheduler = new Scheduler(store, service, () => 'extract.v2', () => {});
     try {
-      await scheduler.start(); await scheduler.tick(); await scheduler.tick();
+      await scheduler.start(); await scheduler.tick();
+      await checkFirstMark(store); await scheduler.tick();
       const first = scheduler.tick();
       await vi.waitFor(() => expect(releases).toHaveLength(1));
       if (initialDelete) await store.deleteProfile('b');
@@ -82,7 +84,8 @@ it('keeps notes on additions and hides a committed note when a supplied record c
   const service = { state: { kind: 'ready' }, subscribe: () => () => {}, runLocal: run } as unknown as LocalService;
   const scheduler = new Scheduler(store, service, () => 'extract.v2', () => {});
   try {
-    await scheduler.start(); await scheduler.tick(); await scheduler.tick(); await scheduler.tick();
+    await scheduler.start(); await scheduler.tick();
+    await checkFirstMark(store); await scheduler.tick(); await scheduler.tick();
     let snapshot = await store.snapshot();
     expect(snapshot.cards?.[0].why).not.toBeNull();
     expect(snapshot.cards?.[0].whyFingerprints?.map(value => value.id)).toEqual(['a', 'b']);

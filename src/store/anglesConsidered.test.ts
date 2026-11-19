@@ -9,7 +9,7 @@ vi.mock('../pipeline/triageVersion', async importOriginal => ({
 import type { Job } from '../ai/localModel';
 import { anglesV2 } from '../pipeline/prompts/angles.v2';
 import { compareV1 } from '../pipeline/prompts/compare.v1';
-import { questionV2 } from '../pipeline/prompts/question.v2';
+import { questionV21 as questionV2 } from '../pipeline/prompts/question.v2.1';
 import { whynoteV2 } from '../pipeline/prompts/whynote.v2';
 import { openLocalStore } from './index';
 import { Scheduler, type LocalService } from './scheduler';
@@ -202,12 +202,15 @@ for (const { addUnrelated, decision } of [
       expect(snapshot.cards).toHaveLength(2);
       const original = [...snapshot.cards!];
       const hostingCard = original.find(card => card.topics.includes('hosting'))!;
-      const entryId = snapshot.outbox!.find(entry => entry.cardId === hostingCard.id)?.id;
-      if (decision === 'blocked') expect(hostingCard.questionStatus).toBe('blocked');
-      else {
-        expect(entryId).toBeDefined();
-        expect(await store.decideOutbox(entryId!, decision)).toBe(true);
-      }
+      const hostingItem = snapshot.items.find(item => item.lineageId === hostingCard.itemLineageId)!;
+      await store.requestCheck(hostingItem.id, 0);
+      for (let i = 0; i < 4; i++) await scheduler.tick();
+      snapshot = await store.snapshot();
+      const checked = snapshot.cards!.find(card => card.id === hostingCard.id)!;
+      let entryId: string | undefined;
+      if (decision === 'blocked') expect(checked.questionStatus).toBe('blocked');
+      else if (decision === 'rejected') expect(await store.declineDraft(checked.id)).toBe(true);
+      else entryId = (await store.approveDraft(checked.id, checked.draftQuestion!)).entryId;
       const prior = snapshot.paragraphs;
       const edited = base.replace('my friend Marta', 'my friend Marta and her sister')
         .replace('My friend Marta', 'My friend Marta and her sister');
@@ -234,7 +237,10 @@ for (const { addUnrelated, decision } of [
       }
       expect((await store.funnel()).some(event => event.event === 'held' && event.reason === 'repeat')).toBe(true);
       for (const card of original) expect(snapshot.cards!.some(value => value.id === card.id)).toBe(true);
-      if (entryId) expect(snapshot.outbox!.find(entry => entry.id === entryId)?.status).toBe(decision);
+      if (decision === 'approved') {
+        expect(entryId).toBeDefined();
+        expect(snapshot.outbox!.find(entry => entry.id === entryId)?.status).toBe('approved');
+      } else expect(snapshot.outbox).toHaveLength(0);
       expect((await store.staleness(hostingCard.id)).stale).toBe(false);
     } finally { scheduler.stop(); store.close(); }
   });

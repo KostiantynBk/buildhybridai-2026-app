@@ -2,8 +2,25 @@ import { useState } from 'react';
 import type { OutboxEntry } from '../store/triageTypes';
 import type { Snapshot } from '../store';
 import { lineageEligibility } from '../store/eligibility';
+import { researchFailureMessage } from '../ai/researchFailure';
 
-export function OutboxPage({ entries, decide, remove, snapshot, saving = false, research }: { entries: OutboxEntry[];
+export function withdrawalText(entry: OutboxEntry): string {
+  return entry.withdrawReason === 'listed-term' ? 'Withdrawn: contains a term on your never-send list.' :
+    entry.withdrawReason === 'stale' ? 'Withdrawn: the statement changed or needs checking.' :
+      'Withdrawn: the question did not pass the privacy filter.';
+}
+function statusText(entry: OutboxEntry, snapshot?: Snapshot, sessionError?: string): string {
+  if (entry.status === 'withdrawn') return withdrawalText(entry);
+  if (entry.status !== 'approved') return `Status: ${entry.status}`;
+  const receipts = (snapshot?.researchReceipts ?? []).filter(value => value.entryId === entry.id)
+    .sort((a, b) => b.sentAt - a.sentAt);
+  return receipts[0]?.status === 'completed' ? 'Research completed' : receipts[0]?.status === 'sent'
+    ? 'Research request sent' : receipts[0]?.status === 'failed'
+      ? `Sent, but the search failed: ${researchFailureMessage(receipts[0].failureCode)}`
+      : sessionError || 'Approved, not sent';
+}
+export function OutboxPage({ entries, decide, remove, snapshot, saving = false, research, researchErrors }: {
+  entries: OutboxEntry[]; researchErrors?: Record<string, string>;
   snapshot?: Snapshot; saving?: boolean; research?: (id: string) => Promise<void>;
   decide(id: string, value: 'approved' | 'rejected'): Promise<boolean>; remove(id: string): Promise<void> }) {
   const [error, setError] = useState('');
@@ -22,12 +39,11 @@ export function OutboxPage({ entries, decide, remove, snapshot, saving = false, 
     {error && <p role="alert">{error}</p>}
     {[...entries].sort((a, b) => b.createdAt - a.createdAt).map(entry => <article className="item-card" key={entry.id}>
       <p>{entry.question}</p>
-      <p>{entry.status === 'withdrawn' ? entry.withdrawReason === 'listed-term'
-        ? 'Withdrawn: contains a term on your never-send list.'
-        : entry.withdrawReason === 'stale' ? 'Withdrawn: the statement changed or needs checking.'
-          : 'Withdrawn: the question did not pass the privacy filter.'
-        : `Status: ${entry.status}`}</p>
+      <p>{statusText(entry, snapshot, researchErrors?.[entry.id])}</p>
       {entry.keptOut.length > 0 && <p>Left out of the question: {entry.keptOut.join(', ')}</p>}
+      {entry.questionOrigin === 'manual' ? <p>Question written by you.</p> : entry.questionPromptVersion &&
+        <p>Question prompt: {entry.questionPromptVersion}
+          {entry.triageVersion ? ` · Triage: ${entry.triageVersion}` : ''}</p>}
       {entry.status === 'pending' && (() => {
         const eligibility = saving ? 'checking' : snapshot ? lineageEligibility(entry.itemLineageId, entry.itemVersion,
           snapshot.paragraphs, snapshot.lineages ?? [], snapshot.jobs) : 'checking';
@@ -38,7 +54,8 @@ export function OutboxPage({ entries, decide, remove, snapshot, saving = false, 
           <button onClick={() => respond(entry.id, 'rejected')}>Reject</button>
         </div>;
       })()}
-      {entry.status === 'approved' && research && <button disabled={saving} onClick={() => {
+      {entry.status === 'approved' && entry.edited === undefined && research && <button disabled={saving}
+        onClick={() => {
         void research(entry.id).then(() => setError('')).catch(error => setError(
           error instanceof Error ? error.message : 'Research could not be completed.'));
       }}>Research this question</button>}{' '}

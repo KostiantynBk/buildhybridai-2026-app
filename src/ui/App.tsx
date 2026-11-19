@@ -12,6 +12,7 @@ import { StatusBar } from './StatusBar';
 import { STORAGE_BLOCKED_NOTICE, STORAGE_OUTDATED_NOTICE } from './storageNotices';
 import { createCloudAdapter } from '../ai/cloudResearch';
 import { researchApproved, type ResearchView } from '../ai/researchFlow';
+import { safeResearchErrorMessage } from '../ai/researchFailure';
 import type { ResearchMetric } from '../eval/Run4Panel';
 import { run4Provenance } from '../eval/run4Provenance';
 import { CloudProcessingService, createProcessingAdapter } from '../ai/cloudProcessing';
@@ -33,6 +34,7 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
   const [storageNotice, setStorageNotice] = useState('');
   const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
   const [research, setResearch] = useState<Record<string, ResearchView>>({});
+  const [researchErrors, setResearchErrors] = useState<Record<string, string>>({});
   const [cloudConsent, setCloudConsent] = useState(false);
   const [cloudMode, setCloudMode] = useState(false);
   const renderedModeRef = useRef(false);
@@ -167,16 +169,18 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
     setText(value);
     const sequence = ++revision.current;
     schedulerRef.current?.edited(value, snapshotRef.current.paragraphs);
-    setStorageStatus('saving');
+    storageStatusRef.current = 'saving'; setStorageStatus('saving');
     writes.current = writes.current.catch(() => undefined).then(async () => {
       const store = storeRef.current;
       if (!store) throw new Error('Local storage unavailable.');
       await store.saveNotebook(value);
       await refreshData();
       if (sequence === revision.current && mounted.current) {
-        setStorageStatus('saved'); schedulerRef.current?.saved();
+        storageStatusRef.current = 'saved'; setStorageStatus('saved'); schedulerRef.current?.saved();
       }
-    }).catch(() => { if (mounted.current) setStorageStatus('error'); });
+    }).catch(() => {
+      if (mounted.current) { storageStatusRef.current = 'error'; setStorageStatus('error'); }
+    });
   };
   const changeProfile = async (operation: (store: LocalStore) => Promise<void>) => {
     if (clearing.current) throw new Error('Local deletion in progress.');
@@ -190,7 +194,7 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
     clearing.current = true;
     ++revision.current;
     schedulerRef.current?.edited();
-    setStorageStatus('saving');
+    storageStatusRef.current = 'saving'; setStorageStatus('saving');
     try {
       await writes.current;
       const store = storeRef.current;
@@ -198,13 +202,13 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
       await store.clearAll(localStorage);
       cloudConsentRef.current = false; setCloudConsent(false);
       announceMode();
-      setResearch({}); setResearchMetrics([]);
+      setResearch({}); setResearchErrors({}); setResearchMetrics([]);
       setText('');
       await refreshData();
-      setStorageStatus('saved');
+      storageStatusRef.current = 'saved'; setStorageStatus('saved');
       schedulerRef.current?.saved();
     } catch {
-      setStorageStatus('error');
+      storageStatusRef.current = 'error'; setStorageStatus('error');
       throw new Error('Local deletion failed.');
     } finally {
       clearing.current = false;
@@ -237,16 +241,19 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
   };
   const researchQuestion = async (id: string) => {
     const store = storeRef.current;
-    if (!config || !store) throw new Error('Firebase or local storage is unavailable.');
-    if (!settingsRef.current.values.cloud_enabled) throw new Error('Cloud research is currently disabled.');
     if (inFlight.current.has(id)) throw new Error('Research is already in progress for this question.');
     inFlight.current.add(id);
+    let attempted = false;
     try {
+      if (!config || !store) throw new Error('Firebase or local storage is unavailable.');
+      if (!settingsRef.current.values.cloud_enabled) throw new Error('Cloud research is currently disabled.');
       if (!await store.cloudConsent()) {
         const entry = (await store.snapshot()).outbox?.find(value => value.id === id && value.status === 'approved');
         if (!entry) throw new Error('Approve this question before researching it.');
         if (!window.confirm("This question, and nothing else from your notebook or profile, goes to " +
-            `Google's Gemini API with Google Search:\n\n${entry.question}\n\nContinue?`)) return;
+            `Google's Gemini API with Google Search:\n\n${entry.question}\n\nContinue?`)) {
+          throw new Error('Research consent was not granted.');
+        }
         await store.setCloudConsent(true);
       }
       cloudConsentRef.current = true; setCloudConsent(true);
@@ -262,6 +269,7 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
             cloudConsentRef.current && storeRef.current === store,
           planUnchanged: () => storageStatusRef.current === 'saved' && revision.current === initialRevision,
           onAttempt: () => {
+            attempted = true;
             const thisId = crypto.randomUUID();
             attemptId = thisId;
             setResearchMetrics(current => [...current, { id: thisId, questionId: id, latencyMs: null,
@@ -275,8 +283,15 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
       const completedId = attemptId;
       setResearchMetrics(current => current.map(row => row.id === completedId ? { ...row, displayed: true } : row));
       setResearch(current => ({ ...current, [id]: view }));
+      setResearchErrors(current => ({ ...current, [id]: '' }));
       await refreshData();
       setPage('Notebook');
+    } catch (error) {
+      const reason = safeResearchErrorMessage(error);
+      try { if (store && storeRef.current === store) await refreshData(); } catch { /* Preserve the original error. */ }
+      const message = `${attempted ? 'Sent, but the search failed' : 'Approved, not sent'}: ${reason}`;
+      setResearchErrors(current => ({ ...current, [id]: message }));
+      throw new Error(message);
     } finally { inFlight.current.delete(id); }
   };
   return (
@@ -294,8 +309,30 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
       <main>{page === 'Notebook' ? <NotebookPanel text={text} save={save} storageStatus={storageStatus}
         snapshot={snapshot} configured={config !== null}
         ready={cloudMode ? settings.values.cloud_enabled : service.state.kind === 'ready'} cloudMode={cloudMode}
-        research={research} researchAgain={researchQuestion}
-        feedback={(cardId, value) => {
+        research={research} researchErrors={researchErrors} researchAgain={researchQuestion}
+        checkThis={async itemId => {
+          const store = storeRef.current;
+          if (!store) throw new Error('Local storage unavailable.');
+          const result = await store.requestCheck(itemId);
+          if (result.reason) throw new Error(result.reason);
+          await refreshData(); void schedulerRef.current?.tick();
+        }} sendDraft={async (cardId, text) => {
+          const store = storeRef.current;
+          if (!store) throw new Error('Local storage unavailable.');
+          if (storageStatusRef.current !== 'saved') throw new Error('Checking your latest change…');
+          const result = await store.approveDraft(cardId, text);
+          if (!result.entryId) throw new Error(result.reason ?? 'Could not approve this question.');
+          try { await refreshData(); } catch { throw new Error('Approved, not sent: local refresh failed.'); }
+          await researchQuestion(result.entryId);
+        }} declineDraft={async cardId => {
+          const store = storeRef.current;
+          if (!store || !await store.declineDraft(cardId)) throw new Error('Could not decline this question.');
+          await refreshData();
+        }} reopenDraft={async cardId => {
+          const store = storeRef.current;
+          if (!store || !await store.reopenDraft(cardId)) throw new Error('Could not reopen this question.');
+          await refreshData();
+        }} feedback={(cardId, value) => {
           void changeProfile(async store => { await store.setFeedback(cardId, value); })
             .catch(() => setStorageStatus('error'));
         }} /> :
@@ -312,6 +349,7 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
             await store.setCloudConsent(false); cloudConsentRef.current = false; setCloudConsent(false);
           }} /> :
           page === 'Outbox' ? <OutboxPage entries={snapshot.outbox ?? []} snapshot={snapshot}
+            researchErrors={researchErrors}
             saving={storageStatus !== 'saved'} research={researchQuestion} decide={async (id, value) => {
             const store = storeRef.current;
             if (!store) throw new Error('Local storage unavailable.');

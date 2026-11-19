@@ -1,37 +1,27 @@
 import type { LocalStore } from '../store';
 import { HARD_DAILY_CLOUD_BUDGET } from '../settings/defaults';
 import { isGrounded, sendChecked, type CloudAdapter, type ResearchResult } from './cloudResearch';
+import { researchFailureMessage, type ResearchFailureCode } from './researchFailure';
 
 export type ResearchView = { result: ResearchResult; changedAfterSend: boolean; sentAt: number;
   latencyMs: number; attempts: number };
 type Store = Pick<LocalStore, 'snapshot' | 'preSendCheck' | 'reserveResearch' | 'finishResearch' |
   'cancelResearch' | 'cloudConsent'>;
 
-export function researchError(error: unknown): { network: boolean; message: string } {
+export function researchError(error: unknown): { network: boolean; message: string; code: ResearchFailureCode } {
   const value = error as { code?: string; name?: string; message?: string;
     customErrorData?: { status?: number }; customData?: { status?: number } };
   const status = value?.customErrorData?.status ?? value?.customData?.status;
   const message = value?.message ?? '';
-  if (status === 429) {
-    return { network: false, message: 'Research quota is exhausted. Try again later.' };
-  }
-  if (/billing|paid tier|paid service|billing account/i.test(message)) {
-    return { network: false, message: 'Search research requires billing on the Firebase project.' };
-  }
-  if (/quota|resource.exhausted/i.test(message)) {
-    return { network: false, message: 'Research quota is exhausted. Try again later.' };
-  }
-  if (/safety|blocked/i.test(message)) {
-    return { network: false, message: 'Research was blocked by the provider’s safety checks.' };
-  }
   const network = status === undefined && (value?.name === 'NetworkError' ||
     /failed to fetch|networkerror|network request failed|load failed/i.test(message));
-  if (network) return { network: true, message: 'Network error while researching. Please try again.' };
-  if (message === 'Cloud research did not run in the cloud.' ||
-      message.startsWith('Research could not be displayed')) return { network: false, message };
-  return { network: false, message: status === 403
-    ? 'Research was denied. Check Firebase permissions and whether billing is enabled.'
-    : 'Research could not be completed. Check billing, connection and project settings.' };
+  const code: ResearchFailureCode = status === 429 ? 'quota' :
+    /billing|paid tier|paid service|billing account/i.test(message) ? 'billing' :
+      /quota|resource.exhausted/i.test(message) ? 'quota' : /safety|blocked/i.test(message) ? 'safety' :
+        network ? 'network' : message === 'Cloud research did not run in the cloud.' ? 'source-invalid' :
+          message.startsWith('Research could not be displayed') ? 'display-invalid' :
+            status === 403 ? 'permission' : 'unknown';
+  return { network: code === 'network', code, message: researchFailureMessage(code) };
 }
 
 // Only the stored approved question crosses the adapter boundary. Reservations serialize across tabs.
@@ -84,8 +74,8 @@ export async function researchApproved(
         await store.cancelResearch(reservation).catch(() => undefined);
         throw error;
       }
-      await store.finishResearch(reservation, 'failed').catch(() => undefined);
       const classified = researchError(error);
+      await store.finishResearch(reservation, 'failed', classified.code).catch(() => undefined);
       if (classified.network && attempt === 0) continue;
       throw new Error(classified.message);
     }

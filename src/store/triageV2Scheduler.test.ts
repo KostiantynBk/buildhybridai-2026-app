@@ -8,7 +8,7 @@ vi.mock('../pipeline/triageVersion', async importOriginal => ({
 
 import type { Job } from '../ai/localModel';
 import { anglesV2 } from '../pipeline/prompts/angles.v2';
-import { questionV2 } from '../pipeline/prompts/question.v2';
+import { questionV21 as questionV2 } from '../pipeline/prompts/question.v2.1';
 import { whynoteV2 } from '../pipeline/prompts/whynote.v2';
 import { anglesV1 } from '../pipeline/prompts/angles.v1';
 import { questionV1 } from '../pipeline/prompts/question.v1';
@@ -48,10 +48,10 @@ it('preserves the prompt versions of a previously queued v1 angles job', async (
     await scheduler.start(); await scheduler.tick(); await scheduler.tick();
     const card = (await store.snapshot()).cards![0];
     expect(card.triageVersion).toBe('v1');
-    expect(card.why?.why).toBe('You have not done this.');
+    expect(card.questionStatus).toBe('marked');
     expect(run.mock.calls.some(call => call[0].instructions === anglesV1)).toBe(true);
-    expect(run.mock.calls.some(call => call[0].instructions === questionV1)).toBe(true);
-    expect(run.mock.calls.some(call => call[0].instructions === whynoteV1)).toBe(true);
+    expect(run.mock.calls.some(call => call[0].instructions === questionV1)).toBe(false);
+    expect(run.mock.calls.some(call => call[0].instructions === whynoteV1)).toBe(false);
     expect((await store.funnel()).every(event => event.promptVersions?.angles === 'angles.v1')).toBe(true);
   } finally { scheduler.stop(); store.close(); }
 });
@@ -136,7 +136,12 @@ it('uses v2 for open questions, holds decision alternatives and logs an unsuppor
   const service = { state: { kind: 'ready' }, subscribe: () => () => {}, runLocal: run } as unknown as LocalService;
   const scheduler = new Scheduler(store, service, () => 'extract.v2', () => {}, () => 20000);
   try {
-    await scheduler.start();
+    await scheduler.start(); await scheduler.tick();
+    const marks = await store.snapshot();
+    for (const card of marks.cards ?? []) {
+      const item = marks.items.find(value => value.lineageId === card.itemLineageId)!;
+      await store.requestCheck(item.id, 0);
+    }
     for (let i = 0; i < 8; i++) await scheduler.tick();
     const snapshot = await store.snapshot();
     expect(snapshot.cards).toHaveLength(2);
@@ -148,7 +153,9 @@ it('uses v2 for open questions, holds decision alternatives and logs an unsuppor
     expect(events.some(event => event.reason === 'held back: decision respected')).toBe(true);
     expect(events.filter(event => event.reason === 'why dropped: unsupported claim')).toHaveLength(2);
     expect(events.every(event => event.promptVersions?.angles === 'angles.v2' &&
-      event.promptVersions.question === 'question.v2' && event.promptVersions.whynote === 'whynote.v2')).toBe(true);
+      event.promptVersions.whynote === 'whynote.v2')).toBe(true);
+    expect(events.filter(event => event.event === 'question').every(event =>
+      event.promptVersions?.question === 'question.v2.1')).toBe(true);
     const anglesCall = run.mock.calls.find(call => call[0].instructions === anglesV2)![0];
     expect(anglesCall.prompt).toContain('(open-question) Can customers get refunds?');
     for (const [job] of run.mock.calls) {

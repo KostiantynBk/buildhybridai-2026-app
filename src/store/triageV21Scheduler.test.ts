@@ -12,6 +12,7 @@ import { anglesV1 } from '../pipeline/prompts/angles.v1';
 import { questionV1 } from '../pipeline/prompts/question.v1';
 import { openLocalStore } from './index';
 import { Scheduler, type LocalService } from './scheduler';
+import { checkFirstMark } from './t08Fixtures';
 
 it.each(['v1', 'v2'] as const)('keeps a previously queued %s job pinned including its why-note', async version => {
   const name = `triage-${version}-pinned-${crypto.randomUUID()}`;
@@ -44,9 +45,21 @@ it.each(['v1', 'v2'] as const)('keeps a previously queued %s job pinned includin
   const service = { state: { kind: 'ready' }, subscribe: () => () => {}, runLocal: run } as unknown as LocalService;
   const scheduler = new Scheduler(store, service, () => 'extract.v2', () => {}, () => 20000);
   try {
-    await scheduler.start(); await scheduler.tick(); await scheduler.tick();
-    expect((await store.snapshot()).cards![0]).toMatchObject({ triageVersion: version,
-      why: { seeing: expect.any(String) } });
+    await scheduler.start();
+    const marked = (await store.snapshot()).cards![0];
+    expect(marked).toMatchObject({ triageVersion: version, questionStatus: 'marked' });
+    const raw = await openDB(name, 6);
+    try {
+      await raw.put('cards', { ...marked, questionStatus: 'waiting' });
+      await raw.put('jobs', { key: `legacy-question-${version}`, paragraphId: p.id, paragraphVersion: p.version,
+        step: 'question', promptVersion: `question.${version}`, cardId: marked.id, status: 'pending', attempts: 0,
+        createdAt: 1, nextRunAt: 1 });
+    } finally { raw.close(); }
+    await scheduler.tick(); await scheduler.tick();
+    const completed = await store.snapshot();
+    expect(completed.cards![0]).toMatchObject({ triageVersion: version, questionStatus: 'ready',
+      questionPromptVersion: `question.${version}`, why: { seeing: expect.any(String) } });
+    expect(completed.outbox).toHaveLength(0);
     expect(run.mock.calls.some(call => call[0].instructions === anglesPrompt)).toBe(true);
     expect(run.mock.calls.some(call => call[0].instructions === questionPrompt)).toBe(true);
     expect(run.mock.calls.some(call => call[0].instructions === whyPrompt)).toBe(true);
@@ -75,6 +88,7 @@ it('preserves terminal revalidation behavior for v2.1 question work', async () =
   const scheduler = new Scheduler(store, service, () => 'extract.v2', () => {}, () => now);
   try {
     await scheduler.start(); await scheduler.tick();
+    await checkFirstMark(store);
     const inflight = scheduler.tick();
     await vi.waitFor(() => expect(finish).toBeDefined());
     const before = await store.snapshot();
@@ -123,7 +137,8 @@ it('completes a v2.1 local pipeline without a why-note call or profile in any pr
   const service = { state: { kind: 'ready' }, subscribe: () => () => {}, runLocal: run } as unknown as LocalService;
   const scheduler = new Scheduler(store, service, () => 'extract.v2', () => {}, () => 20000);
   try {
-    await scheduler.start(); for (let i = 0; i < 6; i++) await scheduler.tick();
+    await scheduler.start(); for (let i = 0; i < 3; i++) await scheduler.tick();
+    await checkFirstMark(store); await scheduler.tick();
     const snapshot = await store.snapshot();
     expect(snapshot.cards).toHaveLength(1);
     expect(snapshot.cards![0]).toMatchObject({ triageVersion: 'v2.1', questionStatus: 'ready',

@@ -7,7 +7,8 @@ vi.mock('../pipeline/triageVersion', async importOriginal => ({
 
 import { LocalError, type Job } from '../ai/localModel';
 import { anglesV2 } from '../pipeline/prompts/angles.v2';
-import { questionV2 } from '../pipeline/prompts/question.v2';
+import { questionV21 as questionV2 } from '../pipeline/prompts/question.v2.1';
+import { checkFirstMark } from './t08Fixtures';
 import { whynoteV2 } from '../pipeline/prompts/whynote.v2';
 import { openLocalStore } from './index';
 import { Scheduler, type LocalService } from './scheduler';
@@ -34,6 +35,7 @@ it('ends a question after bounded failures without leaving an ownerless waiting 
   const scheduler = new Scheduler(store, service, () => 'extract.v2', () => {}, () => now);
   try {
     await scheduler.start(); await scheduler.tick();
+    await checkFirstMark(store);
     for (let i = 0; i < 3; i++) { await scheduler.tick(); now += 30000; }
     const snapshot = await store.snapshot();
     expect(snapshot.cards?.[0]).toMatchObject({ questionStatus: 'blocked', questionReason: 'local-step-failed' });
@@ -53,7 +55,8 @@ it('refunds an ordinary cancellation before dispatch when there is no retarget',
   const service = { state: { kind: 'ready' }, subscribe: () => () => {}, runLocal: run } as unknown as LocalService;
   const scheduler = new Scheduler(store, service, () => 'extract.v2', () => {}, () => 20000);
   try {
-    await scheduler.start(); await scheduler.tick(); await scheduler.tick();
+    await scheduler.start(); await scheduler.tick();
+    await checkFirstMark(store); await scheduler.tick();
     expect((await store.snapshot()).jobs.find(job => job.step === 'question'))
       .toMatchObject({ status: 'pending', attempts: 0 });
   } finally { scheduler.stop(); store.close(); }
@@ -81,6 +84,7 @@ it('conservatively retains a claim made before dispatch when an edit retargets t
   const scheduler = new Scheduler(store, service, () => 'extract.v2', () => {}, () => 20000);
   try {
     await scheduler.start(); await scheduler.tick();
+    await checkFirstMark(store);
     const claimed = scheduler.tick();
     await vi.waitFor(() => expect(entered).toBe(true));
     expect(run.mock.calls.some(call => call[0].instructions === questionV2)).toBe(false);
@@ -124,6 +128,7 @@ for (const waitingFor of ['question', 'whynote'] as const) {
     try {
       await scheduler.start();
       await scheduler.tick();
+      await checkFirstMark(store);
       if (waitingFor === 'whynote') await scheduler.tick();
       const inflight = scheduler.tick();
       await vi.waitFor(() => expect(held).toBe(true));
@@ -149,7 +154,8 @@ for (const waitingFor of ['question', 'whynote'] as const) {
       const card = snapshot.cards!.find(value => value.id === originalCard.id)!;
       expect(card.questionStatus).toBe('ready');
       expect(card.why?.why).toBe(why.why);
-      expect(snapshot.outbox!.find(value => value.cardId === card.id)?.question).toBe(question.question);
+      expect(card.draftQuestion).toBe(question.question);
+      expect(snapshot.outbox).toHaveLength(0);
       expect(snapshot.cards!.filter(value => value.id === card.id)).toHaveLength(1);
       expect(snapshot.jobs.some(job => job.cardId === card.id && job.step === waitingFor &&
         job.status === 'done' && job.attempts === 2)).toBe(true);
