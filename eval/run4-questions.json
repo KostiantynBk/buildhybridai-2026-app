@@ -1,4 +1,8 @@
 [
-  { "id": "placeholder-A", "profile": "A", "question": "What is the official habitat of a fictional purple cloud fox?" },
-  { "id": "placeholder-B", "profile": "B", "question": "How many imaginary moons orbit a fictional paper planet?" }
+  {"id": "F1", "profile": "A", "question": "Is Grounding with Google Search available on the free tier of the Gemini Developer API for Gemini Flash-Lite models, or only on the paid tier?"},
+  {"id": "F2", "profile": "A", "question": "Do the Gemini API terms allow an app to store Grounding with Google Search results or pass them to another AI model for analysis?"},
+  {"id": "F3", "profile": "A", "question": "What do Google's display requirements for Grounding with Google Search say about modifying the grounded answer text or the Search Suggestions shown to users?"},
+  {"id": "F4", "profile": "A", "question": "Does Chrome's built-in Prompt API (LanguageModel) work in Web Workers or in hidden background tabs, or only in a visible page?"},
+  {"id": "F5", "profile": "A", "question": "What hardware, GPU memory and free disk space does Chrome require to download and run its built-in Gemini Nano model for the Prompt API?"},
+  {"id": "F6", "profile": "A", "question": "For Gemini 3 models, is Grounding with Google Search billed per API request or per search query the model runs?"}
 ]
