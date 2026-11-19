@@ -68,11 +68,12 @@ it('retries only a genuine network failure and never retries quota or billing re
   expect(adapter).toHaveBeenCalledTimes(2);
   adapter.mockReset().mockRejectedValue({ customErrorData: { status: 429 }, message: 'Network request failed' });
   await expect(extract(job => service.runLocal(job), 'My plan', 'test', undefined, 'extract.v2'))
-    .rejects.toThrow('quota');
+    .rejects.toThrow('cloud budget is used up');
   expect(adapter).toHaveBeenCalledTimes(1);
-  adapter.mockReset().mockRejectedValue({ customErrorData: { status: 403 }, message: 'Billing not enabled' });
+  adapter.mockReset().mockRejectedValue({ customErrorData: { status: 403,
+    errorDetails: [{ reason: 'BILLING_DISABLED' }] }, message: 'Billing not enabled' });
   await expect(extract(job => service.runLocal(job), 'My plan', 'test', undefined, 'extract.v2'))
-    .rejects.toThrow('billing');
+    .rejects.toThrow('billing is unavailable');
   expect(adapter).toHaveBeenCalledTimes(1);
 });
 it('blocks at the daily cap and when cloud processing is disabled', async () => {

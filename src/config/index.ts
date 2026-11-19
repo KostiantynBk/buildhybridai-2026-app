@@ -28,7 +28,7 @@ export function readConfig(env: Environment): AppConfig | null {
     env.VITE_FIREBASE_PROJECT_ID,
     env.VITE_FIREBASE_APP_ID,
   ];
-  const debug = env.DEV === true && env.VITE_APPCHECK_DEBUG === 'true';
+  const debug = import.meta.env.DEV && env.DEV === true && env.VITE_APPCHECK_DEBUG === 'true';
   const siteKey = env.VITE_RECAPTCHA_ENTERPRISE_SITE_KEY;
   if (!fields.every(valid) || (!debug && !valid(siteKey))) return null;
   const [apiKey, authDomain, projectId, appId] = fields as string[];

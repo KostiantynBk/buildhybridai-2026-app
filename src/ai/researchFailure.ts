@@ -3,12 +3,12 @@ export type ResearchFailureCode = 'network' | 'quota' | 'billing' | 'safety' | '
 
 const messages: Record<ResearchFailureCode, string> = {
   network: 'Network error while researching. Please try again.',
-  quota: 'Research quota is exhausted. Try again later.',
-  billing: 'Search research requires billing on the Firebase project.',
+  quota: "The demo's cloud budget is used up. Everything on your laptop still works.",
+  billing: 'Cloud billing is unavailable right now. Everything on your laptop still works.',
   safety: 'Research was blocked by the provider’s safety checks.',
   'display-invalid': 'Research could not be displayed with its required Search sources and suggestions.',
   'source-invalid': 'Cloud research did not run in the cloud.',
-  permission: 'Research was denied. Check Firebase permissions and whether billing is enabled.',
+  permission: 'The cloud refused this request. Everything on your laptop still works.',
   unknown: 'Research could not be completed. Check billing, connection and project settings.',
 };
 

@@ -25,7 +25,7 @@ it.each(['Too many requests', 'Network request failed'])('does not retry SDK HTT
       preSendCheck: vi.fn().mockResolvedValue({ allowed: true }), cloudConsent: vi.fn().mockResolvedValue(true),
       reserveResearch: vi.fn().mockResolvedValue(1), cancelResearch: vi.fn().mockResolvedValue(undefined),
       finishResearch: vi.fn().mockResolvedValue(undefined) };
-    await expect(researchApproved(store, adapter, 'e', 'example')).rejects.toThrow('quota');
+    await expect(researchApproved(store, adapter, 'e', 'example')).rejects.toThrow('cloud budget is used up');
     expect(fetch).toHaveBeenCalledOnce();
     expect(store.finishResearch).toHaveBeenCalledWith(1, 'failed', 'quota');
   } finally { await deleteApp(app); vi.unstubAllGlobals(); }

@@ -9,18 +9,30 @@ type Store = Pick<LocalStore, 'snapshot' | 'preSendCheck' | 'reserveResearch' | 
   'cancelResearch' | 'cloudConsent'>;
 
 export function researchError(error: unknown): { network: boolean; message: string; code: ResearchFailureCode } {
-  const value = error as { code?: string; name?: string; message?: string;
-    customErrorData?: { status?: number }; customData?: { status?: number } };
-  const status = value?.customErrorData?.status ?? value?.customData?.status;
+  type Details = { status?: number; errorDetails?: Array<{ reason?: string; code?: string }>;
+    response?: { promptFeedback?: { blockReason?: string }; candidates?: Array<{ finishReason?: string }> } };
+  const value = error as { code?: string; name?: string; message?: string; finishReason?: string;
+    blockReason?: string; customErrorData?: Details; customData?: Details };
+  const details = value?.customErrorData ?? value?.customData;
+  const status = details?.status;
+  const reasons = [value?.code, ...(Array.isArray(details?.errorDetails) ? details.errorDetails : [])
+    .flatMap(item => [item?.reason, item?.code])];
+  const safety = value?.blockReason === 'SAFETY' || value?.finishReason === 'SAFETY' ||
+    details?.response?.promptFeedback?.blockReason === 'SAFETY' ||
+    details?.response?.candidates?.some(candidate => candidate.finishReason === 'SAFETY');
+  const networkMessages = ['Failed to fetch', 'Network request failed', 'Load failed'];
+  const wrappedNetwork = value?.name === 'FirebaseError' && value?.code === 'error' &&
+    networkMessages.some(text => value.message?.endsWith(`: ${text} (AI/error)`));
+  const network = status === undefined && (value?.name === 'NetworkError' || wrappedNetwork ||
+    (value?.name === 'TypeError' && networkMessages.includes(value.message ?? '')));
   const message = value?.message ?? '';
-  const network = status === undefined && (value?.name === 'NetworkError' ||
-    /failed to fetch|networkerror|network request failed|load failed/i.test(message));
-  const code: ResearchFailureCode = status === 429 ? 'quota' :
-    /billing|paid tier|paid service|billing account/i.test(message) ? 'billing' :
-      /quota|resource.exhausted/i.test(message) ? 'quota' : /safety|blocked/i.test(message) ? 'safety' :
-        network ? 'network' : message === 'Cloud research did not run in the cloud.' ? 'source-invalid' :
-          message.startsWith('Research could not be displayed') ? 'display-invalid' :
-            status === 403 ? 'permission' : 'unknown';
+  const code: ResearchFailureCode = status === 429 || reasons.includes('RESOURCE_EXHAUSTED') ? 'quota' :
+    (status === 400 || status === 403) && reasons.includes('BILLING_DISABLED') ? 'billing' :
+      status === 401 || status === 403 ? 'permission' :
+        safety ? 'safety' :
+          network ? 'network' : message === 'Cloud research did not run in the cloud.' ? 'source-invalid' :
+            message === 'Research could not be displayed with its required Search sources and suggestions.'
+              ? 'display-invalid' : 'unknown';
   return { network: code === 'network', code, message: researchFailureMessage(code) };
 }
 

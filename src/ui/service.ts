@@ -4,7 +4,15 @@ import { browserApi, makeFirebaseModel } from '../ai/firebase';
 import { languageOptions, LocalModelService } from '../ai/localModel';
 import { startAutoPrepare } from './autoPrepare';
 
-export const config = readConfig(import.meta.env);
+export const config = readConfig({
+  DEV: import.meta.env.DEV,
+  VITE_FIREBASE_API_KEY: import.meta.env.VITE_FIREBASE_API_KEY,
+  VITE_FIREBASE_AUTH_DOMAIN: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  VITE_FIREBASE_PROJECT_ID: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  VITE_FIREBASE_APP_ID: import.meta.env.VITE_FIREBASE_APP_ID,
+  VITE_RECAPTCHA_ENTERPRISE_SITE_KEY: import.meta.env.VITE_RECAPTCHA_ENTERPRISE_SITE_KEY,
+  ...(import.meta.env.DEV ? { VITE_APPCHECK_DEBUG: import.meta.env.VITE_APPCHECK_DEBUG } : {}),
+});
 export function createService() {
   return new LocalModelService({
     configured: config !== null,

@@ -77,9 +77,9 @@ it('enforces consent, atomic daily budget, and local-day reset', async () => {
   } finally { store.close(); }
 });
 it.each([
-  [{ message: 'Billing account not enabled', customData: { status: 403 } }, 'requires billing'],
-  [{ message: 'quota exceeded', customData: { status: 429 } }, 'quota'],
-  [{ message: 'blocked for safety', customData: { status: 400 } }, 'safety'],
+  [{ customData: { status: 403, errorDetails: [{ reason: 'BILLING_DISABLED' }] } }, 'billing is unavailable'],
+  [{ message: 'quota exceeded', customData: { status: 429 } }, 'cloud budget is used up'],
+  [{ blockReason: 'SAFETY', customData: { status: 400 } }, 'safety'],
 ])('does not retry billing, quota or safety errors', async (error, expected) => {
   const { store } = await fixture();
   try {

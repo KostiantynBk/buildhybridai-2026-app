@@ -283,7 +283,7 @@ it('shows a failed dispatched search immediately in the actual card and Outbox',
     await expect(component(app, 'NotebookPanel').sendDraft(request.cardId, 'What are hosting limits?'))
       .rejects.toThrow('Sent, but the search failed');
     const snapshot = component(app, 'NotebookPanel').snapshot;
-    expect(snapshot.researchReceipts).toMatchObject([{ status: 'failed', failureCode: 'display-invalid' }]);
+    expect(snapshot.researchReceipts).toMatchObject([{ status: 'failed', failureCode: 'unknown' }]);
     expect(JSON.stringify(await seed.snapshot())).not.toContain('SECRET_PROVIDER_SENTINEL');
     const card = snapshot.cards.find((value: { id: string }) => value.id === request.cardId);
     const entry = snapshot.outbox[0];

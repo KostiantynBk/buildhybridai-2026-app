@@ -2,17 +2,29 @@
 
 ## What it is and who it's for
 
-ThoughtPartner is a planning notebook for solo builders who want another perspective before they write code. Its intended design is to identify questions locally and research only an approved public question, while keeping the relationship to the builder's assumptions visible. This version saves a notebook and profile locally and extracts plan items on device; researched side thoughts are not implemented.
+ThoughtPartner is a planning notebook for solo builders who want another perspective before they write code. It can identify questions locally and research an approved public question, while keeping the relationship to the builder's assumptions visible.
 
 ## How it uses Firebase AI Logic
 
-The application uses Firebase AI Logic's web hybrid interface for model preparation, a synthetic local warm-up and paragraph extraction, with a checked `ONLY_ON_DEVICE` path and the reported inference source verified. It does not yet run cloud inference.
+The application uses Firebase AI Logic for guarded on-device inference, optional cloud processing, and Search-grounded research of approved questions. Cloud processing requires a separate explicit opt-in; the app checks the reported inference source.
 
-- The notebook, paragraph versions, extracted items, lineage versions, dependencies, profile and job queue stay in this browser's IndexedDB. Once a paragraph settles, its text and a generic title are passed only to the guarded on-device Firebase AI Logic extraction path. If an earlier quote disappears, `compare.v1` compares the earlier statement and quote against the edited paragraph on device. Code handles quote shortcuts, lineage and dependency staleness without new network calls. When a why-note is generated, selected profile records are used only in its on-device prompt; the separate never-send list is never sent to a model. The availability check runs in the browser; preparation includes a synthetic on-device warm-up.
+- The notebook, paragraph versions, extracted items, lineage versions, dependencies, profile and job queue stay in this browser's IndexedDB. In the default on-device mode, settled paragraphs use the guarded on-device Firebase AI Logic path. If an earlier quote disappears, `compare.v1` compares the earlier statement and quote against the edited paragraph on device. If you explicitly opt into cloud processing, those plan-processing inputs go to Gemini in the cloud. Code handles quote shortcuts, lineage and dependency staleness without new network calls. When a why-note is generated, selected profile records are used only in its on-device prompt; the separate never-send list is never sent to a model. The availability check runs in the browser; preparation includes a synthetic on-device warm-up.
 - When you press Prepare, the app initializes Firebase and App Check. App Check may contact Google, and Chrome may download the local model from Google.
 - Firebase Remote Config is the second Firebase product. On normal notebook startup, when Firebase is configured, it may contact Firebase Installations to register an installation or obtain an installation auth token, then Firebase Remote Config to fetch settings. The SDK creates a pseudonymous Firebase installation ID and sends it with app/SDK identifiers and browser language; the network provider also receives the connection's IP address. No notebook text or profile is passed to this SDK.
-- Remote Config controls only the cloud-enabled flag, an allow-listed cloud-model ID, the bundled prompt-set ID and a daily cloud budget capped at 20. Invalid or unavailable values fall back to the built-in defaults. It cannot change local inference mode or guards, source checks, Outbox approval or App Check. These cloud settings are scaffolding for later tickets; this version makes no cloud inference call. Evaluation runs use built-in settings and their own prompt selector, never fetched values.
+- Remote Config controls only the cloud-enabled flag, an allow-listed cloud-model ID, the bundled prompt-set ID and a daily cloud budget capped at 20. Invalid or unavailable values fall back to the built-in defaults. It cannot change local inference mode or guards, source checks, Outbox approval or App Check. Cloud processing and research are optional and require their respective consent. Evaluation runs use built-in settings and their own prompt selector, never fetched values.
 - This app does not initialize Analytics or set user properties, custom signals, personalization or A/B tests. Do not configure those features for the project. A successful local source check is not a guarantee that all other app activity is offline.
+
+The current Content Security Policy is **report-only**, not enforced: runtime Ajv validation uses dynamic code generation that a no-`unsafe-eval` policy would block. Do not enable enforcement until validation is made CSP-compatible and real browser checks pass.
+
+## Try the demo
+
+Hosted demo: **link pending deployment**. Desktop Chrome 157 was used for the local evaluation; a hosted demo has not yet been verified. The model may take time to download on first use; the duration depends on the connection and machine.
+
+<!-- Navigator: confirm on Chrome 157 -->
+For the evaluated Gemma 4 setup, enable `chrome://flags/#gemma4-for-built-in-ai`, restart Chrome, then enable `prompt_api_gemma4` in `chrome://on-device-internals` (enable debug pages at `chrome://chrome-urls` if needed). Confirm Broker State there. The setup is not Chrome's default and these exact steps await confirmation.
+<!-- /Navigator -->
+
+If the on-device model is unavailable, the app offers an explicit cloud-processing opt-in explaining what it sends. Search research has separate consent.
 
 ## Requirements
 
@@ -20,7 +32,7 @@ The application uses Firebase AI Logic's web hybrid interface for model preparat
 - Compatible desktop Chrome with the Prompt API and Gemini Nano available. Current documented prerequisites include 22 GB free disk space on the profile volume and either more than 4 GB GPU VRAM or at least 16 GB RAM and four CPU cores. Browser availability and the exact Nano version still need to be checked on the actual machine.
 - A Firebase project and Web app configured for AI Logic and App Check for model preparation. Without configuration, the notebook and availability check still work but AI features are off.
 
-## Setup and run
+## Run locally
 
 1. Run `npm ci`.
 2. For the notebook-only shell, run `npm run dev` and open the displayed localhost address. No configuration is required.
@@ -32,7 +44,7 @@ Remote Config parameters are optional: the app works with no parameters defined.
 
 Existing notebook text from the earlier localStorage scaffold migrates once after a successful IndexedDB transaction; the old key is then removed. Paragraphs are separated by blank lines. Profile import and export are local JSON files and include the private never-send list; do not share them inadvertently. Names inside profile text are not detected automatically: add them to the explicit list. The filter catches listed terms, currency amounts, emails and URLs, not every private detail. Loading a demo or importing replaces the current profile after confirmation. In Profile, **Delete all local data** clears this app's notebook, versions, items, lineage and dependency records, comparison batches, jobs, profile and Outbox stores and removes the legacy notebook key after confirmation. It does not delete browser model downloads or separate Firebase SDK installation/configuration storage.
 
-The console setup steps, Remote Config behavior against a real project and production App Check enforcement have not been verified in this version. No deployment or billing setup is included.
+The console setup steps, Remote Config behavior against a real project and production App Check enforcement have not yet been verified. Deploying requires the project owner to authenticate and approve the deployment.
 
 ## Testing instructions
 
@@ -40,7 +52,7 @@ Run `npm run typecheck`, `npm test`, and `npm run build`. The tests use fakes an
 
 ## What was built during the hackathon
 
-This repository was started after the Submission Period began on 11 November 2026 at 13:30 Pacific Time. The current application includes a locally saved versioned notebook, local profile, on-device extraction queue, placeholder panels, a readiness interface, guarded local Firebase AI Logic service, and tests. A development-only evaluation harness and synthetic scored set have been added; extract prompts have been evaluated on one laptop, while the newer notebook integration still needs a real end-to-end check. Further functionality is to be completed.
+This repository was started after the Submission Period began on 11 November 2026 at 13:30 Pacific Time. The current application includes a locally saved versioned notebook and profile, an on-device extraction queue, optional cloud processing and approved Search research, and tests. A development-only evaluation harness and synthetic scored set have been added; extract prompts have been evaluated on one laptop, while the newer notebook integration still needs a real end-to-end check. Further functionality is to be completed.
 
 ## History and disclosure
 

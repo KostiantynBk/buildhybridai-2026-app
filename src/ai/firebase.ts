@@ -26,13 +26,13 @@ export function firebaseAI(config: AppConfig): ReturnType<typeof getAI> {
       },
       'thoughtpartner',
     );
-    if (config.dev && config.debug) {
+    if (import.meta.env.DEV && config.dev && config.debug) {
       (
         self as typeof self & { FIREBASE_APPCHECK_DEBUG_TOKEN?: boolean }
       ).FIREBASE_APPCHECK_DEBUG_TOKEN = true;
     }
     const provider =
-      config.dev && config.debug
+      import.meta.env.DEV && config.dev && config.debug
         ? new CustomProvider({
             getToken: async () => {
               throw new Error('Debug provider is unavailable.');

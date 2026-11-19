@@ -6,6 +6,9 @@
     "test": "vitest run",
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
+    "check:dist": "node scripts/check-dist.mjs",
+    "build:prod": "npm run typecheck && npm test && npm run build && npm run check:dist",
+    "deploy:hosting": "node scripts/deploy-hosting.mjs",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [],
