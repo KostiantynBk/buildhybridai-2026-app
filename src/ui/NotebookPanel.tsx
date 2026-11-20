@@ -12,6 +12,7 @@ import { ResearchBlock } from './ResearchBlock';
 import { isGrounded } from '../ai/suggestionsSafety';
 import { lineageEligibility } from '../store/eligibility';
 import { DraftControls } from './DraftControls';
+import { copy, displayMessage } from './copy';
 
 const angleLabels: Record<DisplayAngle, string> = { 'end-user': 'For the user',
   'cost-at-scale': 'Costs at scale', 'limits-operations': 'Limits and operations',
@@ -23,7 +24,7 @@ export function ProfileBlock({ card, profile }: { card: ThoughtCard; profile: Pr
     const record = profile.find(value => value.id === id);
     return record ? [record] : [];
   });
-  return records.length ? <div><p>From your profile:</p><ul>{records.map(record =>
+  return records.length ? <div><p>{copy.profileVariant}</p><ul>{records.map(record =>
     <li key={record.id} style={{ whiteSpace: 'pre-wrap' }}>{record.text}</li>)}</ul></div> : null;
 }
 export function WhyContent({ card, profile }: { card: ThoughtCard; profile: ProfileRecord[] }) {
@@ -33,7 +34,7 @@ export function WhyContent({ card, profile }: { card: ThoughtCard; profile: Prof
     return record ? [record] : [];
   }) : [];
   return <><p>{card.why.seeing}{card.why.why ? ` ${card.why.why}` : ''}</p>
-    {cited.length > 0 && <div><p>From your profile:</p><ul>{cited.map(record =>
+    {cited.length > 0 && <div><p>{copy.profileVariant}</p><ul>{cited.map(record =>
       <li key={record.id} style={{ whiteSpace: 'pre-wrap' }}>{record.text}</li>)}</ul></div>}</>;
 }
 function FreshWhy({ card, profile }: { card: ThoughtCard; profile: ProfileRecord[] }) {
@@ -63,26 +64,32 @@ export function emptyReason(snapshot: Snapshot, configured: boolean, ready: bool
     'Waiting for the on-device model. Prepare the model to continue.';
   if (snapshot.jobs.some(job => job.step === 'extract' && job.status === 'failed' &&
       snapshot.paragraphs.some(p => p.id === job.paragraphId && p.version === job.paragraphVersion))) {
-    return 'An extraction stopped after bounded retries.';
+    return copy.extractionFailed;
   }
-  if (snapshot.jobs.some(job => job.status === 'pending' || job.status === 'running')) {
-    return cloudMode ? 'Checking settled paragraphs in cloud mode.' : 'Checking settled paragraphs on device.';
+  if (snapshot.jobs.some(job => job.step === 'extract' && (job.status === 'pending' || job.status === 'running') &&
+      snapshot.paragraphs.some(p => p.id === job.paragraphId && p.version === job.paragraphVersion))) {
+    return copy.waitingRead;
   }
   if (snapshot.paragraphs.some(p => wordCount(p.text) >= MIN_WORDS && !snapshot.jobs.some(j =>
     j.paragraphId === p.id && j.paragraphVersion === p.version && j.status === 'done'))) {
-    return 'Waiting for the paragraph to settle.';
+    return copy.waiting;
   }
   return 'Nothing found in the current paragraphs.';
 }
 export function NotebookPanel({ text, save, storageStatus, snapshot, configured, ready, feedback, research,
-  researchAgain, researchErrors, cloudMode = false, checkThis, sendDraft, declineDraft, reopenDraft }: {
+  researchAgain, researchErrors, searching, checkingSend, cloudMode = false, foreground = true, checkThis, sendDraft,
+  declineDraft, reopenDraft, sampleActive = false, trySample, removeSample, cardOnly = false,
+  controlsDisabled = false }: {
   text: string; save: (value: string) => void; storageStatus: 'loading' | 'saving' | 'saved' | 'error';
   snapshot: Snapshot; configured: boolean; ready: boolean;
   feedback?: (cardId: string, value: Feedback) => void; research?: Record<string, ResearchView>;
-  researchAgain?: (id: string) => Promise<void>; researchErrors?: Record<string, string>; cloudMode?: boolean;
+  researchAgain?: (id: string) => Promise<void>; researchErrors?: Record<string, string>;
+  searching?: Record<string, boolean>; checkingSend?: Record<string, boolean>; cloudMode?: boolean;
+  foreground?: boolean; cardOnly?: boolean; controlsDisabled?: boolean;
   checkThis?: (itemId: string) => Promise<void>;
   sendDraft?: (cardId: string, text: string) => Promise<void>;
   declineDraft?: (cardId: string) => Promise<void>; reopenDraft?: (cardId: string) => Promise<void>;
+  sampleActive?: boolean; trySample?: () => void; removeSample?: () => void;
 }) {
   const [researchError, setResearchError] = useState('');
   const heads = lineageHeads(snapshot.lineages ?? []);
@@ -98,31 +105,45 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
   const currentExtractionFailed = storageStatus === 'saved' && snapshot.jobs.some(job => job.step === 'extract' &&
     job.status === 'failed' && snapshot.paragraphs.some(p => p.id === job.paragraphId &&
       p.version === job.paragraphVersion));
+  const reading = storageStatus === 'saved' && ready && foreground && snapshot.jobs.find(job =>
+    job.step === 'extract' && job.status === 'running' &&
+    (job.runMode ?? 'on_device') === (cloudMode ? 'in_cloud' : 'on_device') &&
+    snapshot.paragraphs.some(p => p.id === job.paragraphId &&
+      p.version === job.paragraphVersion));
   const hasItems = visibleGroups.length > 0 || visibleCards.length > 0 || (storageStatus === 'saved' &&
     [...removed, ...unchecked].some(lineage => snapshot.items.some(item => item.id === lineage.itemId)));
   return (
     <div className="workspace">
-      <section className="panel notebook">
+      {!cardOnly && <section className="panel notebook">
         <div className="section-title"><div><span className="eyebrow">Your space</span><h2>Notebook</h2></div>
           <span className="muted">{storageStatus === 'saved' ? 'Saved in this browser' :
             storageStatus === 'saving' ? 'Saving…' : storageStatus === 'loading' ? 'Opening local storage…' :
               'Not saved'}</span></div>
         <p>Give your plan room to take shape. Separate paragraphs with a blank line.</p>
+        {!text.trim() && storageStatus === 'saved' && trySample &&
+          <button className="secondary" onClick={trySample}>Try a sample plan</button>}
+        {sampleActive && <p>Sample plan (invented) · <button className="quiet" onClick={removeSample}>
+          Remove sample</button></p>}
         <label htmlFor="notebook" className="sr-only">Your planning notebook</label>
         <textarea id="notebook" value={text} onChange={event => save(event.target.value)}
           disabled={storageStatus === 'loading'} placeholder="Start with the idea you are exploring…" />
         {storageStatus === 'error' && <p role="alert">Could not save in this browser. Your changes may be lost.</p>}
-      </section>
+      </section>}
       <aside className="panel thoughts"><span className="eyebrow">Alongside your work</span>
         <h2>What your plan relies on</h2>
-        {currentExtractionFailed && <p role="status">An extraction stopped after bounded retries.</p>}
+        {(currentExtractionFailed || reading) && <div role="status" aria-live="polite">
+          {currentExtractionFailed && <p>{copy.extractionFailed}</p>}
+          {reading && <p>{reading.runMode === 'in_cloud' ? copy.readingCloud : copy.readingLocal}</p>}</div>}
         {researchError && <p role="alert">{researchError}</p>}
-        {!hasItems && !currentExtractionFailed && <div className="empty" role="status"><p>{storageStatus === 'saving'
-          ? 'Saving changes before checking this plan.' : storageStatus === 'error'
+        {!hasItems && !currentExtractionFailed && !reading && <div className="empty" role="status"><p>
+          {storageStatus === 'saving' ? 'Saving changes before checking this plan.' : storageStatus === 'error'
             ? 'Cannot check unsaved changes.' : emptyReason(snapshot, configured, ready, cloudMode)}</p></div>}
-        {visibleGroups.map(({ paragraph, items }) => <section key={paragraph.id}>
+        {visibleGroups.filter(group => !cardOnly || group.items.some(item => (snapshot.cards ?? []).some(card =>
+          card.itemLineageId === item.lineageId && card.questionStatus === 'marked')))
+          .map(({ paragraph, items }) => <section key={paragraph.id}>
           <h3>Paragraph {paragraph.order + 1}</h3>
-          {items.map(item => {
+          {items.filter(item => !cardOnly || (snapshot.cards ?? []).some(card =>
+            card.itemLineageId === item.lineageId && card.questionStatus === 'marked')).map(item => {
             const head = heads.find(lineage => lineage.lineageId === item.lineageId);
             const previous = snapshot.items.find(candidate => candidate.id === head?.changedFrom);
             const mark = (snapshot.cards ?? []).find(card => head?.itemId === item.id &&
@@ -137,23 +158,24 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
                 source === 'in_cloud' ? 'in the cloud' : 'on device'}</span>}</div>
               <p>{item.text}</p><blockquote>“{item.quote}”</blockquote>
               {mark?.angle && <p>Worth checking · {angleLabels[mark.angle]}</p>}
-              {checkThis && <button disabled={storageStatus !== 'saved'} onClick={() => {
+              {checkThis && <button disabled={storageStatus !== 'saved' || controlsDisabled} onClick={() => {
                 void checkThis(item.id).catch(error => setResearchError(error instanceof Error
-                  ? error.message : 'Could not start this check.'));
+                  ? displayMessage(error.message) : 'Could not start this check.'));
               }}>Check this</button>}
               {head?.status === 'changed' && !head.needsConfirmation && head.paragraphVersion === paragraph.version &&
                 <p>Changed: was “{previous?.text ?? 'earlier statement'}”</p>}
-              {head?.needsConfirmation && <p>{head.conflictingEvidence
-                ? 'May have changed or been removed; please check.' : 'May have changed; please confirm.'}</p>}
+              {head?.needsConfirmation && <p>{copy.uncertain} Please check.</p>}
               {head?.needsConfirmation && !head.conflictingEvidence && head.newQuote &&
                 containsQuote(paragraph.text, head.newQuote) && <p>Now: “{head.newQuote}”</p>}
-              {head?.unchecked && <p>Change not checked; the earlier statement is retained.</p>}
+              {head?.unchecked && <p>{copy.uncertain} Please check.</p>}
             </article>;
           })}
         </section>)}
         {visibleCards.map(card => {
           const stale = calculateStaleness(card.id, snapshot.dependencies ?? [], snapshot.lineages ?? []);
+          const provenChange = stale.reasons.some(reason => reason.kind === 'changed' || reason.kind === 'removed');
           const outbox = snapshot.outbox?.find(entry => entry.id === card.outboxId);
+          const privacyChanged = !!outbox && !!research?.[outbox.id]?.changedAfterSend;
           const paragraph = snapshot.paragraphs.find(value => value.id === card.paragraphId);
           const head = heads.find(value => value.lineageId === card.itemLineageId);
           const eligibility = lineageEligibility(card.itemLineageId, card.itemVersion, snapshot.paragraphs,
@@ -183,39 +205,43 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
             cloudMeasured && 'Researched in the cloud'].filter(Boolean).join(' · ');
           return <article className="item-card" key={card.id}>
             {route && <p className="muted">{route}</p>}
-            {failedCheckVisible && <p role="status">May have changed: couldn't re-check your edit.</p>}
-            {stale.stale && <p role="status">Depends on “{card.itemQuote}” — {stale.reasons.map(reason =>
-              reason.kind === 'needsConfirmation' ? 'may have changed' :
-                reason.kind === 'removed' ? 'no longer in your plan' : 'changed').join(', ')}</p>}
-            {card.askedDirectly ? <p>You asked to check this</p> : card.angle &&
+            <div role="status" aria-live="polite">
+              {(stale.stale || failedCheckVisible || eligibility === 'stale' || eligibility === 'terminal' ||
+                privacyChanged) && <p>{provenChange ? copy.definite : copy.uncertain}{' '}
+                {privacyChanged && 'Your privacy settings may also have changed. '}Check again.</p>}
+              {card.questionStatus === 'waiting' && <p>{copy.draftQuestion}</p>}
+              {outbox?.status === 'approved' && outbox && checkingSend?.[outbox.id] &&
+                <p>{copy.checkingBeforeResearch}</p>}
+              {outbox?.status === 'approved' && outbox && searching?.[outbox.id] && <p>{copy.searching}</p>}
+            </div>
+            {card.askedDirectly ? <><h4>{copy.questionHeading}</h4><p>{copy.requestedVariant}</p></> : card.angle &&
               <div><strong>{angleLabels[card.angle]}</strong></div>}
             <blockquote>“{card.itemQuote}”</blockquote>{card.concern && <p>{card.concern}</p>}
-            {!card.askedDirectly && <><h4>Why this matters for you</h4>
+            {!card.askedDirectly && <><h4>{copy.questionHeading}</h4>
               {card.triageVersion === 'v2.1' ? <ProfileBlock card={card} profile={snapshot.profile} /> :
                 <FreshWhy card={card} profile={snapshot.profile} />}</>}
             {card.questionStatus === 'blocked' && <p>{questionStatus}</p>}
-            {(eligibility === 'stale' || eligibility === 'terminal') && <p>Your plan changed. Check again.</p>}
             {(eligibility === 'stale' || eligibility === 'terminal') && checkThis &&
-              <button disabled={!head?.itemId || head.status === 'removed'} onClick={() => {
+              <button disabled={controlsDisabled || !head?.itemId || head.status === 'removed'} onClick={() => {
                 if (head?.itemId) void checkThis(head.itemId)
                   .catch(() => setResearchError('Could not check the changed statement.'));
               }}>Check again</button>}
             <DraftControls card={card} outbox={outbox} receiptStatus={receipts[0]?.status} send={sendDraft}
               failureCode={receipts[0]?.failureCode} researchError={outbox && researchErrors?.[outbox.id]}
-              decline={declineDraft} reopen={reopenDraft}
+              searching={!!outbox && !!searching?.[outbox.id]} checkingSend={!!outbox && !!checkingSend?.[outbox.id]}
+              statusInParent controlsDisabled={controlsDisabled} decline={declineDraft} reopen={reopenDraft}
               research={researchAgain} />
             {outbox && research?.[outbox.id] && <section><h4>What the research found</h4>
-              {stale.stale && <p role="status">Your plan changed since this was researched.</p>}
-              {!isGrounded(research[outbox.id].result) && <p>This answer used no web sources.</p>}
-              {research[outbox.id].changedAfterSend && <p role="status">Your plan changed (or you added a
-                never-send term) after this question was sent.</p>}
+              {!isGrounded(research[outbox.id].result) && <p>{copy.noSources}</p>}
               <ResearchBlock result={research[outbox.id].result} />
-              <button onClick={() => { void navigator.clipboard.writeText(research[outbox.id].result.text); }}>
+              <button disabled={controlsDisabled}
+                onClick={() => { void navigator.clipboard.writeText(research[outbox.id].result.text); }}>
                 Copy</button></section>}
             {outbox && !research?.[outbox.id] && receipt && <div>
               <p>Researched on {new Date(receipt.sentAt).toLocaleDateString()}.
                 Results aren't kept on this device.</p>
-              {researchAgain && outbox.status === 'approved' && <button disabled={storageStatus !== 'saved'}
+              {researchAgain && outbox.status === 'approved' && !searching?.[outbox.id] &&
+                <button disabled={storageStatus !== 'saved' || controlsDisabled || !!checkingSend?.[outbox.id]}
                 onClick={() => { void researchAgain(outbox.id).then(() => setResearchError('')).catch(error =>
                   setResearchError(error instanceof Error ? error.message : 'Research could not be completed.')); }}>
                 Research again</button>}
@@ -230,7 +256,7 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
         {storageStatus === 'saved' && unchecked.map(lineage => {
           const item = snapshot.items.find(value => value.id === lineage.itemId);
           return item && <article className="item-card" key={lineage.lineageId}>
-            <p>{item.text}</p><p>Change not checked; the earlier statement is retained.</p>
+            <p>{item.text}</p><p>{copy.uncertain} Please check.</p>
           </article>;
         })}
         {storageStatus === 'saved' && removed.map(lineage => {

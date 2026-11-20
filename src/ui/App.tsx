@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { builtInSettings } from '../settings/defaults';
 import { loadSettings } from '../settings/remoteSettings';
-import { openLocalStore, type LocalStore, type ProfileRecord, type Snapshot } from '../store';
+import { openLocalStore, SampleChangedError, type LocalStore, type ProfileRecord, type Snapshot } from '../store';
 import { Scheduler } from '../store/scheduler';
 import { ProfilePanel } from '../profile/ProfilePanel';
 import { config, createService, startReadiness, useForeground } from './service';
@@ -18,6 +18,10 @@ import type { ResearchMetric } from '../eval/Run4Panel';
 import { run4Provenance } from '../eval/run4Provenance';
 import { CloudProcessingService, createProcessingAdapter } from '../ai/cloudProcessing';
 import { modeRouter } from './modeRouter';
+import { Welcome } from './Welcome';
+import { samplePlan } from './samplePlan';
+import { copy } from './copy';
+import { navigationItems } from './navigation';
 
 const emptySnapshot = (): Snapshot => ({ paragraphs: [], items: [], profile: [], jobs: [] });
 export function StorageNotice({ notice }: { notice: string }) {
@@ -31,12 +35,23 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
   const [, refresh] = useState(0);
   const [page, setPage] = useState('Notebook');
   const [text, setText] = useState('');
+  const textRef = useRef('');
+  const [sampleActive, setSampleActive] = useState(false);
+  const sampleIds = useRef<string[]>([]);
+  const displayedParagraphs = useRef<Snapshot['paragraphs']>([]);
+  const [welcomeVisible, setWelcomeVisible] = useState(() => {
+    try { return localStorage.getItem('tp.welcomeSeen') !== 'true'; } catch { return true; }
+  });
   const [storageStatus, setStorageStatus] = useState<'loading' | 'saving' | 'saved' | 'error'>('loading');
   const [storageNotice, setStorageNotice] = useState('');
   const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
   const [research, setResearch] = useState<Record<string, ResearchView>>({});
   const [ideaResearch, setIdeaResearch] = useState<Record<string, ResearchView>>({});
   const [researchErrors, setResearchErrors] = useState<Record<string, string>>({});
+  const [researchPhase, setResearchPhase] = useState<Record<string, 'checking' | 'searching' | undefined>>({});
+  const searching = Object.fromEntries(Object.entries(researchPhase)
+    .map(([key, value]) => [key, value === 'searching']));
+  const checking = Object.fromEntries(Object.entries(researchPhase).map(([key, value]) => [key, value === 'checking']));
   const [cloudConsent, setCloudConsent] = useState(false);
   const [cloudMode, setCloudMode] = useState(false);
   const renderedModeRef = useRef(false);
@@ -119,7 +134,15 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
         cloudConsentRef.current = consent; setCloudConsent(consent);
         storeRef.current = opened;
         reconcile(initial);
-        setText(initial.paragraphs.map(p => p.text).join('\n\n'));
+        const initialText = initial.paragraphs.map(p => p.text).join('\n\n');
+        textRef.current = initialText; setText(initialText); displayedParagraphs.current = initial.paragraphs;
+        try {
+          const ids: unknown = JSON.parse(localStorage.getItem('tp.sampleIds') ?? '[]');
+          sampleIds.current = Array.isArray(ids) && ids.every(value => typeof value === 'string') ? ids : [];
+          setSampleActive(!!initialText && sampleIds.current.length > 0 &&
+            initial.paragraphs.length === sampleIds.current.length &&
+            initial.paragraphs.every(p => sampleIds.current.includes(p.id)));
+        } catch { /* Local only. */ }
         setStorageStatus('saved');
         const cloud = config ? new CloudProcessingService(opened, createProcessingAdapter(config),
           () => settingsRef.current.values.cloud_enabled,
@@ -168,21 +191,107 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
   };
   const save = (value: string) => {
     if (clearing.current) return;
-    setText(value);
+    textRef.current = value; setText(value);
+    if (!value.trim()) {
+      setSampleActive(false); sampleIds.current = [];
+      try { localStorage.removeItem('tp.sampleActive'); localStorage.removeItem('tp.sampleIds'); }
+      catch { /* Local only. */ }
+    }
     const sequence = ++revision.current;
     schedulerRef.current?.edited(value, snapshotRef.current.paragraphs);
     storageStatusRef.current = 'saving'; setStorageStatus('saving');
     writes.current = writes.current.catch(() => undefined).then(async () => {
       const store = storeRef.current;
       if (!store) throw new Error('Local storage unavailable.');
-      await store.saveNotebook(value);
+      const saved = await store.saveNotebook(value);
       await refreshData();
       if (sequence === revision.current && mounted.current) {
+        displayedParagraphs.current = saved;
+        if (sampleIds.current.length && (saved.length !== sampleIds.current.length ||
+          saved.some(p => !sampleIds.current.includes(p.id)))) setSampleActive(false);
         storageStatusRef.current = 'saved'; setStorageStatus('saved'); schedulerRef.current?.saved();
       }
     }).catch(() => {
       if (mounted.current) { storageStatusRef.current = 'error'; setStorageStatus('error'); }
     });
+  };
+  const dismissWelcome = () => {
+    try { localStorage.setItem('tp.welcomeSeen', 'true'); } catch { /* Dismiss for this session. */ }
+    setWelcomeVisible(false);
+  };
+  const loadSample = async (paragraphs: readonly string[]) => {
+    const store = storeRef.current;
+    if (!store || storageStatusRef.current !== 'saved' || textRef.current.trim()) {
+      throw new Error('The sample is available only when the notebook is empty.');
+    }
+    const sequence = ++revision.current;
+    schedulerRef.current?.edited();
+    storageStatusRef.current = 'saving'; setStorageStatus('saving');
+    let unchanged = false;
+    try {
+      const value = paragraphs.join('\n\n');
+      let inserted: Snapshot['paragraphs'] = [];
+      const loaded = await store.loadSampleIfEmpty(value, Date.now(), value => { inserted = value; });
+      if (!loaded) { unchanged = true; throw new Error('The notebook is no longer empty.'); }
+      if (sequence === revision.current && mounted.current) {
+        textRef.current = value; setText(value);
+        await refreshData();
+        if (sequence !== revision.current || !mounted.current) return;
+        displayedParagraphs.current = inserted;
+        sampleIds.current = inserted.map(p => p.id);
+        setSampleActive(true);
+        try {
+          localStorage.setItem('tp.sampleActive', 'true');
+          localStorage.setItem('tp.sampleIds', JSON.stringify(sampleIds.current));
+        } catch { /* Local only. */ }
+        storageStatusRef.current = 'saved'; setStorageStatus('saved'); schedulerRef.current?.saved();
+        dismissWelcome();
+      }
+    } catch (error) {
+      if (sequence === revision.current && mounted.current) {
+        storageStatusRef.current = unchanged ? 'saved' : 'error';
+        setStorageStatus(unchanged ? 'saved' : 'error');
+        if (unchanged) schedulerRef.current?.saved();
+      }
+      throw error;
+    }
+  };
+  const removeSample = async () => {
+    if (!window.confirm('Remove the sample? This clears the entire notebook, including your edits.')) return;
+    const store = storeRef.current;
+    const expected = displayedParagraphs.current.map(({ id, version }) => ({ id, version }));
+    if (!store || storageStatusRef.current !== 'saved' || !expected.length ||
+        expected.length !== sampleIds.current.length || expected.some(p => !sampleIds.current.includes(p.id))) {
+      setStorageNotice('Your notebook changed, so nothing was removed.'); return;
+    }
+    const sequence = ++revision.current;
+    schedulerRef.current?.edited();
+    storageStatusRef.current = 'saving'; setStorageStatus('saving');
+    try {
+      await store.saveNotebook('', Date.now(), expected);
+      const next = await store.snapshot();
+      if (sequence === revision.current && mounted.current) {
+        reconcile(next); textRef.current = ''; setText(''); displayedParagraphs.current = [];
+        sampleIds.current = []; setSampleActive(false);
+        try { localStorage.removeItem('tp.sampleActive'); localStorage.removeItem('tp.sampleIds'); }
+        catch { /* Local only. */ }
+        setStorageNotice(''); storageStatusRef.current = 'saved'; setStorageStatus('saved');
+        schedulerRef.current?.saved();
+      }
+    } catch (error) {
+      if (sequence !== revision.current || !mounted.current) return;
+      if (error instanceof SampleChangedError) {
+        try {
+          const next = await store.snapshot();
+          if (sequence !== revision.current || !mounted.current) return;
+          reconcile(next); displayedParagraphs.current = next.paragraphs;
+          const value = next.paragraphs.map(p => p.text).join('\n\n');
+          textRef.current = value; setText(value); sampleIds.current = []; setSampleActive(false);
+          setStorageNotice(error.message); storageStatusRef.current = 'saved'; setStorageStatus('saved');
+          schedulerRef.current?.saved();
+        } catch { storageStatusRef.current = 'error'; setStorageStatus('error'); }
+      } else { storageStatusRef.current = 'error'; setStorageStatus('error'); }
+    }
   };
   const changeProfile = async (operation: (store: LocalStore) => Promise<void>) => {
     if (clearing.current) throw new Error('Local deletion in progress.');
@@ -204,8 +313,9 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
       await store.clearAll(localStorage);
       cloudConsentRef.current = false; setCloudConsent(false);
       announceMode();
-      setResearch({}); setIdeaResearch({}); setResearchErrors({}); setResearchMetrics([]);
-      setText('');
+      setResearch({}); setIdeaResearch({}); setResearchErrors({}); setResearchPhase({}); setResearchMetrics([]);
+      textRef.current = ''; setText(''); setSampleActive(false);
+      try { localStorage.removeItem('tp.sampleActive'); } catch { /* Local only. */ }
       await refreshData();
       storageStatusRef.current = 'saved'; setStorageStatus('saved');
       schedulerRef.current?.saved();
@@ -245,6 +355,7 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
     const store = storeRef.current;
     if (inFlight.current.has(id)) throw new Error('Research is already in progress for this question.');
     inFlight.current.add(id);
+    setResearchPhase(current => ({ ...current, [id]: 'checking' }));
     let attempted = false;
     try {
       if (!config || !store) throw new Error('Firebase or local storage is unavailable.');
@@ -271,7 +382,7 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
             cloudConsentRef.current && storeRef.current === store,
           planUnchanged: () => storageStatusRef.current === 'saved' && revision.current === initialRevision,
           onAttempt: () => {
-            attempted = true;
+            attempted = true; setResearchPhase(current => ({ ...current, [id]: 'searching' }));
             const thisId = crypto.randomUUID();
             attemptId = thisId;
             setResearchMetrics(current => [...current, { id: thisId, questionId: id, latencyMs: null,
@@ -294,12 +405,15 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
       const message = `${attempted ? 'Sent, but the search failed' : 'Approved, not sent'}: ${reason}`;
       setResearchErrors(current => ({ ...current, [id]: message }));
       throw new Error(message);
-    } finally { inFlight.current.delete(id); }
+    } finally {
+      inFlight.current.delete(id); setResearchPhase(current => ({ ...current, [id]: undefined }));
+    }
   };
   const researchIdeaAction = async (ideaId: string) => {
     const key = `idea:${ideaId}`;
     if (inFlight.current.has(key)) throw new Error('Research is already in progress for this idea.');
     inFlight.current.add(key);
+    setResearchPhase(current => ({ ...current, [key]: 'checking' }));
     const store = storeRef.current;
     let attempted = false;
     try {
@@ -326,7 +440,7 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
             settingsRef.current.values.daily_cloud_budget >= settings.values.daily_cloud_budget,
           planUnchanged: () => storageStatusRef.current === 'saved' && revision.current === initialRevision,
           onAttempt: () => {
-            attempted = true;
+            attempted = true; setResearchPhase(current => ({ ...current, [key]: 'searching' }));
             void refreshData().catch(() => { storageStatusRef.current = 'error'; setStorageStatus('error'); });
           } });
       setIdeaResearch(current => ({ ...current, [ideaId]: view }));
@@ -338,14 +452,16 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
       try { if (store && storeRef.current === store) await refreshData(); } catch { /* Keep original error. */ }
       throw new Error(`${attempted ? 'Sent, but the search failed' : 'Approved, not sent'}: ` +
         safeResearchErrorMessage(error));
-    } finally { inFlight.current.delete(key); }
+    } finally {
+      inFlight.current.delete(key); setResearchPhase(current => ({ ...current, [key]: undefined }));
+    }
   };
   const latestIdea = [...(snapshot.ideas ?? [])].sort((a, b) => b.createdAt - a.createdAt ||
     b.id.localeCompare(a.id))[0];
   return (
     <div className="app">
-      <header className="header"><div><div className="eyebrow">A quieter way to think</div><h1>ThoughtPartner</h1></div>
-        <nav aria-label="Main navigation">{['Notebook', 'Profile', 'Outbox', 'Insights'].map(item => (
+      <header className="header"><div><div className="eyebrow">{copy.tagline}</div><h1>ThoughtPartner</h1></div>
+        <nav aria-label="Main navigation">{navigationItems(import.meta.env.DEV).map(item => (
           <button key={item} aria-current={page === item ? 'page' : undefined} onClick={() => setPage(item)}>
             {item}
           </button>))}</nav></header>
@@ -354,8 +470,21 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
           void enableCloudMode().catch(() => setStorageNotice('Could not enable cloud mode.'));
         }} />
       <StorageNotice notice={storageNotice} />
-      <main>{page === 'Notebook' ? <><IdeaPanel snapshot={snapshot} idea={latestIdea}
-        view={latestIdea && ideaResearch[latestIdea.id]} busy={storageStatus !== 'saved'} start={async () => {
+      <main>{welcomeVisible && <Welcome state={service.state} browserAvailability={service.browserAvailability}
+        configured={config !== null} foreground={foreground}
+        preparing={service.preparing} cloudMode={cloudMode} cloudEnabled={settings.values.cloud_enabled}
+        chooseCloud={() => { void enableCloudMode().catch(() => setStorageNotice('Could not enable cloud mode.')); }}
+        download={() => { void service.prepare().catch(() => undefined); }}
+        checkAgain={() => { void service.probe().catch(() => undefined); }}
+        sampleAvailable={storageStatus === 'saved' && !text.trim()} trySample={() => {
+          void loadSample(samplePlan).catch(error => setStorageNotice(error instanceof Error
+            ? error.message : 'Could not load the sample.'));
+        }} startBlank={dismissWelcome} />}
+      {page === 'Notebook' ? <><IdeaPanel snapshot={snapshot} idea={latestIdea}
+        view={latestIdea && ideaResearch[latestIdea.id]}
+        searching={!!latestIdea && !!searching[`idea:${latestIdea.id}`]}
+        checkingSend={!!latestIdea && !!checking[`idea:${latestIdea.id}`]}
+        busy={storageStatus !== 'saved'} start={async () => {
           const store = storeRef.current;
           if (!store) throw new Error('Local storage unavailable.');
           if (storageStatusRef.current !== 'saved') throw new Error('Checking your latest change…');
@@ -374,10 +503,16 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
           if (!store || !await store.declineIdea(id)) throw new Error('Could not decline this description.');
           await refreshData();
         }} />
-        <NotebookPanel text={text} save={save} storageStatus={storageStatus}
+        <NotebookPanel text={text} save={save} storageStatus={storageStatus} sampleActive={sampleActive &&
+          snapshot.paragraphs.length === sampleIds.current.length &&
+          snapshot.paragraphs.every(p => sampleIds.current.includes(p.id))}
+        trySample={() => { void loadSample(samplePlan).catch(() => setStorageNotice('Could not load the sample.')); }}
+        removeSample={() => { void removeSample(); }}
         snapshot={snapshot} configured={config !== null}
-        ready={cloudMode ? settings.values.cloud_enabled : service.state.kind === 'ready'} cloudMode={cloudMode}
-        research={research} researchErrors={researchErrors} researchAgain={researchQuestion}
+        ready={cloudMode ? settings.values.cloud_enabled : service.state.kind === 'ready'}
+        cloudMode={cloudMode} foreground={foreground}
+        research={research} researchErrors={researchErrors} searching={searching} checkingSend={checking}
+        researchAgain={researchQuestion}
         checkThis={async itemId => {
           const store = storeRef.current;
           if (!store) throw new Error('Local storage unavailable.');
@@ -417,7 +552,7 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
             await store.setCloudConsent(false); cloudConsentRef.current = false; setCloudConsent(false);
           }} /> :
           page === 'Outbox' ? <OutboxPage entries={snapshot.outbox ?? []} snapshot={snapshot}
-            researchErrors={researchErrors}
+            researchErrors={researchErrors} searching={searching} checkingSend={checking}
             saving={storageStatus !== 'saved'} research={researchQuestion} decide={async (id, value) => {
             const store = storeRef.current;
             if (!store) throw new Error('Local storage unavailable.');
@@ -425,7 +560,8 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
             await refreshData();
             return result;
           }} remove={id => changeProfile(store => store.deleteOutbox(id))} /> :
-          <section className="panel"><h2>Insights</h2><p>Research sends this session: {researchMetrics.length}</p>
+          import.meta.env.DEV && <section className="panel"><h2>Insights</h2>
+            <p>Research sends this session: {researchMetrics.length}</p>
             <p>Responses: {researchMetrics.filter(row => row.latencyMs !== null).length} · Sources returned: {
               researchMetrics.reduce((total, row) => total + (row.sourceCount ?? 0), 0)} · Suggestions returned: {
               researchMetrics.filter(row => row.suggestionsPresent).length}</p>
@@ -444,7 +580,7 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
             }} />
         </Suspense>}</main>
       <StatusBar service={service} configured={config !== null} foreground={foreground} settings={settings}
-        cloudMode={cloudMode} cloudMessage={!settings.values.cloud_enabled && cloudMode
+        navigate={setPage} cloudMode={cloudMode} cloudMessage={!settings.values.cloud_enabled && cloudMode
           ? 'Cloud processing is disabled; queued cloud jobs are paused.' : cloudServiceRef.current?.message ?? ''} />
     </div>
   );

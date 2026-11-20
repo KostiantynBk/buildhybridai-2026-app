@@ -80,6 +80,10 @@ An idea has its own v7 IndexedDB record and basis of lineage/version pairs; its 
 
 Pre-existing scheduler limitation: other job types' completion guards do not fence attempts. If one tab resumes while another is still running the same job, an older result may be adopted. This is not newly introduced by T10 and is a possible follow-up; the `describe.v1` job has a per-attempt fence.
 
+## T11 first-run and design
+
+The first-run dismissal flag is stored in localStorage; it does not change the v7 IndexedDB schema. The sample loader accepts generic text and inserts it only in an atomically verified empty notebook; the shipped five invented paragraphs are the first written versions of S1 steps 1, 2, 3, 4 and 7. It does not add Never-send terms or profile data. Removing the sample asks for confirmation, then checks the displayed sample paragraph IDs and versions in the same transaction as the normal clear; a mismatch preserves the notebook and refreshes it. If provenance cannot be established, removal is hidden. The gallery is development-only and uses invented fixtures, not real grounded responses. Contrast tests cover CSS tokens, not all rendered browser states; native browser and model checks remain open.
+
 ## Dependencies and licences
 
 Direct runtime dependencies: Firebase 13.3.0 (Apache-2.0), React 19.3.1 (MIT), React DOM 19.3.1 (MIT), Ajv 8.20.0 (MIT), idb 8.0.3 (ISC). Direct development dependencies: TypeScript 7.0.2 (Apache-2.0), Vite 8.3.8 (MIT), Vitest 5.1.0 (MIT), React type declarations 19.3.0 (MIT), React DOM type declarations 19.3.0 (MIT), fake-indexeddb 6.2.5 (Apache-2.0). idb provides the typed, versioned IndexedDB wrapper; fake-indexeddb supplies deterministic local database tests without a browser or network. No UI library was added. Installed lockfile license metadata also includes BSD-3-Clause, ISC, 0BSD and MPL-2.0; the MPL-2.0 entries are Lightning CSS build-tool packages and retain their separate file-level terms. Dependency metadata was checked, not an independent legal review of every transitive license.

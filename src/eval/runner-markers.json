@@ -4,5 +4,6 @@
   "run3.ts": ["runGate2", "runPracticeV2"],
   "run4Cloud.ts": ["validateRun4Questions", "validateRun4Ideas", "sendRun4Question", "sendRun4Idea"],
   "Run4Runner.tsx": ["Run4Runner"],
+  "StateGallery.tsx": ["StateGallery"],
   "sessionPlayer.ts": ["addSessionTerms", "prepareSessionStart", "removeSessionTerms", "buildSessionStepLog", "ALLOW_HELD_BACK", "sessionForPlay", "applySessionEdit", "nextSessionEdit"]
 }

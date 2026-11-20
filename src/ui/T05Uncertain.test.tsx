@@ -13,7 +13,7 @@ it('shows uncertain change and verified replacement while keeping the old conten
   const html = renderToStaticMarkup(<NotebookPanel text="Twenty visitors may come." save={() => {}}
     storageStatus="saved" snapshot={snapshot} configured ready />);
   expect(html).toContain('Fifty visitors');
-  expect(html).toContain('May have changed; please confirm.');
+  expect(html).toContain('We couldn&#x27;t confirm this still matches your plan. Please check.');
   expect(html).toContain('Now: “Twenty visitors”');
   expect(html).not.toContain('Changed: was');
 });

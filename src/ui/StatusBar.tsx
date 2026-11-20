@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import type { LocalModelService, State } from '../ai/localModel';
 import { builtInSettings, type SettingsSnapshot } from '../settings/defaults';
+import { copy } from './copy';
 
 export function modelLabel(state: State): string {
   switch (state.kind) {
@@ -59,6 +61,7 @@ export function StatusBar({
   settings = builtInSettings(),
   cloudMode = false,
   cloudMessage = '',
+  navigate = () => {},
 }: {
   service: LocalModelService;
   configured: boolean;
@@ -66,28 +69,41 @@ export function StatusBar({
   settings?: SettingsSnapshot;
   cloudMode?: boolean;
   cloudMessage?: string;
+  navigate?: (page: 'Outbox' | 'Profile') => void;
 }) {
+  const [privacy, setPrivacy] = useState(false);
   return (
-    <footer className="status" aria-live="polite">
+    <footer className="status">
       <div>
-        <span className="status-dot" /> <strong>{cloudMode
-          ? "Cloud mode: your paragraphs are sent to Google's Gemini API" : 'On-device'}</strong>
-        {cloudMessage && <span role="status"> · {cloudMessage}</span>}
-        <span className="separator">·</span>Local model: {modelLabel(service.state)}
-        <span className="separator">·</span>Browser availability: {service.browserAvailability}
-        {service.warmLatencyMs !== null && ` · Warm-up ${Math.round(service.warmLatencyMs)} ms`}
-        {!foreground && ' · Paused while away'}
-        {service.privacyFaults > 0 && ` · Privacy faults: ${service.privacyFaults}`}
-        <span className="separator">·</span>
-        Settings: {settingsLabel(settings)}
+        <div role="status" aria-live="polite"><span className={`status-dot ${service.state.kind === 'ready'
+          ? 'is-ready' : ''}`} aria-hidden="true" />{' '}
+          <strong>{cloudMode ? 'Cloud mode' : 'On-device mode'}</strong>
+          {' · '}Model: {modelLabel(service.state)}{!foreground && ' · Paused while away'}
+          {cloudMessage && ` · ${cloudMessage}`}
+          {service.privacyFaults > 0 && ` · A model response was stopped for safety (${service.privacyFaults}).`}
+        </div>
+        <button className="quiet" aria-expanded={privacy} onClick={() => setPrivacy(value => !value)}>
+          What leaves your laptop</button>
+        {privacy && <section className="privacy-panel" aria-label="What leaves your laptop">
+          <p>On-device mode keeps notebook processing on this device.</p>
+          <p>{copy.firebaseContact}</p>
+          <p>Cloud mode sends paragraphs, earlier statement wording, derived statements and concerns to Google to
+            write questions and a short description of your idea. Your profile and Never send list are not sent.</p>
+          <p>Search research sends only the question or description you approve, with separate consent.</p>
+          <button className="quiet" onClick={() => navigate('Outbox')}>What left your laptop</button>{' '}
+          <button className="quiet" onClick={() => navigate('Profile')}>Privacy controls</button>
+        </section>}
+        <details><summary>Details</summary><p>Browser availability: {service.browserAvailability}
+          {service.warmLatencyMs !== null && ` · Warm-up ${Math.round(service.warmLatencyMs)} ms`}
+          {' · '}Settings: {settingsLabel(settings)}</p></details>
       </div>
       {!cloudMode && showPrepare(service.state, service.browserAvailability, service.retryRequired) && <div>
         <button
           disabled={!canPrepare(configured, foreground, service.preparing, service.state)}
           onClick={() => { void service.prepare().catch(() => undefined); }}
-        >{service.state.kind === 'error' || service.retryRequired ? 'Retry model' : 'Prepare model'}</button>
+        >{service.state.kind === 'error' || service.retryRequired ? 'Set up model' : 'Download model'}</button>
         {!canPrepare(configured, foreground, service.preparing, service.state) &&
-          <p role="status">{prepareDisabledReason(configured, foreground, service.preparing)}</p>}
+          <p>{prepareDisabledReason(configured, foreground, service.preparing)}</p>}
       </div>}
     </footer>
   );

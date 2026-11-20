@@ -1,5 +1,8 @@
 import { expect, it } from 'vitest';
-import { canPrepare, modelLabel, prepareDisabledReason, settingsLabel, showPrepare } from './StatusBar';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import type { LocalModelService } from '../ai/localModel';
+import { StatusBar, canPrepare, modelLabel, prepareDisabledReason, settingsLabel, showPrepare } from './StatusBar';
 import { builtInSettings } from '../settings/defaults';
 
 it('uses clear local readiness labels rather than raw state names', () => {
@@ -33,6 +36,13 @@ it('shows preparation only for downloads or errors and explains disabled control
   expect(prepareDisabledReason(true, true, true)).toContain('progress');
 });
 
+it('keeps exactly one footer live status when the setup button is disabled', () => {
+  const service = { state: { kind: 'downloadable' }, browserAvailability: 'downloadable', preparing: false,
+    retryRequired: false, warmLatencyMs: null, privacyFaults: 0 } as unknown as LocalModelService;
+  const html = renderToStaticMarkup(createElement(StatusBar, { service, configured: false, foreground: true }));
+  expect((html.match(/role="status"/g) ?? [])).toHaveLength(1);
+  expect(html).toContain('not configured');
+});
 it('enables retry only when configured, visible and not already preparing', () => {
   const error = { kind: 'error', reason: 'failed' } as const;
   expect(canPrepare(true, true, false, error)).toBe(true);

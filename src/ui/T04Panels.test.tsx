@@ -22,6 +22,21 @@ it('renders an honest saved state and explicit notebook empty states', () => {
     promptVersion: 'extract.v2', status: 'done', attempts: 1, createdAt: 0, nextRunAt: 0 });
   expect(emptyReason(snapshot, true, true)).toContain('Nothing found');
 });
+it('distinguishes queued, running and hidden extraction work', () => {
+  const snapshot = empty();
+  snapshot.paragraphs.push({ id: 'p', projectId: 'default', order: 0, version: 1, updatedAt: 0,
+    text: 'one two three four five six seven eight nine ten eleven twelve' });
+  snapshot.jobs.push({ key: 'p@1#extract', paragraphId: 'p', paragraphVersion: 1, step: 'extract',
+    promptVersion: 'extract.v2', status: 'pending', attempts: 0, createdAt: 0, nextRunAt: 0 });
+  const render = (foreground: boolean) => renderToStaticMarkup(<NotebookPanel text="plan" save={() => {}}
+    storageStatus="saved" snapshot={snapshot} configured ready foreground={foreground} />);
+  expect(render(true)).toContain('Waiting to read');
+  expect(render(true)).not.toContain('Reading your paragraph on this device');
+  snapshot.jobs[0].status = 'running';
+  expect(render(true)).toContain('Reading your paragraph on this device');
+  expect(render(false)).toContain('Waiting to read');
+  expect(render(false)).not.toContain('Reading your paragraph on this device');
+});
 it('renders the local profile form, import/export and deletion controls', () => {
   const html = renderToStaticMarkup(<ProfilePanel records={[]} save={async () => {}} remove={async () => {}}
     replace={async () => {}} clearAll={async () => {}} />);

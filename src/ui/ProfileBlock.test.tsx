@@ -12,7 +12,7 @@ it('renders current selected records verbatim and reflects edits or deletions wi
     updatedAt: 0 } as ProfileRecord;
   const render = (profile: ProfileRecord[]) => renderToStaticMarkup(<ProfileBlock card={card} profile={profile} />);
   const original = render([record, lesson]);
-  expect(original).toContain('From your profile:');
+  expect(original).toContain('From your profile');
   expect(original).toContain('Original &amp; exact\nSecond line');
   expect(original).toContain('white-space:pre-wrap');
   expect(original.indexOf('Lesson first')).toBeLessThan(original.indexOf('Original &amp; exact'));

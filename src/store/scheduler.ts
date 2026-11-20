@@ -83,6 +83,7 @@ export class Scheduler {
       if (this.stopped || this.paused || this.blocked || !ready || generation !== this.generation) return;
       const claimed = await this.store.claim(this.now(), mode);
       if (!claimed) return;
+      this.changed();
       const controller = new AbortController();
       let dispatched = false;
       this.active = controller;

@@ -11,7 +11,7 @@ it('labels cloud mode and exposes a choice when local inference is unavailable',
   const service = { state: { kind: 'unsupported' }, browserAvailability: 'unsupported', warmLatencyMs: null,
     privacyFaults: 0, preparing: false, retryRequired: false } as LocalModelService;
   const bar = renderToStaticMarkup(<StatusBar service={service} configured foreground cloudMode />);
-  expect(bar).toContain('Cloud mode: your paragraphs are sent to Google');
+  expect(bar).toContain('Cloud mode');
   const hidden = renderToStaticMarkup(<StatusBar service={service} configured foreground={false} cloudMode />);
   expect(hidden).toContain('Paused while away');
   const discarded = renderToStaticMarkup(<StatusBar service={service} configured foreground

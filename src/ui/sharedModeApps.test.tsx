@@ -38,6 +38,7 @@ const h = vi.hoisted(() => {
 });
 vi.mock('react', async importOriginal => ({ ...await importOriginal<typeof import('react')>(),
   useState: h.useState, useRef: h.useRef, useMemo: h.useMemo, useEffect: h.useEffect }));
+const localFixture = vi.hoisted(() => ({ ready: false, run: vi.fn() }));
 const adapter = vi.hoisted(() => vi.fn().mockResolvedValue({ source: 'in_cloud', text: '{"items":[]}' }));
 const researchAdapter = vi.hoisted(() => vi.fn().mockResolvedValue({ source: 'in_cloud', result: {
   text: 'Grounded answer fixture', parts: ['Grounded answer fixture'], sources: [], supports: [],
@@ -51,9 +52,11 @@ vi.mock('../ai/cloudProcessing', async importOriginal => ({
 }));
 vi.mock('./service', () => ({ config: { apiKey: 'example', authDomain: 'example', projectId: 'example',
   appId: 'example', siteKey: 'example', dev: true, debug: false },
-  createService: () => ({ state: { kind: 'unsupported' }, browserAvailability: 'unsupported',
+  createService: () => ({ state: { kind: localFixture.ready ? 'ready' : 'unsupported' },
+    browserAvailability: localFixture.ready ? 'available' : 'unsupported',
     warmLatencyMs: null, privacyFaults: 0, preparing: false, retryRequired: false,
-    subscribe: () => () => {}, runLocal: vi.fn() }), startReadiness: () => () => {}, useForeground: () => true }));
+    subscribe: () => () => {}, runLocal: localFixture.run }),
+  startReadiness: () => () => {}, useForeground: () => true }));
 vi.mock('../settings/remoteSettings', async () => {
   const { builtInSettings } = await import('../settings/defaults');
   return { loadSettings: async () => builtInSettings() };
@@ -106,7 +109,103 @@ function add(type: string, callback: () => void) {
 function remove(type: string, callback: () => void) { listeners.get(type)?.delete(callback); }
 afterEach(() => {
   vi.unstubAllGlobals(); listeners.clear(); Channel.channels.clear(); adapter.mockClear(); researchAdapter.mockClear();
+  localFixture.ready = false; localFixture.run.mockReset();
 });
+
+it('loads and removes a sample without changing profile or Never send, and persists welcome dismissal', async () => {
+  vi.stubGlobal('BroadcastChannel', Channel);
+  const confirm = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(true);
+  vi.stubGlobal('window', { confirm, addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+  const values = new Map<string, string>();
+  vi.stubGlobal('localStorage', { getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => values.set(key, value), removeItem: (key: string) => values.delete(key) });
+  const seed = await openLocalStore();
+  await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+  await seed.putNeverSend(['Existing private term']);
+  await seed.putProfile({ id: 'p', type: 'skill', text: 'Existing profile', topics: [], tags: [], updatedAt: 1 });
+  const app = h.newInstance();
+  try {
+    mount(app);
+    await vi.waitFor(() => expect(component(app, 'Welcome').sampleAvailable).toBe(true));
+    component(app, 'Welcome').trySample();
+    await vi.waitFor(async () => expect((await seed.snapshot()).paragraphs).toHaveLength(5));
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').sampleActive).toBe(true));
+    await vi.waitFor(() => expect(values.get('tp.welcomeSeen')).toBe('true'));
+    expect((await seed.snapshot()).neverSend).toEqual(['Existing private term']);
+    expect((await seed.snapshot()).profile[0].text).toBe('Existing profile');
+    const editedSample = `${component(app, 'NotebookPanel').text} A small invented edit.`;
+    component(app, 'NotebookPanel').save(editedSample);
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').storageStatus).toBe('saved'));
+    expect(component(app, 'NotebookPanel').sampleActive).toBe(true);
+    component(app, 'NotebookPanel').removeSample();
+    expect((await seed.snapshot()).paragraphs).toHaveLength(5);
+    component(app, 'NotebookPanel').removeSample();
+    await vi.waitFor(async () => expect((await seed.snapshot()).paragraphs).toHaveLength(0));
+    expect((await seed.snapshot()).neverSend).toEqual(['Existing private term']);
+    expect((await seed.snapshot()).profile[0].text).toBe('Existing profile');
+    const reopened = h.newInstance();
+    try { expect(() => component(reopened, 'Welcome')).toThrow('Missing Welcome'); }
+    finally { for (const cleanup of reopened.cleanups) cleanup(); }
+  } finally {
+    for (const cleanup of app.cleanups) cleanup();
+    seed.close();
+  }
+}, 15000);
+
+it('refuses a stale sample removal after another tab replaces the notebook', async () => {
+  vi.stubGlobal('BroadcastChannel', Channel);
+  vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+  const values = new Map<string, string>();
+  vi.stubGlobal('localStorage', { getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => values.set(key, value), removeItem: (key: string) => values.delete(key) });
+  const seed = await openLocalStore();
+  await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+  const a = h.newInstance(); const b = h.newInstance();
+  try {
+    mount(a);
+    await vi.waitFor(() => expect(component(a, 'Welcome').sampleAvailable).toBe(true));
+    component(a, 'Welcome').trySample();
+    await vi.waitFor(() => expect(component(a, 'NotebookPanel').sampleActive).toBe(true));
+    await vi.waitFor(() => expect(values.get('tp.welcomeSeen')).toBe('true'));
+    mount(b);
+    await vi.waitFor(() => expect(component(b, 'NotebookPanel').sampleActive).toBe(true));
+    const staleRemove = component(a, 'NotebookPanel').removeSample;
+    component(b, 'NotebookPanel').save('');
+    await vi.waitFor(async () => expect((await seed.snapshot()).paragraphs).toHaveLength(0));
+    component(b, 'NotebookPanel').save('A completely unrelated private note written by another tab.');
+    await vi.waitFor(async () => expect((await seed.snapshot()).paragraphs[0]?.text).toContain('unrelated'));
+    for (const focus of listeners.get('focus') ?? []) focus();
+    await vi.waitFor(() => expect(component(a, 'NotebookPanel').sampleActive).toBe(false));
+    staleRemove();
+    await vi.waitFor(() => expect(component(a, 'StorageNotice').notice)
+      .toBe('Your notebook changed, so nothing was removed.'));
+    expect((await seed.snapshot()).paragraphs[0].text).toContain('unrelated');
+    expect(component(a, 'NotebookPanel').text).toContain('unrelated');
+    expect(component(a, 'NotebookPanel').sampleActive).toBe(false);
+  } finally { for (const instance of [a, b]) for (const cleanup of instance.cleanups) cleanup(); seed.close(); }
+}, 15000);
+
+it('uses the existing cloud opt-in when chosen from the welcome', async () => {
+  vi.stubGlobal('BroadcastChannel', Channel);
+  const confirm = vi.fn().mockReturnValue(true);
+  vi.stubGlobal('window', { confirm, addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('localStorage', { getItem: () => null, removeItem: () => {}, setItem: () => {} });
+  const seed = await openLocalStore();
+  await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+  const app = h.newInstance();
+  try {
+    mount(app);
+    await vi.waitFor(() => expect(component(app, 'Welcome').sampleAvailable).toBe(true));
+    component(app, 'Welcome').chooseCloud();
+    await vi.waitFor(async () => expect(await seed.cloudModeConsent()).toBe(true));
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(confirm.mock.calls[0][0]).toContain('statements and concerns');
+    expect(adapter).not.toHaveBeenCalled();
+  } finally { for (const cleanup of app.cleanups) cleanup(); seed.close(); }
+}, 15000);
 
 it('reconciles two mounted App instances on opt-in, opt-out and a missed broadcast', async () => {
   vi.stubGlobal('BroadcastChannel', Channel);
@@ -338,6 +437,135 @@ it('approves and researches one idea from two App trees without sending the note
     for (const cleanup of [...a.cleanups, ...b.cleanups]) cleanup();
     seed.close();
   }
+}, 15000);
+
+it('publishes a claimed local extraction to a ready App without a focus event', async () => {
+  vi.stubGlobal('BroadcastChannel', Channel);
+  vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('localStorage', { getItem: () => null, removeItem: () => {} });
+  localFixture.ready = true;
+  let release!: (value: { data: { items: never[] }; latencyMs: number; source: string; raw: string }) => void;
+  localFixture.run.mockImplementation(() => new Promise(resolve => { release = resolve; }));
+  const seed = await openLocalStore();
+  await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+  const paragraph = 'This fictional paragraph contains enough words to trigger an on-device extraction in the test.';
+  await seed.saveNotebook(paragraph, 0);
+  const app = h.newInstance();
+  try {
+    mount(app);
+    await vi.waitFor(() => expect(localFixture.run).toHaveBeenCalledOnce());
+    await vi.waitFor(() => {
+      const panel = component(app, 'NotebookPanel');
+      expect(panel.snapshot.jobs.some((job: { status: string }) => job.status === 'running')).toBe(true);
+      expect(panel.ready).toBe(true);
+    });
+    const panel = component(app, 'NotebookPanel');
+    const { NotebookPanel } = await import('./NotebookPanel');
+    h.enter(h.newInstance());
+    const tree = NotebookPanel(panel as Parameters<typeof NotebookPanel>[0]);
+    expect(JSON.stringify(tree)).toContain('Reading your paragraph on this device');
+    release({ data: { items: [] }, latencyMs: 1, source: 'on_device', raw: '{}' });
+  } finally { for (const cleanup of app.cleanups) cleanup(); seed.close(); }
+}, 15000);
+
+it('keeps pre-send checking and disabled Send across navigation before any request', async () => {
+  vi.stubGlobal('BroadcastChannel', Channel);
+  vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('localStorage', { getItem: () => null, removeItem: () => {} });
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const original = LocalStore.prototype.preSendCheck;
+  const spy = vi.spyOn(LocalStore.prototype, 'preSendCheck').mockImplementation(async function (this: LocalStore, id) {
+    await gate; return original.call(this, id);
+  });
+  const seed = await openLocalStore();
+  await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+  const paragraph = 'The hosting service supports fifty visitors while serving a public catalogue for users.';
+  await seed.saveNotebook(paragraph, 0); await seed.enqueueSettled(4000, 'extract.v2');
+  const extract = await seed.claim(4000);
+  await seed.complete(extract!.job, [{ kind: 'assumption', text: 'Fifty visitors',
+    quote: 'The hosting service supports fifty visitors', topics: ['hosting'] }], 4000);
+  await seed.finalizeReady();
+  const request = await seed.requestCheck((await seed.snapshot()).items[0].id, 5000);
+  const angles = await seed.claim(5000);
+  await seed.completeAngles(angles!.job, (await seed.anglesInput(angles!.job))!, [], 's', 5000, 'on_device');
+  const app = h.newInstance();
+  try {
+    mount(app);
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').storageStatus).toBe('saved'));
+    const pending = component(app, 'NotebookPanel').sendDraft(request.cardId, 'What are hosting limits?');
+    await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+    const entry = (await seed.snapshot()).outbox![0];
+    let panel = component(app, 'NotebookPanel');
+    expect(panel.checkingSend[entry.id]).toBe(true);
+    expect(panel.searching[entry.id]).toBe(false);
+    const { NotebookPanel } = await import('./NotebookPanel');
+    h.enter(h.newInstance());
+    const cardMarkup = renderToStaticMarkup(NotebookPanel(panel as Parameters<typeof NotebookPanel>[0]));
+    expect(cardMarkup).toContain('Checking before sending');
+    expect(cardMarkup).not.toContain('Searching the web');
+    expect(cardMarkup).toMatch(/<button disabled="">Send now/);
+    expect(researchAdapter).not.toHaveBeenCalled();
+    clickNav(app, 'Outbox');
+    const outbox = component(app, 'OutboxPage');
+    expect(outbox.checkingSend[entry.id]).toBe(true);
+    h.enter(h.newInstance());
+    const markup = renderToStaticMarkup(OutboxPage({ ...outbox } as Parameters<typeof OutboxPage>[0]));
+    expect(markup).toContain('Checking before sending');
+    expect(markup).not.toContain('Searching the web');
+    expect(markup).not.toContain('Research this question');
+    clickNav(app, 'Notebook');
+    panel = component(app, 'NotebookPanel');
+    expect(panel.checkingSend[entry.id]).toBe(true);
+    const card = panel.snapshot.cards.find((value: { id: string }) => value.id === request.cardId);
+    h.enter(h.newInstance());
+    const draft = renderToStaticMarkup(DraftControls({ card, outbox: entry, checkingSend: true,
+      research: async () => {} }));
+    expect(draft).toMatch(/<button disabled="">Send now/);
+    release();
+    await pending;
+    expect(researchAdapter).toHaveBeenCalledOnce();
+  } finally { release(); spy.mockRestore(); for (const cleanup of app.cleanups) cleanup(); seed.close(); }
+}, 15000);
+
+it('keeps the in-flight question status across navigation during a held dispatch', async () => {
+  vi.stubGlobal('BroadcastChannel', Channel);
+  vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('localStorage', { getItem: () => null, removeItem: () => {} });
+  let release!: (value: { source: 'in_cloud'; result: { text: string; parts: string[]; sources: never[];
+    supports: never[]; suggestions: string; grounded: false } }) => void;
+  researchAdapter.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+  const seed = await openLocalStore();
+  await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+  const paragraph = 'The hosting service supports fifty visitors while serving a public catalogue for users.';
+  await seed.saveNotebook(paragraph, 0); await seed.enqueueSettled(4000, 'extract.v2');
+  const extract = await seed.claim(4000);
+  await seed.complete(extract!.job, [{ kind: 'assumption', text: 'Fifty visitors',
+    quote: 'The hosting service supports fifty visitors', topics: ['hosting'] }], 4000);
+  await seed.finalizeReady();
+  const request = await seed.requestCheck((await seed.snapshot()).items[0].id, 5000);
+  const angles = await seed.claim(5000);
+  await seed.completeAngles(angles!.job, (await seed.anglesInput(angles!.job))!, [], 's', 5000, 'on_device');
+  const app = h.newInstance();
+  try {
+    mount(app);
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').storageStatus).toBe('saved'));
+    const pending = component(app, 'NotebookPanel').sendDraft(request.cardId, 'What are hosting limits?');
+    await vi.waitFor(() => expect(researchAdapter).toHaveBeenCalledOnce());
+    const entry = (await seed.snapshot()).outbox![0];
+    expect(component(app, 'NotebookPanel').searching[entry.id]).toBe(true);
+    clickNav(app, 'Outbox');
+    expect(component(app, 'OutboxPage').searching[entry.id]).toBe(true);
+    clickNav(app, 'Notebook');
+    expect(component(app, 'NotebookPanel').searching[entry.id]).toBe(true);
+    release({ source: 'in_cloud', result: { text: 'FAKE', parts: ['FAKE'], sources: [], supports: [],
+      suggestions: '', grounded: false } });
+    await pending;
+    expect(component(app, 'NotebookPanel').searching[entry.id]).toBe(false);
+  } finally { for (const cleanup of app.cleanups) cleanup(); seed.close(); }
 }, 15000);
 
 it('shows a failed dispatched search immediately in the actual card and Outbox', async () => {

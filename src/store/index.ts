@@ -82,6 +82,9 @@ export const STORE_VERSION = 7;
 export const CLOUD_PROCESSING_DAILY_LIMIT = 150;
 export const LEGACY_KEY = 'thoughtpartner-notebook';
 export const SETTLE_MS = 4000;
+export class SampleChangedError extends Error {
+  constructor() { super('Your notebook changed, so nothing was removed.'); }
+}
 export const MIN_WORDS = 12;
 export const MAX_ATTEMPTS = 3;
 export const jobKey = (id: string, version: number) => `${id}@${version}#extract`;
@@ -839,13 +842,33 @@ export class LocalStore {
       throw error;
     }
   }
-  async saveNotebook(text: string, now = Date.now()): Promise<Paragraph[]> {
+  async loadSampleIfEmpty(text: string, now = Date.now(),
+    capture?: (paragraphs: Paragraph[]) => void): Promise<boolean> {
+    const tx = this.db.transaction(['paragraphs', 'paragraphVersions'], 'readwrite');
+    void tx.done.catch(() => undefined);
+    try {
+      if (await tx.objectStore('paragraphs').count()) { await tx.done; return false; }
+      const inserted = matchParagraphs([], text, now, id);
+      for (const paragraph of inserted) {
+        await tx.objectStore('paragraphs').put(paragraph);
+        await tx.objectStore('paragraphVersions').put(paragraph);
+      }
+      await tx.done; capture?.(inserted); return true;
+    } catch (error) {
+      try { tx.abort(); } catch { /* Already finished or aborted. */ }
+      await tx.done.catch(() => undefined); throw error;
+    }
+  }
+  async saveNotebook(text: string, now = Date.now(),
+    expected?: ReadonlyArray<Pick<Paragraph, 'id' | 'version'>>): Promise<Paragraph[]> {
     const tx = this.db.transaction(['paragraphs', 'paragraphVersions', 'items', 'jobs', 'lineageVersions', 'cards'],
       'readwrite');
     void tx.done.catch(() => undefined);
     try {
       const store = tx.objectStore('paragraphs');
       const before = await store.getAll();
+      if (expected && (before.length !== expected.length || !before.every(paragraph => expected.some(value =>
+        value.id === paragraph.id && value.version === paragraph.version)))) throw new SampleChangedError();
       const after = matchParagraphs(before, text, now, id);
       const byId = new Map(after.map(p => [p.id, p]));
       const deleted = before.filter(p => !byId.has(p.id));

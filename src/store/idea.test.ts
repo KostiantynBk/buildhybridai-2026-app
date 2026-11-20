@@ -233,10 +233,10 @@ it('retains a neutral warning when basis extraction becomes terminal after a res
     await store.fail(extraction, 'Error', false, 11000, true);
     await store.reconcileOutbox();
     const html = await render();
-    expect(html).toContain('we couldn&#x27;t confirm it still fits');
+    expect(html).toContain('We couldn&#x27;t confirm this still matches your plan');
     expect(html).toContain('Public result');
     expect(html).toContain('Research again');
-    expect(html).not.toContain('Your plan changed since this was researched');
+    expect(html).not.toContain('Your plan changed since this was checked');
   } finally { store.close(); }
 });
 it('checks final text against the latest never-send terms before approval', async () => {

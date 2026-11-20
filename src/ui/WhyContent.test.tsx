@@ -11,10 +11,10 @@ it('renders exact cited profile text even when the v2 why sentence was dropped',
     depth: 'new', updatedAt: 0 }] as ProfileRecord[];
   const html = renderToStaticMarkup(<WhyContent card={card} profile={profile} />);
   expect(html).toContain('You are planning.');
-  expect(html).toContain('From your profile:');
+  expect(html).toContain('From your profile');
   expect(html).toContain('Original words, including punctuation!\nSecond line.');
   expect(html).toContain('white-space:pre-wrap');
   const none = renderToStaticMarkup(<WhyContent card={{ ...card, why: { ...card.why!, used: [] } }}
     profile={profile} />);
-  expect(none).not.toContain('From your profile:');
+  expect(none).not.toContain('From your profile');
 });

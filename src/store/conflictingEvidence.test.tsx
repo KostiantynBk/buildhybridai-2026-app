@@ -69,7 +69,7 @@ it('suppresses a hosting quote incorrectly returned as changed payment evidence'
   }] });
   const html = renderToStaticMarkup(createElement(NotebookPanel, { text: `${hosting}.`, save: () => {},
     storageStatus: 'saved', snapshot, configured: true, ready: true }));
-  expect(html).toContain('May have changed or been removed; please check.');
+  expect(html).toContain('We couldn&#x27;t confirm this still matches your plan. Please check.');
   expect(html).not.toContain('Now:');
   await extract(`${hosting}. This version adds a small explanatory note for the planning session.`, [hostItem], 20000);
   const next = await store.claim(100000);
@@ -120,7 +120,7 @@ it.each([
   }
   const html = renderToStaticMarkup(createElement(NotebookPanel, { text: `${hosting}.`, save: () => {},
     storageStatus: 'saved', snapshot, configured: true, ready: true }));
-  expect(html.match(/May have changed or been removed; please check\./g)).toHaveLength(2);
+  expect(html.match(/We couldn&#x27;t confirm this still matches your plan\. Please check\./g)).toHaveLength(2);
   expect(html).not.toContain('Now:');
   expect(html).not.toContain('Changed: was');
   await store.putDependency({ consumerId: 'payment-v2', lineageId: payment.lineageId!, version: 2 });
@@ -165,7 +165,7 @@ it('preserves a previously verified evidence baseline when a later quote conflic
   expect(third).toMatchObject({ needsConfirmation: true, conflictingEvidence: true, newQuote: paymentEvidence });
   const html = renderToStaticMarkup(createElement(NotebookPanel, { text: `${hosting}.`, save: () => {},
     storageStatus: 'saved', snapshot: await store.snapshot(), configured: true, ready: true }));
-  expect(html).toContain('May have changed or been removed; please check.');
+  expect(html).toContain('We couldn&#x27;t confirm this still matches your plan. Please check.');
   expect(html).not.toContain('Now:');
   await extract(`${hosting}. A later edit adds extra explanatory context for the plan.`, [hostItem], 30000);
   const claim = await store.claim(100000);

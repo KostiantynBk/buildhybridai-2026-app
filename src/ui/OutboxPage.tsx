@@ -3,10 +3,11 @@ import type { OutboxEntry } from '../store/triageTypes';
 import type { Snapshot } from '../store';
 import { lineageEligibility } from '../store/eligibility';
 import { researchFailureMessage } from '../ai/researchFailure';
+import { copy } from './copy';
 
 export function withdrawalText(entry: OutboxEntry): string {
   return entry.withdrawReason === 'listed-term' ? 'Withdrawn: contains a term on your never-send list.' :
-    entry.withdrawReason === 'stale' ? 'Withdrawn: the statement changed or needs checking.' :
+    entry.withdrawReason === 'stale' ? `Withdrawn: ${copy.uncertain} Check again.` :
       'Withdrawn: the question did not pass the privacy filter.';
 }
 function statusText(entry: OutboxEntry, snapshot?: Snapshot, sessionError?: string): string {
@@ -19,8 +20,10 @@ function statusText(entry: OutboxEntry, snapshot?: Snapshot, sessionError?: stri
       ? `Sent, but the search failed: ${researchFailureMessage(receipts[0].failureCode)}`
       : sessionError || 'Approved, not sent';
 }
-export function OutboxPage({ entries, decide, remove, snapshot, saving = false, research, researchErrors }: {
-  entries: OutboxEntry[]; researchErrors?: Record<string, string>;
+export function OutboxPage({ entries, decide, remove, snapshot, saving = false, research, researchErrors, searching,
+  checkingSend }: {
+  entries: OutboxEntry[]; researchErrors?: Record<string, string>; searching?: Record<string, boolean>;
+  checkingSend?: Record<string, boolean>;
   snapshot?: Snapshot; saving?: boolean; research?: (id: string) => Promise<void>;
   decide(id: string, value: 'approved' | 'rejected'): Promise<boolean>; remove(id: string): Promise<void> }) {
   const [error, setError] = useState('');
@@ -29,8 +32,8 @@ export function OutboxPage({ entries, decide, remove, snapshot, saving = false, 
       .catch(() => setError('Could not update the local Outbox.'));
   };
   return <section className="panel placeholder">
-    <span className="eyebrow">Local review</span><h2>Outbox</h2>
-    <p>Only an approved question can be researched in the cloud.</p>
+    <span className="eyebrow">Outbox</span><h2>What left your laptop</h2>
+    <p>Search uses only questions or descriptions you approve. Attempts may not reach the provider.</p>
     <section><h3>Cloud plan-processing attempts</h3>
       <p>{snapshot?.cloudProcessingSends?.length ?? 0} attempts. Times only; plan text is not listed.</p>
       <ul>{(snapshot?.cloudProcessingSends ?? []).map((time, index) =>
@@ -40,7 +43,15 @@ export function OutboxPage({ entries, decide, remove, snapshot, saving = false, 
     {[...entries].sort((a, b) => b.createdAt - a.createdAt).map(entry => <article className="item-card" key={entry.id}>
       {entry.kind === 'idea' && <p>Idea research</p>}
       <p>{entry.question}</p>
-      <p>{statusText(entry, snapshot, researchErrors?.[entry.id])}</p>
+      <p>{entry.status === 'approved' && searching?.[entry.kind === 'idea' ? `idea:${entry.ideaId}` : entry.id]
+        ? copy.searching : entry.status === 'approved' &&
+          checkingSend?.[entry.kind === 'idea' ? `idea:${entry.ideaId}` : entry.id]
+          ? copy.checkingBeforeResearch : statusText(entry, snapshot, researchErrors?.[entry.id])}</p>
+      {entry.status === 'approved' && (searching?.[entry.kind === 'idea' ? `idea:${entry.ideaId}` : entry.id] ||
+        checkingSend?.[entry.kind === 'idea' ? `idea:${entry.ideaId}` : entry.id]) &&
+        ['completed', 'failed'].includes((snapshot?.researchReceipts ?? [])
+          .filter(receipt => receipt.entryId === entry.id).sort((a, b) => b.sentAt - a.sentAt)[0]?.status ?? '') &&
+        <p>Previous status: {statusText(entry, snapshot, researchErrors?.[entry.id])}</p>}
       {entry.keptOut.length > 0 && <p>Left out of the question: {entry.keptOut.join(', ')}</p>}
       {entry.questionOrigin === 'manual' ? <p>Question written by you.</p> : entry.questionPromptVersion &&
         <p>Question prompt: {entry.questionPromptVersion}
@@ -56,7 +67,9 @@ export function OutboxPage({ entries, decide, remove, snapshot, saving = false, 
           <button onClick={() => respond(entry.id, 'rejected')}>Reject</button>
         </div>;
       })()}
-      {entry.status === 'approved' && entry.edited === undefined && research && <button disabled={saving}
+      {entry.status === 'approved' && entry.edited === undefined && research &&
+        !searching?.[entry.kind === 'idea' ? `idea:${entry.ideaId}` : entry.id] &&
+        <button disabled={saving || checkingSend?.[entry.kind === 'idea' ? `idea:${entry.ideaId}` : entry.id]}
         onClick={() => {
         void research(entry.id).then(() => setError('')).catch(error => setError(
           error instanceof Error ? error.message : 'Research could not be completed.'));

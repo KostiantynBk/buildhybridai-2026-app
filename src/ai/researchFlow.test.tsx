@@ -65,12 +65,25 @@ it('sends only the stored approved question through a mock and renders its unmod
       status: 'changed' }] };
   const staleCard = renderToStaticMarkup(<NotebookPanel text="" save={() => {}} storageStatus="saved"
     snapshot={stale} configured ready research={{ e: view }} />);
-  expect(staleCard.indexOf('Your plan changed since this was researched.'))
+  expect(staleCard.indexOf('Your plan changed since this was checked.'))
     .toBeLessThan(staleCard.indexOf('class="research-result"'));
   expect(staleCard).toContain('Café prices.');
+  const held = renderToStaticMarkup(<NotebookPanel text="" save={() => {}} storageStatus="saved" snapshot={stale}
+    configured ready research={{ e: view }} searching={{ e: true }} />);
+  const article = held.match(/<article class="item-card">([\s\S]*?)<\/article>/)?.[0] ?? '';
+  expect((article.match(/role="status"/g) ?? [])).toHaveLength(1);
+  expect(article).toContain('Your plan changed since this was checked.');
+  expect(article).toContain('Searching the web');
+  const uncertain: Snapshot = { ...stale, lineages: [{ ...stale.lineages![0], needsConfirmation: true }] };
+  const uncertainCard = renderToStaticMarkup(<NotebookPanel text="" save={() => {}} storageStatus="saved"
+    snapshot={uncertain} configured ready research={{ e: view }} />);
+  expect(uncertainCard).toContain('We couldn&#x27;t confirm this still matches your plan.');
+  expect(uncertainCard).not.toContain('Your plan changed since this was checked.');
+  expect(uncertainCard).toContain('Café prices.');
+  expect((uncertainCard.match(/We couldn&#x27;t confirm this still matches your plan\./g) ?? [])).toHaveLength(1);
   const changed = renderToStaticMarkup(<NotebookPanel text="" save={() => {}} storageStatus="saved"
     snapshot={snapshot} configured ready research={{ e: { ...view, changedAfterSend: true } }} />);
-  expect(changed).toContain('never-send term) after this question was sent.');
+  expect(changed).toContain('Your privacy settings');
   expect(view.changedAfterSend).toBe(false);
 });
 it('rejects a non-cloud result and never displays it', async () => {

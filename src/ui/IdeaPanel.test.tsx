@@ -25,22 +25,32 @@ it('explains that a mode-switched draft must be drafted again', () => {
   expect(html).toContain('Draft again');
   expect(html).not.toContain('Preparing your description');
 });
+it('labels the editable description and names its actions', () => {
+  const data = { ...snapshot, jobs: [{ key: 'job', paragraphId: 'p', paragraphVersion: 1, step: 'describe',
+    promptVersion: 'describe.v1', status: 'done', attempts: 1, createdAt: 1, nextRunAt: 1 }] } as Snapshot;
+  const html = renderToStaticMarkup(<IdeaPanel snapshot={data} idea={{ ...idea, status: 'ready' }} {...callbacks} />);
+  expect(html).toContain('<label>Public description <textarea');
+  expect(html).toContain('role="status"');
+  for (const button of html.matchAll(/<button\b[^>]*>([\s\S]*?)<\/button>/g)) {
+    expect(button[1].replace(/<[^>]*>/g, '').trim()).not.toBe('');
+  }
+});
 it('warns when a basis version advances, but not when unrelated lineages are added', () => {
   const added = { ...snapshot, lineages: [...snapshot.lineages!, { lineageId: 'new', version: 1, itemId: 'new',
     paragraphId: 'q', paragraphVersion: 1, status: 'current' as const }] };
-  expect(render(added)).not.toContain('Your plan changed since this was researched');
+  expect(render(added)).not.toContain('Your plan changed since this was checked');
   const afterUnrelatedEdit = renderToStaticMarkup(<IdeaPanel snapshot={added} idea={idea}
     view={{ ...view, changedAfterSend: true }} {...callbacks} />);
-  expect(afterUnrelatedEdit).not.toContain('Your plan changed since this was researched');
+  expect(afterUnrelatedEdit).not.toContain('Your plan changed since this was checked');
   const changed = { ...snapshot, lineages: [...snapshot.lineages!, { ...snapshot.lineages![0], version: 2,
     status: 'changed' as const }] };
   const html = render(changed);
-  expect(html).toContain('Your plan changed since this was researched');
+  expect(html).toContain('Your plan changed since this was checked');
   expect(html).toContain('Combinations are the model&#x27;s suggestions; check their sources.');
   expect(html).toContain('This answer used no web sources.');
   const uncertain = { ...snapshot, lineages: [...snapshot.lineages!, { ...snapshot.lineages![0], version: 2,
     status: 'changed' as const, needsConfirmation: true }] };
   const uncertainHtml = render(uncertain);
-  expect(uncertainHtml).toContain('we couldn&#x27;t confirm it still fits');
-  expect(uncertainHtml).not.toContain('Your plan changed since this was researched');
+  expect(uncertainHtml).toContain('We couldn&#x27;t confirm this still matches your plan');
+  expect(uncertainHtml).not.toContain('Your plan changed since this was checked');
 });

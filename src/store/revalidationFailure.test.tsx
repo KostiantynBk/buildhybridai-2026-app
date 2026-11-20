@@ -111,8 +111,8 @@ for (const scenario of ['waiting-extraction', 'ready-extraction', 'ready-compari
       }
       const html = renderToStaticMarkup(<NotebookPanel text={edited} save={() => {}} snapshot={snapshot}
         storageStatus="saved" configured ready />);
-      expect(html).toContain('May have changed: couldn&#x27;t re-check your edit.');
-      if (scenario !== 'ready-comparison') expect(html).toContain('An extraction stopped after bounded retries.');
+      expect(html).toContain('We couldn&#x27;t confirm this still matches your plan. Check again.');
+      if (scenario !== 'ready-comparison') expect(html).toContain('We could not finish reading this paragraph.');
       scheduler.stop(); store.close();
       store = await openLocalStore(name);
       scheduler = new Scheduler(store, service, () => 'extract.v2', () => {}, () => now);
@@ -131,7 +131,7 @@ for (const scenario of ['waiting-extraction', 'ready-extraction', 'ready-compari
       const pendingRecovery = await store.snapshot();
       const pendingHtml = renderToStaticMarkup(<NotebookPanel text={recoveredText} save={() => {}}
         snapshot={pendingRecovery} storageStatus="saved" configured ready />);
-      expect(pendingHtml).toContain('couldn&#x27;t re-check your edit');
+      expect(pendingHtml).toContain('We couldn&#x27;t confirm this still matches your plan. Check again.');
       scheduler.saved();
       for (let i = 0; i < 7; i++) { await scheduler.tick(); await new Promise(resolve => setTimeout(resolve, 0)); }
       await vi.waitFor(async () => {
@@ -148,8 +148,10 @@ for (const scenario of ['waiting-extraction', 'ready-extraction', 'ready-compari
         job.status === 'done')).toBe(true);
       const recovered = renderToStaticMarkup(<NotebookPanel text={recoveredText} save={() => {}} snapshot={snapshot}
         storageStatus="saved" configured ready />);
-      expect(recovered).not.toContain('couldn&#x27;t re-check your edit');
-      expect(recovered).not.toContain('An extraction stopped after bounded retries.');
+      if (scenario !== 'ready-comparison') {
+        expect(recovered).not.toContain('<p role="status">We couldn&#x27;t confirm this still matches your plan.');
+      }
+      expect(recovered).not.toContain('We could not finish reading this paragraph.');
       if (scenario !== 'waiting-extraction') {
         expect(snapshot.outbox!.find(entry => entry.id === originalEntryId)?.status).toBe('withdrawn');
       }
@@ -168,7 +170,7 @@ for (const scenario of ['waiting-extraction', 'ready-extraction', 'ready-compari
       const pendingNext = await store.snapshot();
       const nextHtml = renderToStaticMarkup(<NotebookPanel text={nextText} save={() => {}} snapshot={pendingNext}
         storageStatus="saved" configured ready />);
-      expect(nextHtml).not.toContain('couldn&#x27;t re-check your edit');
+      expect(nextHtml).not.toContain('<p role="status">We couldn&#x27;t confirm this still matches your plan.');
       {
         forceExtractionFailure = true;
         scheduler.saved();
@@ -191,7 +193,7 @@ for (const scenario of ['waiting-extraction', 'ready-extraction', 'ready-compari
         const terminal = await store.snapshot();
         const terminalHtml = renderToStaticMarkup(<NotebookPanel text={nextText} save={() => {}} snapshot={terminal}
           storageStatus="saved" configured ready />);
-        expect(terminalHtml).toContain('couldn&#x27;t re-check your edit');
+        expect(terminalHtml).toContain('We couldn&#x27;t confirm this still matches your plan. Check again.');
         expect(terminal.jobs.find(job => job.key === failedDependent?.key)?.attempts).toBe(1);
         if (scenario === 'ready-extraction') {
           expect(terminal.outbox!.find(entry => entry.id === originalEntryId)?.status).toBe('withdrawn');
