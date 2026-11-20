@@ -14,7 +14,7 @@ export function Welcome({ state, configured, foreground, preparing, cloudMode, c
   const installed = state.kind === 'downloadable' && browserAvailability === 'available';
   const canDownload = state.kind === 'downloadable' || state.kind === 'downloading';
   return <section className="panel welcome" aria-labelledby="welcome-title">
-    <span className="eyebrow">ThoughtPartner</span><h2 id="welcome-title">{copy.tagline}</h2>
+    <span className="eyebrow">ThoughtPartner</span><h2 id="welcome-title">Welcome</h2>
     <p>{copy.welcomePromise}</p><p>{cloudMode ? copy.welcomeCloud : copy.welcomeLocal}</p>
     <div role="status" aria-live="polite">
       {(ready || installed) && <p>Your browser can run the on-device model.</p>}
@@ -29,7 +29,7 @@ export function Welcome({ state, configured, foreground, preparing, cloudMode, c
       value={Math.max(0, Math.min(1, state.progress))} />}
     {canDownload && <button className="primary" disabled={!configured || !foreground || preparing}
       onClick={download}>{installed ? 'Set up model' : 'Download model'}</button>}
-    {!ready && !canDownload && !cloudMode && <div>
+    {(state.kind === 'unsupported' || state.kind === 'unavailable' || state.kind === 'error') && !cloudMode && <div>
       <button onClick={() => setSetup(value => !value)} aria-expanded={setup}>Set up Gemma 4 in Chrome</button>{' '}
       <button disabled={!configured || !cloudEnabled} onClick={chooseCloud}>Use cloud mode instead</button>
       {setup && <><ol>{chromeSetup.map(step => <li key={step}>{step}</li>)}</ol>

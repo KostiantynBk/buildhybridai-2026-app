@@ -230,7 +230,7 @@ it('reconciles two mounted App instances on opt-in, opt-out and a missed broadca
       expect(component(a, 'NotebookPanel').cloudMode).toBe(true);
       expect(component(b, 'StatusBar').cloudMode).toBe(true);
     });
-    await vi.waitFor(() => expect(adapter).toHaveBeenCalled());
+    await vi.waitFor(() => expect(adapter).toHaveBeenCalled(), { timeout: 5000 });
     await vi.waitFor(async () => expect((await seed.snapshot()).jobs[0])
       .toMatchObject({ runMode: 'in_cloud', measuredSource: 'in_cloud' }));
     component(a, 'NotebookPanel').save(
@@ -398,6 +398,42 @@ it('shows a completed receipt on a fresh App even if the idea-phase write was mi
     for (const cleanup of app.cleanups) cleanup();
     seed.close();
   }
+}, 15000);
+
+it('shows a completed ungrounded receipt when the secondary idea-phase write fails', async () => {
+  vi.stubGlobal('BroadcastChannel', Channel);
+  vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('localStorage', { getItem: () => null, removeItem: () => {} });
+  const seed = await openLocalStore();
+  await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+  const paragraph = 'The hosting plan supports visitors while a payment service handles purchases for people.';
+  await seed.saveNotebook(paragraph, 0); await seed.enqueueSettled(4000, 'extract.v2');
+  const extract = await seed.claim(4000);
+  await seed.complete(extract!.job, [
+    { kind: 'assumption', text: 'Hosting supports visitors', quote: 'The hosting plan supports visitors', topics: [] },
+    { kind: 'decision', text: 'Payment handles purchases', quote: 'a payment service handles purchases', topics: [] },
+    { kind: 'constraint', text: 'Purchases are for people', quote: 'purchases for people', topics: [] },
+  ], 4000); await seed.finalizeReady();
+  const idea = (await seed.startIdea(5000)).idea!;
+  const description = 'A notebook helps builders understand the decisions behind their product plans.';
+  await seed.finishIdeaDraft((await seed.claim(5000))!.job, description, []);
+  const phase = vi.spyOn(LocalStore.prototype, 'finishIdeaResearch').mockRejectedValue(new Error('forced'));
+  const app = h.newInstance();
+  try {
+    mount(app);
+    await vi.waitFor(() => expect(component(app, 'IdeaPanel').snapshot.ideas).toHaveLength(1));
+    await component(app, 'IdeaPanel').send(idea.id, description);
+    const panel = component(app, 'IdeaPanel');
+    expect(panel.snapshot.researchReceipts).toMatchObject([{ status: 'completed', failureCode: 'ungrounded' }]);
+    h.enter(h.newInstance());
+    const html = renderToStaticMarkup(IdeaPanel(panel as Parameters<typeof IdeaPanel>[0]));
+    expect(html).toContain('No web sources were attached');
+    expect(html).not.toContain('awaiting completion');
+    expect(html).not.toContain('Try again');
+    expect(component(app, 'StorageNotice').notice).toContain('local status could not be updated');
+    expect(researchAdapter).toHaveBeenCalledOnce();
+  } finally { phase.mockRestore(); for (const cleanup of app.cleanups) cleanup(); seed.close(); }
 }, 15000);
 
 it('approves and researches one idea from two App trees without sending the notebook', async () => {

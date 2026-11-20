@@ -10,6 +10,7 @@ import { compareV1 } from '../pipeline/prompts/compare.v1';
 import { anglesV21 } from '../pipeline/prompts/angles.v2.1';
 import { questionV21 } from '../pipeline/prompts/question.v2.1';
 import { describeV1 } from '../pipeline/prompts/describe.v1';
+import { describeV2 } from '../pipeline/prompts/describe.v2';
 
 export class CloudProcessingError extends Error {
   constructor(message: string, public readonly deferred = false) { super(message); this.name = 'CloudProcessingError'; }
@@ -51,7 +52,7 @@ export class CloudProcessingService {
   };
   private notify(message: string) { this.message = message; this.listeners.forEach(listener => listener()); }
   async runLocal<T>(job: Job<T>): Promise<{ data: T; latencyMs: number; source: string; raw: string }> {
-    const allowed = [extractV2, compareV1, anglesV21, questionV21, describeV1].some(prompt =>
+    const allowed = [extractV2, compareV1, anglesV21, questionV21, describeV1, describeV2].some(prompt =>
       job.instructions === prompt && job.schema === prompt.schema);
     if (!allowed) throw new CloudProcessingError('This legacy or unrecognized prompt cannot use cloud mode.');
     for (let attempt = 0; attempt < 2; attempt++) {

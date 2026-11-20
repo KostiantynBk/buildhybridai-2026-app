@@ -1,5 +1,5 @@
 export type ResearchFailureCode = 'network' | 'quota' | 'billing' | 'safety' | 'display-invalid' |
-  'source-invalid' | 'permission' | 'unknown';
+  'source-invalid' | 'permission' | 'unknown' | 'ungrounded';
 
 const messages: Record<ResearchFailureCode, string> = {
   network: 'Network error while researching. Please try again.',
@@ -9,6 +9,7 @@ const messages: Record<ResearchFailureCode, string> = {
   'display-invalid': 'Research could not be displayed with its required Search sources and suggestions.',
   'source-invalid': 'Cloud research did not run in the cloud.',
   permission: 'The cloud refused this request. Everything on your laptop still works.',
+  ungrounded: "No web sources were attached, so the answer isn't shown.",
   unknown: 'Research could not be completed. Check billing, connection and project settings.',
 };
 

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import questions from '../../eval/run4-questions.json';
 import ideas from '../../eval/run4-ideas.json';
 import { createCloudAdapter, IDEA_RESEARCH, isGrounded } from '../ai/cloudResearch';
-import type { ResearchView } from '../ai/researchFlow';
+import { UngroundedIdeaError, type ResearchView } from '../ai/researchFlow';
 import { loadSettings } from '../settings/remoteSettings';
 import { openLocalStore, type LocalStore } from '../store';
 import { ResearchBlock } from '../ui/ResearchBlock';
@@ -70,6 +70,9 @@ export function Run4Runner() {
       setMetrics(current => current.map(row => row.id === id ? { ...row, displayed: true } : row));
       setViews(current => ({ ...current, [item.id]: view }));
     } catch (error) {
+      if (isIdea && error instanceof UngroundedIdeaError) {
+        setViews(current => { const next = { ...current }; delete next[item.id]; return next; });
+      }
       setMessage(error instanceof Error ? error.message : 'Research could not be completed.');
     } finally { busy.current = false; setRunning(false); }
   };
@@ -90,7 +93,7 @@ export function Run4Runner() {
     {ideaItems.map(item => <article className="item-card" key={item.id}>
       <p>{item.id}</p><p>{item.description}</p>
       <button disabled={!store || !config || running} onClick={() => { void run(item); }}>Research idea</button>
-      {views[item.id] && <section><ResearchBlock result={views[item.id].result} />
+      {views[item.id] && isGrounded(views[item.id].result) && <section><ResearchBlock result={views[item.id].result} />
         <p>Combinations are the model's suggestions; check their sources.</p></section>}
     </article>)}
     <Run4Panel research={views} metrics={metrics} />

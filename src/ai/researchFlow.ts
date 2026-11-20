@@ -3,6 +3,9 @@ import { HARD_DAILY_CLOUD_BUDGET } from '../settings/defaults';
 import { isGrounded, sendChecked, type CloudAdapter, type ResearchResult } from './cloudResearch';
 import { researchFailureMessage, type ResearchFailureCode } from './researchFailure';
 
+export class UngroundedIdeaError extends Error {
+  constructor() { super(researchFailureMessage('ungrounded')); }
+}
 export type ResearchView = { result: ResearchResult; changedAfterSend: boolean; sentAt: number;
   latencyMs: number; attempts: number };
 type Store = Pick<LocalStore, 'snapshot' | 'preSendCheck' | 'reserveResearch' | 'finishResearch' |
@@ -48,14 +51,14 @@ export async function researchIdea(store: LocalStore, adapter: CloudAdapter, ide
   const guarded: Store = { snapshot: () => store.snapshot(), cloudConsent: () => store.cloudConsent(),
     preSendCheck: () => store.preSendIdeaCheck(ideaId), reserveResearch: (...args) => store.reserveResearch(...args),
     finishResearch: (...args) => store.finishResearch(...args), cancelResearch: key => store.cancelResearch(key) };
-  return researchApproved(guarded, adapter, entryId, model, options);
+  return researchApproved(guarded, adapter, entryId, model, { ...options, requireGrounding: true });
 }
 
 // Only the stored approved question crosses the adapter boundary. Reservations serialize across tabs.
 export async function researchApproved(
   store: Store, adapter: CloudAdapter, entryId: string, model: string,
   options: { budget: number; enabled?: boolean; canSend?: () => boolean; planUnchanged?: () => boolean;
-    now?: () => number;
+    now?: () => number; requireGrounding?: boolean;
     onAttempt?: () => void;
     onResponse?: (measurement: { latencyMs: number; sourceCount: number; suggestionsPresent: boolean;
       inCloud: boolean; grounded: boolean }) => void } =
@@ -93,10 +96,15 @@ export async function researchApproved(
       let changedAfterSend = true;
       try { changedAfterSend = !(await store.preSendCheck(entryId)).allowed ||
         !!(options.planUnchanged && !options.planUnchanged()); } catch { /* Be conservative. */ }
+      if (options.requireGrounding && !isGrounded(result)) {
+        await store.finishResearch(reservation, 'completed', 'ungrounded');
+        throw new UngroundedIdeaError();
+      }
       await store.finishResearch(reservation, 'completed').catch(() => undefined);
       return { result, changedAfterSend, sentAt, latencyMs: Math.max(0, completedAt - dispatchAt),
         attempts: attempt + 1 };
     } catch (error) {
+      if (error instanceof UngroundedIdeaError) throw error;
       if (!dispatched) {
         await store.cancelResearch(reservation).catch(() => undefined);
         throw error;

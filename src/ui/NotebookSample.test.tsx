@@ -6,9 +6,9 @@ import { NotebookPanel } from './NotebookPanel';
 const snapshot: Snapshot = { paragraphs: [], items: [], profile: [], jobs: [] };
 const props = { save: () => {}, storageStatus: 'saved' as const, snapshot, configured: true, ready: true,
   trySample: () => {}, removeSample: () => {} };
-it('offers a sample only for an empty notebook and labels the invented sample', () => {
+it('leaves sample loading to the welcome and labels the invented sample', () => {
   const empty = renderToStaticMarkup(<NotebookPanel {...props} text="" />);
-  expect(empty).toContain('Try a sample plan');
+  expect(empty).not.toContain('Try a sample plan');
   expect(empty).toContain('<label for="notebook"');
   const existing = renderToStaticMarkup(<NotebookPanel {...props} text="Existing private text" />);
   expect(existing).not.toContain('Try a sample plan');

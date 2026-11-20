@@ -11,7 +11,7 @@ import { Notices } from './Notices';
 import { StatusBar } from './StatusBar';
 import { STORAGE_BLOCKED_NOTICE, STORAGE_OUTDATED_NOTICE } from './storageNotices';
 import { createCloudAdapter, IDEA_RESEARCH } from '../ai/cloudResearch';
-import { researchApproved, researchIdea, type ResearchView } from '../ai/researchFlow';
+import { researchApproved, researchIdea, UngroundedIdeaError, type ResearchView } from '../ai/researchFlow';
 import { IdeaPanel } from './IdeaPanel';
 import { safeResearchErrorMessage } from '../ai/researchFailure';
 import type { ResearchMetric } from '../eval/Run4Panel';
@@ -448,6 +448,17 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
         storageStatusRef.current = 'error'; setStorageStatus('error');
       }
     } catch (error) {
+      if (error instanceof UngroundedIdeaError && store) {
+        setIdeaResearch(current => { const next = { ...current }; delete next[ideaId]; return next; });
+        let phaseFailed = false;
+        try { await store.finishIdeaResearch(ideaId, 'sent'); } catch { phaseFailed = true; }
+        try { await refreshData(); } catch { phaseFailed = true; }
+        if (phaseFailed) {
+          setStorageNotice('Research completed, but the local status could not be updated.');
+          storageStatusRef.current = 'error'; setStorageStatus('error');
+        }
+        return;
+      }
       if (attempted && store) await store.finishIdeaResearch(ideaId, 'failed').catch(() => undefined);
       try { if (store && storeRef.current === store) await refreshData(); } catch { /* Keep original error. */ }
       throw new Error(`${attempted ? 'Sent, but the search failed' : 'Approved, not sent'}: ` +
@@ -506,7 +517,6 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
         <NotebookPanel text={text} save={save} storageStatus={storageStatus} sampleActive={sampleActive &&
           snapshot.paragraphs.length === sampleIds.current.length &&
           snapshot.paragraphs.every(p => sampleIds.current.includes(p.id))}
-        trySample={() => { void loadSample(samplePlan).catch(() => setStorageNotice('Could not load the sample.')); }}
         removeSample={() => { void removeSample(); }}
         snapshot={snapshot} configured={config !== null}
         ready={cloudMode ? settings.values.cloud_enabled : service.state.kind === 'ready'}

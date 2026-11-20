@@ -146,7 +146,7 @@ export class Scheduler {
           const idea = await this.store.ideaForJob(claimed.job);
           if (!idea) return;
           const result = await describeIdea(run, idea.statements, mode, controller.signal,
-            () => { dispatched = true; });
+            () => { dispatched = true; }, idea.openingText, idea.describePromptVersion);
           if (this.stopped || controller.signal.aborted || generation !== this.generation) {
             await this.store.fail(claimed.job, 'AbortError', true, this.now(), false, dispatched);
           } else {

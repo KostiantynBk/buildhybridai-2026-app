@@ -23,7 +23,10 @@ it('validates separate idea descriptions and records HIGH-thinking provenance', 
   expect(() => validateRun4Ideas([{ ...rows[0], profile: 'A' }])).toThrow();
   const store = fixture();
   const adapter = vi.fn<CloudAdapter>().mockResolvedValue({ source: 'in_cloud', result });
-  await sendRun4Idea(store, adapter, rows[0], 'model', { enabled: true, budget: 1 });
+  await expect(sendRun4Idea(store, adapter, rows[0], 'model', { enabled: true, budget: 1 }))
+    .rejects.toThrow('No web sources were attached');
+  expect(adapter).toHaveBeenCalledOnce();
+  expect(store.finishResearch).toHaveBeenCalledWith(1, 'completed', 'ungrounded');
   expect(adapter).toHaveBeenCalledWith(rows[0].description, 'model');
   expect(run4Provenance(builtInSettings(), 'model', 'research.idea.v1'))
     .toMatchObject({ promptVersion: 'research.idea.v1', thinkingLevel: 'HIGH' });

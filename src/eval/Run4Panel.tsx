@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { ResearchView } from '../ai/researchFlow';
+import { isGrounded } from '../ai/suggestionsSafety';
 import type { Run4Provenance } from './run4Provenance';
 import { builtInSettings } from '../settings/defaults';
 
@@ -31,8 +32,9 @@ export function Run4Panel({ research, metrics }: {
       <pre>{JSON.stringify(metric.provenance, null, 2)}</pre></details>)}
     {(['research.v2', 'research.idea.v1'] as const).map(version => <section key={version}>
       <h3>{version === 'research.v2' ? 'Fact questions' : 'Idea descriptions'}</h3>
-      {Object.entries(research).filter(([id]) => metrics.some(metric => metric.questionId === id &&
-        metric.provenance.promptVersion === version)).map(([id, view]) => {
+      {Object.entries(research).filter(([id, view]) => (version !== 'research.idea.v1' || isGrounded(view.result)) &&
+        metrics.some(metric => metric.questionId === id && metric.provenance.promptVersion === version))
+        .map(([id, view]) => {
       const metricId = [...metrics].reverse().find(metric => metric.questionId === id && metric.displayed)?.id;
       return <fieldset key={id}><legend>{version === 'research.v2' ? 'Question' : 'Idea'} ID: {id}</legend>
       <p>{view.latencyMs} ms · {view.result.sources.filter(Boolean).length} sources · Suggestions

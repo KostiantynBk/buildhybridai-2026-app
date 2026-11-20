@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { IdeaRecord, Snapshot } from '../store';
 import { lineageHeads } from '../store/lineage';
 import { lineageEligibility } from '../store/eligibility';
+import { openingMatches } from '../store/ideaBasis';
 import type { ResearchView } from '../ai/researchFlow';
 import { IDEA_DRAFT_HINT } from '../pipeline/describeIdea';
 import { ResearchBlock } from './ResearchBlock';
@@ -28,15 +29,23 @@ export function IdeaPanel({ snapshot, idea, view, start, send, retry, decline, s
   const entry = idea?.outboxId ? snapshot.outbox?.find(value => value.id === idea.outboxId) : undefined;
   const receipt = entry && [...(snapshot.researchReceipts ?? [])].filter(value => value.entryId === entry.id)
     .sort((a, b) => b.sentAt - a.sentAt)[0];
-  const drafting = job?.status === 'pending' || job?.status === 'running';
-  const stale = idea?.basis.some(basis => {
+  const requiresOpening = idea?.describePromptVersion === 'describe.v2';
+  const requiresEntry = !!idea && requiresOpening && (!!idea.outboxId ||
+    ['approved', 'sent', 'failed', 'withdrawn'].includes(idea.status));
+  const openingChanged = !!idea && requiresOpening &&
+    (!openingMatches(idea.openingBasis, snapshot.paragraphs, true) ||
+      (requiresEntry && (!entry || !openingMatches(entry.openingBasis, snapshot.paragraphs, true))));
+  const drafting = !openingChanged && (job?.status === 'pending' || job?.status === 'running');
+  const stale = openingChanged || (idea?.basis.some(basis => {
     const head = heads.find(value => value.lineageId === basis.lineageId);
     return !!head && !head.needsConfirmation && !head.unchecked &&
       (head.version > basis.version || head.status === 'removed');
-  }) ?? false;
+  }) ?? false);
+  const ungrounded = receipt?.status === 'completed' && receipt.failureCode === 'ungrounded' ||
+    (!!view && !isGrounded(view.result));
   const basisStatuses = idea?.basis.map(basis => lineageEligibility(basis.lineageId, basis.version,
     snapshot.paragraphs, snapshot.lineages ?? [], snapshot.jobs)) ?? [];
-  const cannotApprove = basisStatuses.some(status => status === 'stale' || status === 'terminal');
+  const cannotApprove = openingChanged || basisStatuses.some(status => status === 'stale' || status === 'terminal');
   const checking = basisStatuses.some(status => status === 'checking');
   const uncertain = basisStatuses.some(status => status === 'terminal' || status === 'stale');
   const act = (fn: () => Promise<void>) => { setMessage(''); void fn().catch(error => setMessage(
@@ -56,7 +65,8 @@ export function IdeaPanel({ snapshot, idea, view, start, send, retry, decline, s
       {entry?.status !== 'withdrawn' && (searching || checkingSend) && receipt?.status === 'failed' &&
         <p>Previous attempt failed: {
         researchFailureMessage(receipt.failureCode)}</p>}
-      {view && stale && <p>{copy.definite} Research again.</p>}
+      {(view || receipt?.status === 'completed' || openingChanged) && stale &&
+        <p>{copy.definite} Research again.</p>}
       {view && !stale && uncertain && <p>{copy.uncertain} Research again.</p>}
       {view && !stale && !uncertain && checking && <p>Checking your latest change…</p>}
     </div>
@@ -72,7 +82,8 @@ export function IdeaPanel({ snapshot, idea, view, start, send, retry, decline, s
         <button disabled={busy} onClick={() => act(() => decline(idea.id))}>Don't send</button></>}
     </>}
     {entry?.status === 'withdrawn' && <p>Withdrawn: your plan or privacy settings changed. Draft again.</p>}
-    {entry?.status === 'approved' && receipt?.status === 'completed' && !view &&
+    {ungrounded && <p>{researchFailureMessage('ungrounded')}</p>}
+    {entry?.status === 'approved' && receipt?.status === 'completed' && !view && !ungrounded &&
       <p>{copy.resultsNotSaved}</p>}
     {idea && entry?.status === 'approved' && receipt?.status !== 'completed' && !view && !searching &&
       (idea.status === 'approved' || idea.status === 'failed' || idea.status === 'sent') && <>
@@ -80,8 +91,7 @@ export function IdeaPanel({ snapshot, idea, view, start, send, retry, decline, s
         ? `Sent, but the search failed: ${researchFailureMessage(receipt.failureCode)}` :
           receipt?.status === 'sent' ? copy.requestSent : copy.approvedNotSent}</p>}
       <button disabled={busy || stale || checkingSend} onClick={() => act(() => retry(idea.id))}>Try again</button></>}
-    {view && <section>{!isGrounded(view.result) && <p>{copy.noSources}</p>}
-      <ResearchBlock result={view.result} />
+    {view && !ungrounded && <section><ResearchBlock result={view.result} />
       <p>Combinations are the model's suggestions; check their sources.</p></section>}
     {message && entry?.status !== 'withdrawn' && !receipt && <p role="alert">{message}</p>}
   </section>;

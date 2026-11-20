@@ -11,7 +11,8 @@ const snapshot: Snapshot = { paragraphs: [], items: [], profile: [], jobs: [], l
   { lineageId: 'lineage', version: 1, itemId: 'i', paragraphId: 'p', paragraphVersion: 1, status: 'current' },
 ] };
 const view = { result: { text: 'Public result', parts: ['Public result'], sources: [], supports: [],
-  suggestions: '', grounded: false }, sentAt: 1, latencyMs: 1, attempts: 1, changedAfterSend: false };
+  suggestions: '<a href="https://google.com/search?q=test">Search</a>', grounded: true },
+  sentAt: 1, latencyMs: 1, attempts: 1, changedAfterSend: false };
 const callbacks = { start: async () => {}, send: async () => {}, retry: async () => {}, decline: async () => {} };
 function render(data: Snapshot) {
   return renderToStaticMarkup(<IdeaPanel snapshot={data} idea={idea} view={view} {...callbacks} />);
@@ -35,6 +36,22 @@ it('labels the editable description and names its actions', () => {
     expect(button[1].replace(/<[^>]*>/g, '').trim()).not.toBe('');
   }
 });
+it('fails closed if either v2 opening copy is missing or mismatched in a retained result', () => {
+  const first = { id: 'p', projectId: 'default', order: 0, version: 1, updatedAt: 1, text: 'A fictional plan.' };
+  const openingBasis = { id: 'p', version: 1, order: 0 };
+  const v2 = { ...idea, describePromptVersion: 'describe.v2' as const, openingBasis, outboxId: 'e' };
+  const entry = { id: 'e', kind: 'idea' as const, ideaId: idea.id, question: 'Fake description', keptOut: [],
+    status: 'approved' as const, createdAt: 1, openingBasis };
+  const base = { ...snapshot, paragraphs: [first], outbox: [entry] };
+  for (const side of ['idea', 'entry'] as const) for (const bad of [undefined, { ...openingBasis, id: 'missing' },
+    { ...openingBasis, version: 2 }, { ...openingBasis, order: 1 }]) {
+    const candidate = side === 'idea' ? { ...v2, openingBasis: bad } : v2;
+    const data = side === 'entry' ? { ...base, outbox: [{ ...entry, openingBasis: bad }] } : base;
+    const html = renderToStaticMarkup(<IdeaPanel snapshot={data} idea={candidate} view={view} {...callbacks} />);
+    expect(html).toContain('Your plan changed since this was checked.');
+    expect(html).toContain('Public result');
+  }
+});
 it('warns when a basis version advances, but not when unrelated lineages are added', () => {
   const added = { ...snapshot, lineages: [...snapshot.lineages!, { lineageId: 'new', version: 1, itemId: 'new',
     paragraphId: 'q', paragraphVersion: 1, status: 'current' as const }] };
@@ -47,7 +64,7 @@ it('warns when a basis version advances, but not when unrelated lineages are add
   const html = render(changed);
   expect(html).toContain('Your plan changed since this was checked');
   expect(html).toContain('Combinations are the model&#x27;s suggestions; check their sources.');
-  expect(html).toContain('This answer used no web sources.');
+  expect(html).not.toContain('This answer used no web sources.');
   const uncertain = { ...snapshot, lineages: [...snapshot.lineages!, { ...snapshot.lineages![0], version: 2,
     status: 'changed' as const, needsConfirmation: true }] };
   const uncertainHtml = render(uncertain);

@@ -1,5 +1,5 @@
 import { isGrounded, sendChecked, type CloudAdapter } from '../ai/cloudResearch';
-import { researchError, type ResearchView } from '../ai/researchFlow';
+import { researchError, UngroundedIdeaError, type ResearchView } from '../ai/researchFlow';
 import { filterQuestion } from '../pipeline/leakFilter';
 import { HARD_DAILY_CLOUD_BUDGET } from '../settings/defaults';
 import type { LocalStore } from '../store';
@@ -34,11 +34,13 @@ export function validateRun4Ideas(value: unknown): Run4Idea[] {
 export async function sendRun4Idea(store: Store, adapter: CloudAdapter, item: Run4Idea, model: string,
   options: { enabled: boolean; budget: number; canSend?: () => boolean; now?: () => number;
     onAttempt?: () => void; onResponse?: (value: Measurement) => void }): Promise<ResearchView> {
-  return sendRun4Question(store, adapter, { id: item.id, profile: 'A', question: item.description }, model, options);
+  return sendRun4Question(store, adapter, { id: item.id, profile: 'A', question: item.description }, model,
+    { ...options, requireGrounding: true });
 }
 export async function sendRun4Question(store: Store, adapter: CloudAdapter, item: Run4Question, model: string,
   options: { enabled: boolean; budget: number; canSend?: () => boolean; now?: () => number;
-    onAttempt?: () => void; onResponse?: (value: Measurement) => void }): Promise<ResearchView> {
+    onAttempt?: () => void; onResponse?: (value: Measurement) => void; requireGrounding?: boolean }):
+  Promise<ResearchView> {
   if (!options.enabled) throw new Error('Cloud research is currently disabled.');
   const now = options.now ?? Date.now;
   const budget = Number.isFinite(options.budget)
@@ -69,9 +71,14 @@ export async function sendRun4Question(store: Store, adapter: CloudAdapter, item
       const finished = now();
       let changedAfterSend = true;
       try { changedAfterSend = !await allowed(); } catch { /* Be conservative. */ }
+      if (options.requireGrounding && !isGrounded(result)) {
+        await store.finishResearch(reservation, 'completed', 'ungrounded');
+        throw new UngroundedIdeaError();
+      }
       await store.finishResearch(reservation, 'completed').catch(() => undefined);
       return { result, changedAfterSend, sentAt, latencyMs: Math.max(0, finished - started), attempts: attempt + 1 };
     } catch (error) {
+      if (error instanceof UngroundedIdeaError) throw error;
       if (!dispatched) { await store.cancelResearch(reservation).catch(() => undefined); throw error; }
       await store.finishResearch(reservation, 'failed').catch(() => undefined);
       const classified = researchError(error);

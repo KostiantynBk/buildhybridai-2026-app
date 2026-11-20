@@ -21,6 +21,7 @@ export interface ThoughtCard {
 export interface OutboxEntry {
   id: string; question: string; keptOut: string[]; cardId?: string; itemLineageId?: string; itemVersion?: number;
   kind?: 'question' | 'idea'; ideaId?: string; basis?: Array<{ lineageId: string; version: number }>;
+  openingBasis?: { id: string; version: number; order: number };
   describePromptVersion?: string; researchPromptVersion?: string;
   status: 'pending' | 'approved' | 'rejected' | 'withdrawn'; createdAt: number; decidedAt?: number;
   withdrawReason?: 'listed-term' | 'stale' | 'private-detail'; edited?: boolean;

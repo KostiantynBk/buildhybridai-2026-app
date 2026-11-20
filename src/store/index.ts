@@ -1,5 +1,6 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import { matchParagraphs, type Paragraph } from './matcher';
+import { firstParagraph, openingMatches, sentenceBoundedOpening, type OpeningBasis } from './ideaBasis';
 import { safeErrorName } from '../ai/errorMetadata';
 import { isResearchFailureCode, type ResearchFailureCode } from '../ai/researchFailure';
 import { calculateStaleness } from './staleness';
@@ -37,7 +38,8 @@ export type IdeaBasis = { lineageId: string; version: number };
 export interface IdeaRecord {
   id: string; status: 'ready' | 'approved' | 'declined' | 'sent' | 'failed' | 'withdrawn';
   draft: string; keptOut: string[]; finalText?: string; edited?: boolean; basis: IdeaBasis[];
-  statements: string[]; mode: 'on_device' | 'in_cloud'; describePromptVersion: 'describe.v1';
+  statements: string[]; mode: 'on_device' | 'in_cloud'; describePromptVersion: 'describe.v1' | 'describe.v2';
+  openingBasis?: OpeningBasis;
   researchPromptVersion: 'research.idea.v1'; createdAt: number; updatedAt: number; outboxId?: string;
   describeJobKey: string;
 }
@@ -45,7 +47,7 @@ export interface StoredJob {
   key: string; paragraphId: string; paragraphVersion: number;
   step: 'extract' | 'compare' | 'angles' | 'question' | 'whynote' | 'describe';
   promptVersion: 'extract.v1' | 'extract.v2' | 'compare.v1' | 'angles.v1' | 'angles.v2' | 'angles.v2.1' |
-    'question.v1' | 'question.v2' | 'question.v2.1' | 'whynote.v1' | 'whynote.v2' | 'describe.v1';
+    'question.v1' | 'question.v2' | 'question.v2.1' | 'whynote.v1' | 'whynote.v2' | 'describe.v1' | 'describe.v2';
   lineageId?: string; cardId?: string; ideaId?: string; requested?: boolean;
   status: 'pending' | 'running' | 'done' | 'superseded' | 'failed'; attempts: number; createdAt: number;
   nextRunAt: number; errorName?: string; measuredSource?: 'on_device' | 'in_cloud';
@@ -230,12 +232,14 @@ export class LocalStore {
         (job.status === 'pending' || job.status === 'running'));
       if (active?.ideaId) {
         const existing = await tx.objectStore('ideas').get(active.ideaId);
-        if (existing) { await tx.done; return { idea: existing }; }
+        if (existing && openingMatches(existing.openingBasis, paragraphs,
+          existing.describePromptVersion === 'describe.v2')) { await tx.done; return { idea: existing }; }
+        await tx.objectStore('jobs').put({ ...active, status: 'superseded', errorName: 'PlanChanged' });
       }
       const heads = lineageHeads(versions);
       const current = new Set(paragraphs.flatMap(paragraph => currentTriageItems(paragraph, items, versions, 'v2.1'))
         .map(item => item.lineageId));
-      const kinds = ['decision', 'constraint', 'assumption', 'open-question'];
+      const kinds = ['assumption', 'decision', 'constraint', 'open-question'];
       const selected = items.filter(item => item.status === 'current' && item.lineageId &&
         current.has(item.lineageId) && kinds.includes(item.kind) &&
         heads.some(head => head.itemId === item.id && head.lineageId === item.lineageId &&
@@ -243,20 +247,22 @@ export class LocalStore {
         .sort((a, b) => kinds.indexOf(a.kind) - kinds.indexOf(b.kind) ||
           (paragraphs.find(p => p.id === a.paragraphId)?.order ?? 0) -
             (paragraphs.find(p => p.id === b.paragraphId)?.order ?? 0) ||
-          (a.order ?? 0) - (b.order ?? 0) || a.id.localeCompare(b.id)).slice(0, 12);
+          (a.order ?? 0) - (b.order ?? 0) || a.id.localeCompare(b.id)).slice(0, 10);
       if (selected.length < 3) { await tx.done; return { reason: 'Add at least three current statements first.' }; }
+      const opening = firstParagraph(paragraphs);
+      if (!opening) { await tx.done; return { reason: 'Add a first paragraph before researching your idea.' }; }
       const ideaId = id();
       const describeJobKey = `idea#${ideaId}#describe`;
       const idea: IdeaRecord = { id: ideaId, status: 'ready', draft: '', keptOut: [], describeJobKey,
         basis: selected.map(item => { const head = heads.find(value => value.itemId === item.id)!;
           return { lineageId: head.lineageId, version: head.version }; }),
         statements: selected.map(item => item.text), mode: mode?.value ? 'in_cloud' : 'on_device',
-        describePromptVersion: 'describe.v1', researchPromptVersion: 'research.idea.v1',
+        openingBasis: { id: opening.id, version: opening.version, order: opening.order },
+        describePromptVersion: 'describe.v2', researchPromptVersion: 'research.idea.v1',
         createdAt: Math.max(now, ...ideas.map(value => value.createdAt + 1)), updatedAt: now };
       await tx.objectStore('ideas').put(idea);
-      const paragraph = paragraphs.find(value => value.id === selected[0].paragraphId)!;
-      await tx.objectStore('jobs').put({ key: describeJobKey, paragraphId: paragraph.id,
-        paragraphVersion: paragraph.version, step: 'describe', promptVersion: 'describe.v1', ideaId,
+      await tx.objectStore('jobs').put({ key: describeJobKey, paragraphId: opening.id,
+        paragraphVersion: opening.version, step: 'describe', promptVersion: 'describe.v2', ideaId,
         status: 'pending', attempts: 0, createdAt: now, nextRunAt: now, runMode: idea.mode });
       await tx.done; return { idea, created: true };
     } catch (error) {
@@ -265,13 +271,18 @@ export class LocalStore {
     }
   }
   async finishIdeaDraft(job: StoredJob, description: string, keptOut: string[], now = Date.now()): Promise<boolean> {
-    const tx = this.db.transaction(['ideas', 'jobs'], 'readwrite');
+    const tx = this.db.transaction(['ideas', 'jobs', 'paragraphs'], 'readwrite');
     void tx.done.catch(() => undefined);
     try {
       const current = await tx.objectStore('jobs').get(job.key);
       const idea = job.ideaId ? await tx.objectStore('ideas').get(job.ideaId) : undefined;
       if (!idea || idea.status !== 'ready' || !current || current.step !== 'describe' ||
           current.status !== 'running' || current.attempts !== job.attempts || idea.describeJobKey !== job.key) {
+        await tx.done; return false;
+      }
+      if (!openingMatches(idea.openingBasis, await tx.objectStore('paragraphs').getAll(),
+        idea.describePromptVersion === 'describe.v2')) {
+        await tx.objectStore('jobs').put({ ...current, status: 'superseded', errorName: 'PlanChanged' });
         await tx.done; return false;
       }
       const count = wordCount(description);
@@ -284,13 +295,20 @@ export class LocalStore {
       await tx.done.catch(() => undefined); throw error;
     }
   }
-  async ideaForJob(job: StoredJob): Promise<IdeaRecord | undefined> {
-    const tx = this.db.transaction(['ideas', 'jobs'], 'readonly');
+  async ideaForJob(job: StoredJob): Promise<(IdeaRecord & { openingText?: string }) | undefined> {
+    const tx = this.db.transaction(['ideas', 'jobs', 'paragraphs'], 'readwrite');
     const current = await tx.objectStore('jobs').get(job.key);
     const idea = job.ideaId ? await tx.objectStore('ideas').get(job.ideaId) : undefined;
+    const eligible = current?.status === 'running' && current.attempts === job.attempts && idea?.status === 'ready' &&
+      idea.describeJobKey === job.key;
+    const paragraphs = eligible ? await tx.objectStore('paragraphs').getAll() : [];
+    const valid = !eligible || openingMatches(idea.openingBasis, paragraphs,
+      idea.describePromptVersion === 'describe.v2');
+    if (eligible && !valid) await tx.objectStore('jobs').put({ ...current, status: 'superseded',
+      errorName: 'PlanChanged' });
     await tx.done;
-    return current?.status === 'running' && current.attempts === job.attempts && idea?.status === 'ready' &&
-      idea.describeJobKey === job.key ? idea : undefined;
+    return eligible && valid ? { ...idea, ...(idea.describePromptVersion === 'describe.v2'
+      ? { openingText: sentenceBoundedOpening(firstParagraph(paragraphs)!.text) } : {}) } : undefined;
   }
   async cloudModeConsent(): Promise<boolean> {
     return (await this.db.get('meta', 'cloud-mode-consent'))?.value === true;
@@ -378,8 +396,8 @@ export class LocalStore {
     const tx = this.db.transaction('research', 'readwrite');
     const receipt = await tx.store.get(key);
     if (receipt) await tx.store.put({ ...receipt, status,
-      ...(status === 'failed' ? { failureCode: isResearchFailureCode(failureCode) ? failureCode : 'unknown' } : {}) },
-    key);
+      ...(status === 'failed' ? { failureCode: isResearchFailureCode(failureCode) ? failureCode : 'unknown' } :
+        failureCode === 'ungrounded' ? { failureCode: 'ungrounded' as const } : {}) }, key);
     await tx.done;
   }
   async enqueueAngles(now: number, _mode: 'on_device' | 'in_cloud' = 'on_device'): Promise<void> {
@@ -955,8 +973,8 @@ export class LocalStore {
     }
   }
   async resume(): Promise<void> {
-    const tx = this.db.transaction(['jobs', 'comparisonBatches', 'cards', 'funnel', 'ideas', 'outbox', 'research'],
-      'readwrite');
+    const tx = this.db.transaction(['jobs', 'comparisonBatches', 'cards', 'funnel', 'ideas', 'outbox', 'research',
+      'paragraphs'], 'readwrite');
     void tx.done.catch(() => undefined);
     try {
       const receipts = await tx.objectStore('research').getAll();
@@ -990,6 +1008,22 @@ export class LocalStore {
           }
         }
       }
+      const paragraphs = await tx.objectStore('paragraphs').getAll();
+      for (const idea of await tx.objectStore('ideas').getAll()) {
+        if (idea.describePromptVersion !== 'describe.v2') continue;
+        const entry = idea.outboxId ? await tx.objectStore('outbox').get(idea.outboxId) : undefined;
+        if (openingMatches(idea.openingBasis, paragraphs, true) &&
+            (!entry || openingMatches(entry.openingBasis, paragraphs, true))) continue;
+        const job = await tx.objectStore('jobs').get(idea.describeJobKey);
+        if (job && (job.status === 'pending' || job.status === 'running')) {
+          await tx.objectStore('jobs').put({ ...job, status: 'superseded', errorName: 'PlanChanged' });
+        }
+        if (entry?.status === 'approved') {
+          await tx.objectStore('outbox').put({ ...entry, status: 'withdrawn', withdrawReason: 'stale',
+            decidedAt: Date.now() });
+          await tx.objectStore('ideas').put({ ...idea, status: 'withdrawn', updatedAt: Date.now() });
+        }
+      }
       await tx.done;
     } catch (error) {
       try { tx.abort(); } catch { /* Already finished or aborted. */ }
@@ -1013,7 +1047,8 @@ export class LocalStore {
             (job.step === 'compare' && job.promptVersion === 'compare.v1') ||
             (job.step === 'angles' && job.promptVersion === 'angles.v2.1') ||
             (job.step === 'question' && job.promptVersion === 'question.v2.1') ||
-            (job.step === 'describe' && job.promptVersion === 'describe.v1'))) continue;
+            (job.step === 'describe' && (job.promptVersion === 'describe.v1' ||
+              job.promptVersion === 'describe.v2')))) continue;
         if (job.attempts >= MAX_ATTEMPTS) {
           await tx.objectStore('jobs').put({ ...job, status: 'failed',
             failureReason: 'interrupted-at-attempt-limit' });
@@ -1341,6 +1376,9 @@ export class LocalStore {
         tx.objectStore('privacy').get('never-send')]);
       const statuses = idea.basis.map(value => lineageEligibility(value.lineageId, value.version,
         paragraphs, versions, jobs));
+      if (!openingMatches(idea.openingBasis, paragraphs, idea.describePromptVersion === 'describe.v2')) {
+        await tx.done; return { reason: 'Your plan changed. Draft again.' };
+      }
       if (statuses.some(status => status !== 'eligible')) {
         await tx.done; return { reason: statuses.some(status => status === 'stale' || status === 'terminal')
           ? 'Your plan changed. Draft again.' : 'Checking your latest change…' };
@@ -1358,7 +1396,8 @@ export class LocalStore {
       const keptOut = idea.keptOut.filter(value => filterQuestion(value, terms).passed);
       const edited = finalText !== idea.draft;
       await tx.objectStore('outbox').put({ id: entryId, kind: 'idea', ideaId, question: finalText, keptOut,
-        basis: idea.basis, status: 'approved', createdAt: now, decidedAt: now, edited,
+        basis: idea.basis, ...(idea.openingBasis ? { openingBasis: idea.openingBasis } : {}),
+        status: 'approved', createdAt: now, decidedAt: now, edited,
         describePromptVersion: idea.describePromptVersion, researchPromptVersion: idea.researchPromptVersion });
       await tx.objectStore('ideas').put({ ...idea, status: 'approved', finalText, edited, keptOut,
         outboxId: entryId, updatedAt: now });
@@ -1418,7 +1457,9 @@ export class LocalStore {
         tx.objectStore('privacy').get('never-send'), tx.objectStore('meta').get('cloud-consent')]);
       const statuses = idea.basis.map(value => lineageEligibility(value.lineageId, value.version,
         paragraphs, versions, jobs));
-      const stale = statuses.some(status => status === 'stale' || status === 'terminal');
+      const stale = !openingMatches(idea.openingBasis, paragraphs, idea.describePromptVersion === 'describe.v2') ||
+        !openingMatches(entry.openingBasis, paragraphs, idea.describePromptVersion === 'describe.v2') ||
+        statuses.some(status => status === 'stale' || status === 'terminal');
       if (!stale && statuses.some(status => status === 'checking')) {
         await tx.done; return { allowed: false, reason: 'not-eligible-yet' };
       }

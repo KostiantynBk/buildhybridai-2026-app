@@ -10,10 +10,9 @@ export function Notices({ configured, state, cloudMode, cloudEnabled, chooseClou
       {!configured && (
         <div className="notice">Firebase is not configured: AI features are off. See README setup.</div>
       )}
-      {['unsupported', 'unavailable', 'downloadable', 'downloading'].includes(state.kind) && !cloudMode && (
+      {['unsupported', 'unavailable', 'error'].includes(state.kind) && !cloudMode && (
         <div className="notice">
-          <p>The on-device model is {state.kind === 'unsupported' || state.kind === 'unavailable'
-            ? 'unavailable' : 'not yet ready'}. Choose how you would like to continue.</p>
+          <p>The on-device model is unavailable or setup failed. Choose how you would like to continue.</p>
           <button onClick={() => setSetup(value => !value)}>Set up Chrome's on-device model</button>{' '}
           {chooseCloud && <button disabled={!configured || !cloudEnabled} onClick={chooseCloud}>
             Use cloud mode instead</button>}

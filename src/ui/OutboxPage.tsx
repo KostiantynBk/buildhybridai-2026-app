@@ -15,7 +15,9 @@ function statusText(entry: OutboxEntry, snapshot?: Snapshot, sessionError?: stri
   if (entry.status !== 'approved') return `Status: ${entry.status}`;
   const receipts = (snapshot?.researchReceipts ?? []).filter(value => value.entryId === entry.id)
     .sort((a, b) => b.sentAt - a.sentAt);
-  return receipts[0]?.status === 'completed' ? 'Research completed' : receipts[0]?.status === 'sent'
+  return receipts[0]?.status === 'completed' && receipts[0].failureCode === 'ungrounded'
+    ? 'Sent; no web sources were provided.' : receipts[0]?.status === 'completed' ? 'Research completed' :
+    receipts[0]?.status === 'sent'
     ? 'Research request sent' : receipts[0]?.status === 'failed'
       ? `Sent, but the search failed: ${researchFailureMessage(receipts[0].failureCode)}`
       : sessionError || 'Approved, not sent';
@@ -47,12 +49,19 @@ export function OutboxPage({ entries, decide, remove, snapshot, saving = false, 
         ? copy.searching : entry.status === 'approved' &&
           checkingSend?.[entry.kind === 'idea' ? `idea:${entry.ideaId}` : entry.id]
           ? copy.checkingBeforeResearch : statusText(entry, snapshot, researchErrors?.[entry.id])}</p>
+      {entry.kind === 'idea' && entry.status === 'withdrawn' && (snapshot?.researchReceipts ?? [])
+        .filter(receipt => receipt.entryId === entry.id).sort((a, b) => b.sentAt - a.sentAt)[0]?.status ===
+        'completed' &&
+        <p>{(snapshot?.researchReceipts ?? []).filter(receipt => receipt.entryId === entry.id)
+          .sort((a, b) => b.sentAt - a.sentAt)[0].failureCode === 'ungrounded'
+          ? 'Sent; no web sources were provided.' : 'Research completed.'}</p>}
       {entry.status === 'approved' && (searching?.[entry.kind === 'idea' ? `idea:${entry.ideaId}` : entry.id] ||
         checkingSend?.[entry.kind === 'idea' ? `idea:${entry.ideaId}` : entry.id]) &&
         ['completed', 'failed'].includes((snapshot?.researchReceipts ?? [])
           .filter(receipt => receipt.entryId === entry.id).sort((a, b) => b.sentAt - a.sentAt)[0]?.status ?? '') &&
         <p>Previous status: {statusText(entry, snapshot, researchErrors?.[entry.id])}</p>}
-      {entry.keptOut.length > 0 && <p>Left out of the question: {entry.keptOut.join(', ')}</p>}
+      {entry.keptOut.length > 0 && <p>Left out of the {entry.kind === 'idea' ? 'description' : 'question'}: {
+        entry.keptOut.join(', ')}</p>}
       {entry.questionOrigin === 'manual' ? <p>Question written by you.</p> : entry.questionPromptVersion &&
         <p>Question prompt: {entry.questionPromptVersion}
           {entry.triageVersion ? ` · Triage: ${entry.triageVersion}` : ''}</p>}

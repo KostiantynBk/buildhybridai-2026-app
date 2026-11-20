@@ -8,6 +8,7 @@ import { modeRouter } from '../ui/modeRouter';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
 import { IdeaPanel } from '../ui/IdeaPanel';
+import { stubSafeSuggestionParser } from '../ai/testSuggestionParser';
 
 const paragraph = 'Builders use this notebook to plan products and keep assumptions, limits and decisions visible.';
 const items = [
@@ -23,7 +24,7 @@ async function setup() {
   await store.complete(job!.job, items, 4000, 'on_device'); await store.finalizeReady();
   return { store, name };
 }
-it('limits an idea basis to twelve ordered current statements', async () => {
+it('limits an idea basis to ten deterministically ordered current statements', async () => {
   const store = await openLocalStore(`idea-limit-${crypto.randomUUID()}`);
   try {
     const phrases = Array.from({ length: 15 }, (_, index) => `This statement number ${index} has clear words`);
@@ -33,8 +34,8 @@ it('limits an idea basis to twelve ordered current statements', async () => {
       text: `Item ${index}`, quote, topics: [] }));
     await store.complete(extraction!.job, values, 4000, 'on_device'); await store.finalizeReady();
     const idea = (await store.startIdea(5000)).idea!;
-    expect(idea.basis).toHaveLength(12);
-    expect(idea.statements.slice(0, 10)).toEqual(Array.from({ length: 10 }, (_, index) => `Item ${index + 5}`));
+    expect(idea.basis).toHaveLength(10);
+    expect(idea.statements).toEqual(Array.from({ length: 10 }, (_, index) => `Item ${index}`));
   } finally { store.close(); }
 });
 it('selects ordered current statements and serializes drafting and approval across tabs', async () => {
@@ -45,7 +46,7 @@ it('selects ordered current statements and serializes drafting and approval acro
     const idea = starts[0].idea!;
     expect((await store.startIdea(5000)).created).toBeUndefined();
     expect((await store.snapshot()).jobs.filter(job => job.step === 'describe')).toHaveLength(1);
-    expect(idea.statements).toEqual(['Keep decisions visible', 'Keep limits visible', 'Builders plan products']);
+    expect(idea.statements).toEqual(['Builders plan products', 'Keep decisions visible', 'Keep limits visible']);
     expect(idea.mode).toBe('on_device');
     const text = 'A notebook helps builders write down the decisions and limits in their product plans.';
     const job = await store.claim(5000);
@@ -165,6 +166,7 @@ it('withdraws a confirmed removed basis before any SDK call', async () => {
   } finally { store.close(); }
 });
 it('does not send when the basis starts revalidation, and notices edits during a response', async () => {
+  stubSafeSuggestionParser();
   for (const beforeSend of [true, false]) {
     const { store } = await setup();
     try {
@@ -178,7 +180,7 @@ it('does not send when the basis starts revalidation, and notices edits during a
       const adapter = vi.fn(async () => {
         await store.saveNotebook(`${paragraph} More text.`, Date.now());
         return { source: 'in_cloud', result: { text: 'Example result', parts: ['Example result'], sources: [],
-          supports: [], suggestions: '', grounded: false } };
+          supports: [], suggestions: '<a href="https://google.com/search?q=test">Search</a>', grounded: true } };
       });
       const attempt = researchIdea(store, adapter, idea.id, 'model', { budget: 10 });
       if (beforeSend) {
@@ -208,7 +210,7 @@ it('records edited approval once and rejects declines without an Outbox entry', 
     expect((await store.snapshot()).outbox![0]).toMatchObject({ kind: 'idea', question: edited, edited: true });
   } finally { store.close(); }
 });
-it('retains a neutral warning when basis extraction becomes terminal after a result', async () => {
+it('shows a definite warning when the v2 opening paragraph changes after a result', async () => {
   const { store } = await setup();
   try {
     const idea = (await store.startIdea(5000)).idea!;
@@ -222,21 +224,21 @@ it('retains a neutral warning when basis extraction becomes terminal after a res
     await store.enqueueSettled(11000, 'extract.v2');
     const extraction = (await store.claim(11000))!.job;
     const view = { result: { text: 'Public result', parts: ['Public result'], sources: [], supports: [],
-      suggestions: '', grounded: false }, sentAt: 1, latencyMs: 1, attempts: 1, changedAfterSend: false };
+      suggestions: '<a href="https://google.com/search?q=test">Search</a>', grounded: true },
+    sentAt: 1, latencyMs: 1, attempts: 1, changedAfterSend: false };
     const render = async () => {
       const snapshot = await store.snapshot();
       return renderToStaticMarkup(createElement(IdeaPanel, { snapshot,
         idea: snapshot.ideas!.find(value => value.id === idea.id), view, start: async () => {},
         send: async () => {}, retry: async () => {}, decline: async () => {} }));
     };
-    expect(await render()).toContain('Checking your latest change');
+    expect(await render()).toContain('Your plan changed since this was checked');
     await store.fail(extraction, 'Error', false, 11000, true);
     await store.reconcileOutbox();
     const html = await render();
-    expect(html).toContain('We couldn&#x27;t confirm this still matches your plan');
+    expect(html).toContain('Your plan changed since this was checked');
     expect(html).toContain('Public result');
     expect(html).toContain('Research again');
-    expect(html).not.toContain('Your plan changed since this was checked');
   } finally { store.close(); }
 });
 it('checks final text against the latest never-send terms before approval', async () => {
