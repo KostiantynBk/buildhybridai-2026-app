@@ -487,11 +487,13 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
         chooseCloud={() => { void enableCloudMode().catch(() => setStorageNotice('Could not enable cloud mode.')); }}
         download={() => { void service.prepare().catch(() => undefined); }}
         checkAgain={() => { void service.probe().catch(() => undefined); }}
-        sampleAvailable={storageStatus === 'saved' && !text.trim()} trySample={() => {
+        sampleAvailable={storageStatus === 'saved' && !text.trim() && snapshot.paragraphs.length === 0 && !sampleActive}
+        trySample={() => {
           void loadSample(samplePlan).catch(error => setStorageNotice(error instanceof Error
             ? error.message : 'Could not load the sample.'));
         }} startBlank={dismissWelcome} />}
-      {page === 'Notebook' ? <><IdeaPanel snapshot={snapshot} idea={latestIdea}
+      {page === 'Notebook' ? <><div hidden={snapshot.paragraphs.length === 0 || !text.trim()}>
+        <IdeaPanel snapshot={snapshot} idea={latestIdea}
         view={latestIdea && ideaResearch[latestIdea.id]}
         searching={!!latestIdea && !!searching[`idea:${latestIdea.id}`]}
         checkingSend={!!latestIdea && !!checking[`idea:${latestIdea.id}`]}
@@ -513,10 +515,12 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
           const store = storeRef.current;
           if (!store || !await store.declineIdea(id)) throw new Error('Could not decline this description.');
           await refreshData();
-        }} />
+        }} /></div>
         <NotebookPanel text={text} save={save} storageStatus={storageStatus} sampleActive={sampleActive &&
           snapshot.paragraphs.length === sampleIds.current.length &&
           snapshot.paragraphs.every(p => sampleIds.current.includes(p.id))}
+        trySample={!welcomeVisible ? () => { void loadSample(samplePlan).catch(error => setStorageNotice(
+          error instanceof Error ? error.message : 'Could not load the sample.')); } : undefined}
         removeSample={() => { void removeSample(); }}
         snapshot={snapshot} configured={config !== null}
         ready={cloudMode ? settings.values.cloud_enabled : service.state.kind === 'ready'}

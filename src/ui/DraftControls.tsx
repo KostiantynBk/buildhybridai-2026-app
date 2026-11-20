@@ -42,7 +42,7 @@ export function DraftControls({ card, outbox, receiptStatus, failureCode, resear
     }} /></label>
       {(card.draftKeptOut ?? []).length > 0 && <p>Left out of the question: {card.draftKeptOut!.join(', ')}</p>}
       {send && <button disabled={busy || controlsDisabled} onClick={() => act(() => send(card.id, text))}>
-        Send this question</button>}{' '}
+        Send this question</button>}
       {decline && <button disabled={busy || controlsDisabled} onClick={() => act(() => decline(card.id))}>
         Don't send</button>}</>}
     {outbox && <><p>{outbox.question}</p>

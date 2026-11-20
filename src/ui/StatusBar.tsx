@@ -90,7 +90,7 @@ export function StatusBar({
           <p>Cloud mode sends paragraphs, earlier statement wording, derived statements and concerns to Google to
             write questions and a short description of your idea. Your profile and Never send list are not sent.</p>
           <p>Search research sends only the question or description you approve, with separate consent.</p>
-          <button className="quiet" onClick={() => navigate('Outbox')}>What left your laptop</button>{' '}
+          <button className="quiet" onClick={() => navigate('Outbox')}>What left your laptop</button>
           <button className="quiet" onClick={() => navigate('Profile')}>Privacy controls</button>
         </section>}
         <details><summary>Details</summary><p>Browser availability: {service.browserAvailability}

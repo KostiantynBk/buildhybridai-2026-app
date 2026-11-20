@@ -78,7 +78,7 @@ export function emptyReason(snapshot: Snapshot, configured: boolean, ready: bool
 }
 export function NotebookPanel({ text, save, storageStatus, snapshot, configured, ready, feedback, research,
   researchAgain, researchErrors, searching, checkingSend, cloudMode = false, foreground = true, checkThis, sendDraft,
-  declineDraft, reopenDraft, sampleActive = false, removeSample, cardOnly = false,
+  declineDraft, reopenDraft, sampleActive = false, trySample, removeSample, cardOnly = false,
   controlsDisabled = false }: {
   text: string; save: (value: string) => void; storageStatus: 'loading' | 'saving' | 'saved' | 'error';
   snapshot: Snapshot; configured: boolean; ready: boolean;
@@ -89,7 +89,7 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
   checkThis?: (itemId: string) => Promise<void>;
   sendDraft?: (cardId: string, text: string) => Promise<void>;
   declineDraft?: (cardId: string) => Promise<void>; reopenDraft?: (cardId: string) => Promise<void>;
-  sampleActive?: boolean; removeSample?: () => void;
+  sampleActive?: boolean; trySample?: () => void; removeSample?: () => void;
 }) {
   const [researchError, setResearchError] = useState('');
   const heads = lineageHeads(snapshot.lineages ?? []);
@@ -120,6 +120,8 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
             storageStatus === 'saving' ? 'Saving…' : storageStatus === 'loading' ? 'Opening local storage…' :
               'Not saved'}</span></div>
         <p>Give your plan room to take shape. Separate paragraphs with a blank line.</p>
+        {trySample && storageStatus === 'saved' && !text.trim() && snapshot.paragraphs.length === 0 &&
+          !sampleActive && <button className="secondary" onClick={trySample}>Try a sample plan</button>}
         {sampleActive && <p>Sample plan (invented) · <button className="quiet" onClick={removeSample}>
           Remove sample</button></p>}
         <label htmlFor="notebook" className="sr-only">Your planning notebook</label>

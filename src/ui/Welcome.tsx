@@ -30,13 +30,13 @@ export function Welcome({ state, configured, foreground, preparing, cloudMode, c
     {canDownload && <button className="primary" disabled={!configured || !foreground || preparing}
       onClick={download}>{installed ? 'Set up model' : 'Download model'}</button>}
     {(state.kind === 'unsupported' || state.kind === 'unavailable' || state.kind === 'error') && !cloudMode && <div>
-      <button onClick={() => setSetup(value => !value)} aria-expanded={setup}>Set up Gemma 4 in Chrome</button>{' '}
+      <button onClick={() => setSetup(value => !value)} aria-expanded={setup}>Set up Gemma 4 in Chrome</button>
       <button disabled={!configured || !cloudEnabled} onClick={chooseCloud}>Use cloud mode instead</button>
       {setup && <><ol>{chromeSetup.map(step => <li key={step}>{step}</li>)}</ol>
         <button onClick={checkAgain}>Check again</button></>}
     </div>}
     <div className="welcome-actions">
-      {sampleAvailable && <button className="primary" onClick={trySample}>Try a sample plan</button>}{' '}
+      {sampleAvailable && <button className="primary" onClick={trySample}>Try a sample plan</button>}
       <button onClick={startBlank}>{sampleAvailable ? 'Start blank' : 'Continue'}</button>
     </div>
   </section>;

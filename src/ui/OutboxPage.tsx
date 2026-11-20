@@ -72,7 +72,7 @@ export function OutboxPage({ entries, decide, remove, snapshot, saving = false, 
         return <div>
           {eligibility === 'checking' && <p>Checking your edit.</p>}
           <button disabled={eligibility !== 'eligible'} onClick={() => respond(entry.id, 'approved')}>
-            Approve</button>{' '}
+            Approve</button>
           <button onClick={() => respond(entry.id, 'rejected')}>Reject</button>
         </div>;
       })()}
@@ -82,7 +82,7 @@ export function OutboxPage({ entries, decide, remove, snapshot, saving = false, 
         onClick={() => {
         void research(entry.id).then(() => setError('')).catch(error => setError(
           error instanceof Error ? error.message : 'Research could not be completed.'));
-      }}>Research this question</button>}{' '}
+      }}>Research this question</button>}
       <button onClick={() => {
         if (window.confirm('Delete this local Outbox entry?')) {
           void remove(entry.id).catch(() => setError('Could not delete the local Outbox entry.'));

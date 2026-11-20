@@ -44,6 +44,9 @@ button {
   border-radius: 8px;
   padding: 8px 12px;
 }
+:not(nav):not(.profile-actions) > button + button {
+  margin-inline-start: var(--space-2);
+}
 button.primary {
   color: var(--surface);
   background: var(--accent);
@@ -101,7 +104,7 @@ h3 {
 }
 nav {
   display: flex;
-  gap: 5px;
+  gap: var(--space-2);
 }
 nav button {
   border: 0;
@@ -187,7 +190,7 @@ textarea::placeholder {
   min-height: 500px;
 }
 .profile { max-width: 900px; }
-.profile-actions, .profile form { display: flex; flex-wrap: wrap; gap: 12px; margin: 18px 0; }
+.profile-actions, .profile form { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 18px 0; }
 .profile form { flex-direction: column; }
 .profile form label { display: block; }
 .profile-text { display: block; min-height: 100px; margin: 8px 0; border: 1px solid var(--control-border); padding: 8px; }

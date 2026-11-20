@@ -4,6 +4,7 @@ import type { ReactElement, ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { LocalStore, openLocalStore, STORE_VERSION } from '../store';
 import { openDB } from 'idb';
+import { stubSafeSuggestionParser } from '../ai/testSuggestionParser';
 
 const h = vi.hoisted(() => {
   type Instance = { slots: unknown[]; index: number; effects: Array<() => void>; cleanups: Array<() => void> };
@@ -86,6 +87,12 @@ function component(instance: Instance, name: string): Record<string, any> {
   if (!element) throw new Error(`Missing ${name}`);
   return element.props as Record<string, any>;
 }
+function ideaWrapper(instance: Instance): ReactElement<{ hidden?: boolean; children?: ReactNode }> {
+  const wrapper = nodes(render(instance)).find(value => value.type === 'div' &&
+    (value.props as { children?: ReactElement }).children?.type === IdeaPanel);
+  if (!wrapper) throw new Error('Missing idea wrapper');
+  return wrapper as ReactElement<{ hidden?: boolean; children?: ReactNode }>;
+}
 function clickNav(instance: Instance, name: string) {
   const button = nodes(render(instance)).find(element => element.type === 'button' &&
     (element.props as { children?: string }).children === name);
@@ -128,6 +135,7 @@ it('loads and removes a sample without changing profile or Never send, and persi
   try {
     mount(app);
     await vi.waitFor(() => expect(component(app, 'Welcome').sampleAvailable).toBe(true));
+    expect(component(app, 'NotebookPanel').trySample).toBeUndefined();
     component(app, 'Welcome').trySample();
     await vi.waitFor(async () => expect((await seed.snapshot()).paragraphs).toHaveLength(5));
     await vi.waitFor(() => expect(component(app, 'NotebookPanel').sampleActive).toBe(true));
@@ -142,6 +150,14 @@ it('loads and removes a sample without changing profile or Never send, and persi
     expect((await seed.snapshot()).paragraphs).toHaveLength(5);
     component(app, 'NotebookPanel').removeSample();
     await vi.waitFor(async () => expect((await seed.snapshot()).paragraphs).toHaveLength(0));
+    expect((await seed.snapshot()).neverSend).toEqual(['Existing private term']);
+    expect((await seed.snapshot()).profile[0].text).toBe('Existing profile');
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').storageStatus).toBe('saved'));
+    const notebook = component(app, 'NotebookPanel');
+    expect(typeof notebook.trySample).toBe('function');
+    notebook.trySample();
+    await vi.waitFor(async () => expect((await seed.snapshot()).paragraphs).toHaveLength(5));
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').sampleActive).toBe(true));
     expect((await seed.snapshot()).neverSend).toEqual(['Existing private term']);
     expect((await seed.snapshot()).profile[0].text).toBe('Existing profile');
     const reopened = h.newInstance();
@@ -185,6 +201,139 @@ it('refuses a stale sample removal after another tab replaces the notebook', asy
     expect(component(a, 'NotebookPanel').text).toContain('unrelated');
     expect(component(a, 'NotebookPanel').sampleActive).toBe(false);
   } finally { for (const instance of [a, b]) for (const cleanup of instance.cleanups) cleanup(); seed.close(); }
+}, 15000);
+
+it.each(['fresh', 'stale', 'grounded'] as const)(
+  'hides the %s stored idea while the notebook is empty and restores it without deleting history', async variant => {
+    vi.stubGlobal('BroadcastChannel', Channel);
+    vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+    vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+    vi.stubGlobal('localStorage', { getItem: () => null, removeItem: () => {}, setItem: () => {} });
+    if (variant === 'grounded') {
+      stubSafeSuggestionParser();
+      researchAdapter.mockResolvedValueOnce({ source: 'in_cloud', result: { text: 'FAKE_GROUNDED_RESULT',
+        parts: ['FAKE_GROUNDED_RESULT'], sources: [], supports: [],
+        suggestions: '<a href="https://google.com/search?q=test">Search</a>', grounded: true } });
+    }
+    const seed = await openLocalStore();
+    await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+    const paragraph = 'The hosting plan supports visitors while a payment service handles purchases for people.';
+    await seed.saveNotebook(paragraph, 0); await seed.enqueueSettled(4000, 'extract.v2');
+    const extract = await seed.claim(4000);
+    await seed.complete(extract!.job, [
+      { kind: 'assumption', text: 'Hosting supports visitors',
+        quote: 'The hosting plan supports visitors', topics: [] },
+      { kind: 'decision', text: 'Payment handles purchases', quote: 'a payment service handles purchases', topics: [] },
+      { kind: 'constraint', text: 'Purchases are for people', quote: 'purchases for people', topics: [] },
+    ], 4000); await seed.finalizeReady();
+    const idea = (await seed.startIdea(5000)).idea!;
+    const description = 'A notebook helps builders understand the decisions behind their product plans.';
+    await seed.finishIdeaDraft((await seed.claim(5000))!.job, description, []);
+    await seed.approveIdea(idea.id, description); await seed.setCloudConsent(true);
+    if (variant === 'stale') await seed.saveNotebook(`${paragraph} A change.`, 6000);
+    const app = h.newInstance();
+    try {
+      mount(app);
+      await vi.waitFor(() => expect(component(app, 'NotebookPanel').storageStatus).toBe('saved'));
+      if (variant === 'grounded') await component(app, 'IdeaPanel').retry(idea.id);
+      const before = await seed.snapshot();
+      const initialPanel = component(app, 'IdeaPanel');
+      const previousView = initialPanel.view;
+      if (variant === 'grounded') expect(previousView.result.text).toBe('FAKE_GROUNDED_RESULT');
+      h.enter(h.newInstance());
+      const initialHtml = renderToStaticMarkup(IdeaPanel(initialPanel as Parameters<typeof IdeaPanel>[0]));
+      if (variant === 'stale') expect(initialHtml).toContain('Your plan changed since this was checked.');
+      else expect(initialHtml).not.toContain('Your plan changed since this was checked.');
+      component(app, 'NotebookPanel').save('');
+      await vi.waitFor(() => expect(component(app, 'NotebookPanel').storageStatus).toBe('saved'));
+      await vi.waitFor(() => expect(ideaWrapper(app).props.hidden).toBe(true));
+      const empty = await seed.snapshot();
+      expect(empty.ideas).toEqual(before.ideas);
+      expect(empty.outbox).toEqual(before.outbox);
+      expect(empty.researchReceipts).toEqual(before.researchReceipts);
+      component(app, 'NotebookPanel').save(paragraph);
+      await vi.waitFor(() => expect(component(app, 'NotebookPanel').storageStatus).toBe('saved'));
+      await vi.waitFor(() => expect(component(app, 'IdeaPanel').idea.id).toBe(idea.id));
+      expect(ideaWrapper(app).props.hidden).toBe(false);
+      const restored = component(app, 'IdeaPanel');
+      if (variant === 'grounded') expect(restored.view).toEqual(previousView);
+      h.enter(h.newInstance());
+      const html = renderToStaticMarkup(IdeaPanel(restored as Parameters<typeof IdeaPanel>[0]));
+      expect(html).toContain('Your plan changed since this was checked.');
+    } finally { for (const cleanup of app.cleanups) cleanup(); seed.close(); }
+  }, 15000);
+
+it('preserves the edited idea draft when a blank save fails and the same plan returns', async () => {
+  vi.stubGlobal('BroadcastChannel', Channel);
+  vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('localStorage', { getItem: () => null, removeItem: () => {}, setItem: () => {} });
+  const seed = await openLocalStore();
+  await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+  const first = 'Restaurants lose money when guests do not show.';
+  const second = 'The booking page accepts deposits and sends a reminder to each guest before their reservation.';
+  const plan = `${first}\n\n${second}`;
+  await seed.saveNotebook(plan, 0); await seed.enqueueSettled(4000, 'extract.v2');
+  const extraction = (await seed.claim(4000))!.job;
+  await seed.complete(extraction, [
+    { kind: 'assumption', text: 'Guests may not attend', quote: 'each guest', topics: [] },
+    { kind: 'decision', text: 'Send a reminder', quote: 'sends a reminder', topics: [] },
+    { kind: 'constraint', text: 'Accept deposits', quote: 'accepts deposits', topics: [] },
+  ], 4000); await seed.finalizeReady();
+  const idea = (await seed.startIdea(5000)).idea!;
+  const draft = 'A booking page helps restaurants reduce missed reservations by collecting deposits.';
+  await seed.finishIdeaDraft((await seed.claim(5000))!.job, draft, [], 5000);
+  const before = await seed.snapshot();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const original = LocalStore.prototype.saveNotebook;
+  const spy = vi.spyOn(LocalStore.prototype, 'saveNotebook').mockImplementation(async function (this: LocalStore,
+    text, now, expected) {
+    if (!text) { await gate; throw new Error('forced blank save failure'); }
+    return original.call(this, text, now, expected);
+  });
+  const app = h.newInstance(); const child = h.newInstance();
+  const renderIdea = () => {
+    const props = component(app, 'IdeaPanel');
+    h.enter(child);
+    const tree = IdeaPanel(props as Parameters<typeof IdeaPanel>[0]);
+    for (const effect of child.effects.splice(0)) effect();
+    return tree;
+  };
+  try {
+    mount(app);
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').storageStatus).toBe('saved'));
+    renderIdea();
+    const textarea = nodes(renderIdea()).find(node => node.type === 'textarea')!;
+    (textarea.props as { onChange(event: unknown): void }).onChange({
+      target: { value: 'My corrected public wording' } });
+    expect((nodes(renderIdea()).find(node => node.type === 'textarea')!.props as { value: string }).value)
+      .toBe('My corrected public wording');
+    component(app, 'NotebookPanel').save('');
+    expect(ideaWrapper(app).props.hidden).toBe(true);
+    const hiddenWrapper = ideaWrapper(app);
+    h.enter(child);
+    expect(renderToStaticMarkup(hiddenWrapper)).toMatch(/^<div hidden="">/);
+    release();
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').storageStatus).toBe('error'));
+    expect(ideaWrapper(app).props.hidden).toBe(true);
+    component(app, 'NotebookPanel').save(plan);
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').storageStatus).toBe('saved'));
+    expect(ideaWrapper(app).props.hidden).toBe(false);
+    expect((nodes(renderIdea()).find(node => node.type === 'textarea')!.props as { value: string }).value)
+      .toBe('My corrected public wording');
+    const after = await seed.snapshot();
+    expect(after.paragraphs).toEqual(before.paragraphs);
+    expect(after.lineages).toEqual(before.lineages);
+    expect(after.ideas).toEqual(before.ideas);
+    expect(after.outbox).toEqual(before.outbox);
+    expect(after.researchReceipts).toEqual(before.researchReceipts);
+    expect(researchAdapter).not.toHaveBeenCalled();
+  } finally {
+    release(); spy.mockRestore();
+    for (const cleanup of app.cleanups) cleanup();
+    seed.close();
+  }
 }, 15000);
 
 it('uses the existing cloud opt-in when chosen from the welcome', async () => {

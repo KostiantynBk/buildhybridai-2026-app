@@ -135,7 +135,7 @@ export function ProfilePanel({ records, save, remove, replace, neverSend = [], s
       <ul className="profile-records">{records.map(record => <li key={record.id}>
         <strong>{record.type}{record.depth ? ` · ${record.depth}` : ''}</strong> — {record.text}
         <div className="muted">{[...record.topics, ...record.tags].join(', ')}</div>
-        <button onClick={() => edit(record)}>Edit</button>{' '}
+        <button onClick={() => edit(record)}>Edit</button>
         <button onClick={() => {
           if (window.confirm('Delete this profile record?')) {
             void remove(record.id).catch(() => setError('Delete failed.'));
@@ -165,7 +165,7 @@ export function ProfilePanel({ records, save, remove, replace, neverSend = [], s
           onChange={event => { changed(); setTags(event.target.value); }} />
         </label>
         <div><button type="submit" disabled={saving} aria-describedby={saving ? 'profile-saving' : undefined}>
-          {editing ? 'Save changes' : 'Add record'}</button>{' '}
+          {editing ? 'Save changes' : 'Add record'}</button>
           {editing && <button type="button" onClick={reset}>Cancel edit</button>}</div>
       </form>
       {error && <p role="alert">{error}</p>}

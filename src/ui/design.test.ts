@@ -28,6 +28,11 @@ it('keeps text and primary action token contrast at WCAG AA levels', () => {
   expect(css).toContain(':focus-visible');
   expect(css).toContain('prefers-reduced-motion: reduce');
 });
+it('uses the existing spacing token between inline button siblings', () => {
+  expect(css).toContain(':not(nav):not(.profile-actions) > button + button {\n' +
+    '  margin-inline-start: var(--space-2);');
+  expect(css).toMatch(/\.profile-actions,\s*\.profile form\s*\{[^}]*gap:\s*var\(--space-2\)/);
+});
 it('keeps Insights in development navigation only', () => {
   expect(navigationItems(false)).not.toContain('Insights');
   expect(navigationItems(true)).toContain('Insights');

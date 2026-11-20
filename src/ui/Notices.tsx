@@ -13,7 +13,7 @@ export function Notices({ configured, state, cloudMode, cloudEnabled, chooseClou
       {['unsupported', 'unavailable', 'error'].includes(state.kind) && !cloudMode && (
         <div className="notice">
           <p>The on-device model is unavailable or setup failed. Choose how you would like to continue.</p>
-          <button onClick={() => setSetup(value => !value)}>Set up Chrome's on-device model</button>{' '}
+          <button onClick={() => setSetup(value => !value)}>Set up Chrome's on-device model</button>
           {chooseCloud && <button disabled={!configured || !cloudEnabled} onClick={chooseCloud}>
             Use cloud mode instead</button>}
           {chooseCloud && (!configured || !cloudEnabled) && <p>Cloud mode is unavailable: {
