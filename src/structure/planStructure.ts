@@ -7,13 +7,21 @@ export function isHeadingBlock(text: string): boolean {
 export function headingText(text: string): string {
   return text.trim().replace(/^#{1,6}[ \t]+/u, '');
 }
+function labelText(text: string): string {
+  return text.split(/\r?\n/u).filter(line => {
+    const cells = tableCells(line);
+    return !cells || !cells.every(cell => /^:?-+:?$/u.test(cell));
+  }).join(' ').replace(/\|/gu, ' ').replace(/\*\*|__|`/gu, '')
+    .replace(/(^|[^\p{L}\p{N}])[*_](?=\S)|(?<=\S)[*_](?=$|[^\p{L}\p{N}])/gu, '$1')
+    .replace(/\s+/gu, ' ').trim();
+}
 export function paragraphLabel(paragraph: Paragraph, paragraphs: readonly Paragraph[]): string {
   const ordered = [...paragraphs].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
   const position = ordered.findIndex(value => value.id === paragraph.id);
   const heading = ordered.slice(0, Math.max(0, position)).reverse().find(value => isHeadingBlock(value.text));
-  const words = paragraph.text.trim().split(/\s+/u).filter(Boolean);
+  const words = labelText(paragraph.text).split(/\s+/u).filter(Boolean);
   const preview = words.slice(0, 8).join(' ') + (words.length > 8 ? '…' : '');
-  return heading ? `Under “${headingText(heading.text)}”: “${preview}”` : `“${preview}”`;
+  return heading ? `Under “${labelText(headingText(heading.text))}”: “${preview}”` : `“${preview}”`;
 }
 
 export function extractionEligible(text: string, mode: 'on_device' | 'in_cloud',
@@ -43,8 +51,9 @@ function tableCells(line: string): string[] | undefined {
   return cells.length ? cells : undefined;
 }
 
-/** Returns row inputs for long Markdown tables or lists; plain prose remains one input. */
-export function extractionUnits(text: string): string[] {
+export type ExtractionUnit = { input: string; quoteSource: string };
+/** Returns row inputs and their permissible quote sources; plain prose remains one input. */
+export function extractionParts(text: string): ExtractionUnit[] {
   const lines = text.split(/\r?\n/u);
   const nonempty = lines.filter(line => line.trim());
   const header = nonempty.length >= 4 ? tableCells(nonempty[0]) : undefined;
@@ -53,7 +62,10 @@ export function extractionUnits(text: string): string[] {
   if (header && delimiter && header.length === delimiter.length &&
       delimiter.every(cell => /^:?-+:?$/u.test(cell)) &&
       rows.every(cells => cells && cells.length === header.length)) {
-    return nonempty.slice(2).map(row => `${nonempty[0]}\n${row}`);
+    return nonempty.slice(2).map(row => {
+      const input = `${nonempty[0]}\n${row}`;
+      return { input, quoteSource: input };
+    });
   }
   const listStart = /^\s*(?:[-+*]|\d+[.)])[ \t]+\S/u;
   const first = lines.findIndex(line => listStart.test(line));
@@ -65,10 +77,16 @@ export function extractionUnits(text: string): string[] {
         if (current) items.push(current);
         current = line;
       } else if (/^\s+\S/u.test(line) && current) current += `\n${line}`;
-      else return [text];
+      else return [{ input: text, quoteSource: text }];
     }
     if (current) items.push(current);
-    if (items.length >= 3) return items;
+    if (items.length >= 3) {
+      const context = lines.slice(0, first).join('\n');
+      return items.map(item => ({ input: context ? `${context}\n${item}` : item, quoteSource: item }));
+    }
   }
-  return [text];
+  return [{ input: text, quoteSource: text }];
+}
+export function extractionUnits(text: string): string[] {
+  return extractionParts(text).map(unit => unit.input);
 }

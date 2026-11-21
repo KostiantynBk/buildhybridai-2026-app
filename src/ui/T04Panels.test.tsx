@@ -47,6 +47,26 @@ it('distinguishes queued, running and hidden extraction work', () => {
   expect(render(false)).toContain('Paused while away');
   expect(render(false)).not.toContain('Reading your paragraph on this device');
 });
+it('shows queued automatic angle progress only while visible and reports exhausted automatic failures', () => {
+  const snapshot = empty();
+  for (const [i, status] of (['done', 'running', 'pending', 'failed'] as const).entries()) {
+    const id = `p${i}`;
+    snapshot.paragraphs.push({ id, projectId: 'default', order: i, version: 1, updatedAt: 0,
+      text: 'one two three four five six seven eight nine ten eleven twelve' });
+    snapshot.jobs.push({ key: `${id}#angles`, paragraphId: id, paragraphVersion: 1, step: 'angles',
+      promptVersion: 'angles.v2.1', status, attempts: status === 'failed' ? 3 : 1, createdAt: 0, nextRunAt: 0 });
+  }
+  snapshot.jobs.push({ ...snapshot.jobs[3], key: 'requested', requested: true });
+  const render = (foreground: boolean) => renderToStaticMarkup(<NotebookPanel text="plan" save={() => {}}
+    storageStatus="saved" snapshot={snapshot} configured ready foreground={foreground} />);
+  expect(render(true)).toContain('Looking for things worth checking (3 of 4 queued)');
+  expect(render(false)).not.toContain('Looking for things worth checking');
+  expect(render(true)).toContain('Couldn&#x27;t look for things worth checking in 1 paragraph.');
+  snapshot.jobs[0].status = 'superseded'; snapshot.jobs[2].status = 'superseded';
+  expect(render(true)).toContain('Looking for things worth checking (2 of 2 queued)');
+  snapshot.jobs[3].paragraphVersion = 0;
+  expect(render(true)).not.toContain('Couldn&#x27;t look for things worth checking');
+});
 it('renders the local profile form, import/export and deletion controls', () => {
   const html = renderToStaticMarkup(<ProfilePanel records={[]} save={async () => {}} remove={async () => {}}
     replace={async () => {}} clearAll={async () => {}} />);

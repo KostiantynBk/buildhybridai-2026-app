@@ -19,6 +19,15 @@ it('labels paragraphs by the nearest preceding heading and opening words', () =>
   expect(paragraphLabel(parts[2], parts)).toBe('Under “4. How it works”: “- Heartbeat: A–C run after an edit with…”');
   expect(paragraphLabel(parts[2], [parts[2]])).toBe('“- Heartbeat: A–C run after an edit with…”');
 });
+it('cleans Markdown labels without changing stored content', () => {
+  const heading = paragraph('h', 0, '## 4. **How it works**');
+  const prose = paragraph('p', 1, '**Why existing tools fall short (hypothesis, not a claim):** More text here');
+  expect(paragraphLabel(prose, [heading, prose])).toBe(
+    'Under “4. How it works”: “Why existing tools fall short (hypothesis, not a…”');
+  const table = paragraph('t', 2, '| Ticket | Content | Target |\n|---|---|---|\n| `T02` | Fresh scaffold | Nov |');
+  expect(paragraphLabel(table, [heading, table])).toBe(
+    'Under “4. How it works”: “Ticket Content Target T02 Fresh scaffold Nov”');
+});
 it('splits table data rows with the header and skips the separator', () => {
   const table = '| Risk | Check |\n|---|---|\n| Alpha | One |\n| Beta | Two |\n| Gamma | Three |';
   expect(extractionUnits(table)).toEqual(['| Risk | Check |\n| Alpha | One |',
@@ -40,7 +49,8 @@ it('supports one-column GFM tables and rejects inconsistent widths', () => {
 });
 it('splits lists with a preamble and preserves item continuation lines', () => {
   const list = 'Problems:\n1. First item\n   more detail\n2. Second item\n3. Third item';
-  expect(extractionUnits(list)).toEqual(['1. First item\n   more detail', '2. Second item', '3. Third item']);
+  expect(extractionUnits(list)).toEqual(['Problems:\n1. First item\n   more detail',
+    'Problems:\n2. Second item', 'Problems:\n3. Third item']);
   expect(extractionUnits('- one\n- two')).toEqual(['- one\n- two']);
   expect(extractionUnits('- one\n- two\n- three\nNot an item')).toEqual(['- one\n- two\n- three\nNot an item']);
 });

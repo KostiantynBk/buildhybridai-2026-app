@@ -1,6 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { LocalError, LocalModelService, type Dependencies, type Job } from '../ai/localModel';
-import { extract, extractInput, type LocalRunner } from './extract';
+import { extract, extractInput, extractStructured, normalizeQuote, type LocalRunner } from './extract';
+import { readFileSync } from 'node:fs';
 import { bindTemplate } from './bindTemplate';
 import { extractV2 } from './prompts/extract.v2';
 
@@ -41,6 +42,38 @@ it('drops unverified quotes, deduplicates and fills empty topics', async () => {
   expect(exact.quoteExact).toBe(1);
 });
 
+it('recovers formatted quotes with legacy normalized whitespace and preserves plain partial matches', async () => {
+  const data = { items: [
+    { kind: 'decision', text: 'formatted', quote: 'ON-device model', topics: [] },
+    { kind: 'decision', text: 'plain', quote: 'rice', topics: [] },
+  ] };
+  const runner = (async () => ({ data, latencyMs: 1, source: 'on_device', raw: '' })) as unknown as LocalRunner;
+  const result = await extract(runner, 'Title', 'An **on-device**   model has a price.');
+  expect(result.items.map(item => item.quote)).toEqual(['**on-device**   model', 'rice']);
+});
+it('preserves input and legacy quote decisions across all 20 frozen plain-text notes', async () => {
+  const notes = (JSON.parse(readFileSync('eval/set-v1/notes.json', 'utf8')) as
+    { notes: Array<{ text: string }> }).notes;
+  expect(notes).toHaveLength(20);
+  for (const note of notes) {
+    const quotes = [note.text.slice(0, 22), note.text.slice(0, 22).toUpperCase(), 'synthetic absent phrase'];
+    const items = quotes.map(quote => ({ kind: 'decision', text: quote, quote, topics: ['other'] }));
+    const prompts: string[] = [];
+    const run = (async (job: Job<unknown>) => {
+      prompts.push(job.prompt);
+      return { data: { items }, source: 'on_device', raw: '', latencyMs: 1 };
+    }) as LocalRunner;
+    const got = await extractStructured(run, 'My plan', note.text, undefined, 'extract.v2');
+    expect(prompts).toEqual([extractInput('My plan', note.text)]);
+    const seen = new Set<string>();
+    const expected = items.filter(item => {
+      const q = normalizeQuote(item.quote);
+      if (!q || !normalizeQuote(note.text).includes(q) || seen.has(q)) return false;
+      seen.add(q); return true;
+    });
+    expect(got.items).toEqual(expected);
+  }
+});
 it('discards an unverified source for a job with both examples', async () => {
   const text = vi.fn(() => '{"items":[]}');
   const generate = vi

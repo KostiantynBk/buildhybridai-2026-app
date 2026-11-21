@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { MIN_WORDS, type ProfileRecord, type Snapshot } from '../store';
+import { MAX_ATTEMPTS, MIN_WORDS, type ProfileRecord, type Snapshot } from '../store';
 import { fingerprintsMatch } from '../store/fingerprint';
 import type { ThoughtCard } from '../store/triageTypes';
 import { lineageHeads } from '../store/lineage';
@@ -122,6 +122,14 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
     (job.runMode ?? 'on_device') === (cloudMode ? 'in_cloud' : 'on_device') &&
     snapshot.paragraphs.some(p => p.id === job.paragraphId &&
       p.version === job.paragraphVersion && !isHeadingBlock(p.text)));
+  const automaticAngles = snapshot.jobs.filter(job => job.step === 'angles' && !job.requested &&
+    snapshot.paragraphs.some(p => p.id === job.paragraphId && p.version === job.paragraphVersion &&
+      !isHeadingBlock(p.text)));
+  const modeAngles = automaticAngles.filter(job => (job.runMode ?? 'on_device') ===
+    (cloudMode ? 'in_cloud' : 'on_device') && job.status !== 'superseded');
+  const looking = storageStatus === 'saved' && ready && foreground && modeAngles.some(job => job.status === 'running');
+  const failedAngles = new Set(automaticAngles.filter(job => job.status === 'failed' && job.attempts >= MAX_ATTEMPTS)
+    .map(job => job.paragraphId)).size;
   const hasItems = visibleGroups.length > 0 || visibleCards.length > 0 || (storageStatus === 'saved' &&
     [...removed, ...unchecked].some(lineage => snapshot.items.some(item => item.id === lineage.itemId)));
   return (
@@ -143,11 +151,20 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
       </section>}
       <aside className="panel thoughts"><span className="eyebrow">Alongside your work</span>
         <h2>What your plan relies on</h2>
-        {(currentExtractionFailed || reading) && <div role="status" aria-live="polite">
-          {currentExtractionFailed && <p>{copy.extractionFailed}</p>}
-          {reading && <p>{reading.runMode === 'in_cloud' ? copy.readingCloud : copy.readingLocal}</p>}</div>}
+        {(currentExtractionFailed || reading || looking || (storageStatus === 'saved' && failedAngles > 0)) &&
+          <div role="status" aria-live="polite">
+            {currentExtractionFailed && <p>{copy.extractionFailed}</p>}
+            {reading && <p>{reading.runMode === 'in_cloud' ? copy.readingCloud : copy.readingLocal}</p>}
+            {looking && <p>Looking for things worth checking (
+              {modeAngles.filter(job => job.status === 'done' || job.status === 'failed').length + 1}
+              {' of '}{modeAngles.length} queued)</p>}
+            {storageStatus === 'saved' && failedAngles > 0 && <p>
+              Couldn't look for things worth checking in {failedAngles}{' '}
+              {failedAngles === 1 ? 'paragraph' : 'paragraphs'}.
+            </p>}
+          </div>}
         {researchError && <p role="alert">{researchError}</p>}
-        {!hasItems && !currentExtractionFailed && !reading && <div className="empty" role="status"><p>
+        {!hasItems && !currentExtractionFailed && !reading && !looking && <div className="empty" role="status"><p>
           {storageStatus === 'saving' ? 'Saving changes before checking this plan.' : storageStatus === 'error'
             ? 'Cannot check unsaved changes.' :
               emptyReason(snapshot, configured, ready, cloudMode, extractVersion, foreground)}</p></div>}
