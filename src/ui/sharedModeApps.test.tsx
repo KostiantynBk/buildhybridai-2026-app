@@ -66,6 +66,8 @@ import App from './App';
 import { DraftControls } from './DraftControls';
 import { OutboxPage } from './OutboxPage';
 import { IdeaPanel } from './IdeaPanel';
+import { ProfilePanel } from '../profile/ProfilePanel';
+import { NotebookPanel } from './NotebookPanel';
 
 type Instance = ReturnType<typeof h.newInstance>;
 function render(instance: Instance): ReactElement {
@@ -167,6 +169,297 @@ it('loads and removes a sample without changing profile or Never send, and persi
     for (const cleanup of app.cleanups) cleanup();
     seed.close();
   }
+}, 15000);
+
+it('hides explicitly removed sample statements but not statements removed by ordinary edits', async () => {
+  vi.stubGlobal('BroadcastChannel', Channel);
+  vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+  const values = new Map<string, string>();
+  vi.stubGlobal('localStorage', { getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => values.set(key, value), removeItem: (key: string) => values.delete(key) });
+  const seed = await openLocalStore();
+  await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+  const app = h.newInstance();
+  try {
+    mount(app);
+    await vi.waitFor(() => expect(component(app, 'Welcome').sampleAvailable).toBe(true));
+    component(app, 'Welcome').trySample();
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').sampleActive).toBe(true));
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').storageStatus).toBe('saved'));
+    await seed.enqueueSettled(Date.now() + 5000, 'extract.v2');
+    const first = (await seed.claim(Date.now() + 5000))!;
+    const quote = first.paragraph.text.split('.')[0];
+    await seed.complete(first.job, [{ kind: 'assumption', text: 'FAKE sample statement', quote, topics: [] }]);
+    await seed.finalizeReady();
+    for (const focus of listeners.get('focus') ?? []) focus();
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').snapshot.items).toHaveLength(1));
+    component(app, 'NotebookPanel').removeSample();
+    await vi.waitFor(async () => expect((await seed.snapshot()).paragraphs).toHaveLength(0));
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').storageStatus).toBe('saved'));
+    const panel = component(app, 'NotebookPanel');
+    const { NotebookPanel } = await import('./NotebookPanel');
+    h.enter(h.newInstance());
+    expect(renderToStaticMarkup(NotebookPanel(panel as Parameters<typeof NotebookPanel>[0])))
+      .not.toContain('FAKE sample statement');
+    expect(values.get('tp.removedSampleIds')).toBeTruthy();
+    const reopened = h.newInstance();
+    try {
+      mount(reopened);
+      await vi.waitFor(() => expect(component(reopened, 'NotebookPanel').storageStatus).toBe('saved'));
+      const reopenedPanel = component(reopened, 'NotebookPanel');
+      h.enter(h.newInstance());
+      expect(renderToStaticMarkup(NotebookPanel(reopenedPanel as Parameters<typeof NotebookPanel>[0])))
+        .not.toContain('FAKE sample statement');
+    } finally { for (const cleanup of reopened.cleanups) cleanup(); }
+    const personal = 'My independent plan contains enough words to describe a personal product assumption clearly.';
+    component(app, 'NotebookPanel').save(personal);
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').storageStatus).toBe('saved'));
+    await seed.enqueueSettled(Date.now() + 5000, 'extract.v2');
+    const next = (await seed.claim(Date.now() + 5000))!;
+    await seed.complete(next.job, [{ kind: 'assumption', text: 'FAKE personal statement',
+      quote: 'My independent plan', topics: [] }]);
+    await seed.finalizeReady();
+    for (const focus of listeners.get('focus') ?? []) focus();
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').snapshot.items)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ text: 'FAKE personal statement' })])));
+    component(app, 'NotebookPanel').save('');
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').storageStatus).toBe('saved'));
+    const after = component(app, 'NotebookPanel');
+    h.enter(h.newInstance());
+    const html = renderToStaticMarkup(NotebookPanel(after as Parameters<typeof NotebookPanel>[0]));
+    expect(html).toContain('FAKE personal statement');
+    expect(html).toContain('no longer in your plan');
+    expect(html).not.toContain('FAKE sample statement');
+  } finally { for (const cleanup of app.cleanups) cleanup(); seed.close(); }
+}, 15000);
+
+it('does not resurrect old sample markers after another App deletes all local data', async () => {
+  vi.stubGlobal('BroadcastChannel', Channel);
+  vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+  const values = new Map<string, string>();
+  vi.stubGlobal('localStorage', { getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => values.set(key, value), removeItem: (key: string) => values.delete(key) });
+  const seed = await openLocalStore();
+  await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+  const a = h.newInstance(); const b = h.newInstance();
+  try {
+    mount(a);
+    await vi.waitFor(() => expect(component(a, 'Welcome').sampleAvailable).toBe(true));
+    component(a, 'Welcome').trySample();
+    await vi.waitFor(() => expect(component(a, 'NotebookPanel').sampleActive).toBe(true));
+    await vi.waitFor(() => expect(values.get('tp.welcomeSeen')).toBe('true'));
+    mount(b);
+    await vi.waitFor(() => expect(component(b, 'NotebookPanel').sampleActive).toBe(true));
+    component(a, 'NotebookPanel').removeSample();
+    await vi.waitFor(() => expect(values.get('tp.removedSampleIds')).toBeTruthy());
+    for (const storage of listeners.get('storage') ?? []) storage();
+    await vi.waitFor(() => expect(component(b, 'NotebookPanel').removedSampleIds).toHaveLength(5));
+    const oldIds = [...component(b, 'NotebookPanel').removedSampleIds] as string[];
+    clickNav(a, 'Profile');
+    await component(a, 'ProfilePanel').clearAll();
+    expect(values.has('tp.removedSampleIds')).toBe(false);
+    expect(component(b, 'NotebookPanel').removedSampleIds).toEqual(oldIds);
+    component(b, 'NotebookPanel').save('');
+    await vi.waitFor(() => expect(component(b, 'NotebookPanel').storageStatus).toBe('saved'));
+    component(b, 'NotebookPanel').trySample();
+    await vi.waitFor(() => expect(component(b, 'NotebookPanel').sampleActive).toBe(true));
+    await vi.waitFor(() => expect(component(b, 'NotebookPanel').storageStatus).toBe('saved'));
+    component(b, 'NotebookPanel').removeSample();
+    await vi.waitFor(() => expect(values.has('tp.removedSampleIds')).toBe(true));
+    const marker = JSON.parse(values.get('tp.removedSampleIds')!) as { epoch: string; ids: string[] };
+    expect(marker.ids).toHaveLength(5);
+    expect(marker.ids.some(id => oldIds.includes(id))).toBe(false);
+    for (const storage of listeners.get('storage') ?? []) storage();
+    for (const focus of listeners.get('focus') ?? []) focus();
+    await vi.waitFor(() => expect(component(b, 'NotebookPanel').removedSampleIds).toEqual(marker.ids));
+  } finally { for (const instance of [a, b]) for (const cleanup of instance.cleanups) cleanup(); seed.close(); }
+}, 15000);
+
+it.each(['epoch', 'marker'] as const)(
+  'evicts the deleted editor before the %s storage fault and only saves new text', async fault => {
+    vi.stubGlobal('BroadcastChannel', Channel);
+    vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+    vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+    const values = new Map<string, string>([['tp.welcomeSeen', 'true'], ['tp.removedSampleIds', '["old-id"]']]);
+    let fail = false;
+    vi.stubGlobal('localStorage', { getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        if (fail && fault === 'epoch' && key === 'tp.sampleRemovalEpoch') throw new Error('epoch fault');
+        values.set(key, value);
+      }, removeItem: (key: string) => {
+        if (fail && fault === 'marker' && key === 'tp.removedSampleIds') throw new Error('marker fault');
+        values.delete(key);
+      } });
+    const seed = await openLocalStore();
+    await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+    const erased = 'This old notebook text must never return after the local data was erased.';
+    await seed.saveNotebook(erased, 0);
+    const app = h.newInstance(); const profile = h.newInstance(); const notebook = h.newInstance();
+    const renderProfile = () => {
+      const props = component(app, 'ProfilePanel') as Parameters<typeof ProfilePanel>[0];
+      h.enter(profile); return ProfilePanel(props);
+    };
+    const renderNotebook = () => {
+      const props = component(app, 'NotebookPanel') as Parameters<typeof NotebookPanel>[0];
+      h.enter(notebook); return NotebookPanel(props);
+    };
+    try {
+      mount(app);
+      await vi.waitFor(() => expect(component(app, 'NotebookPanel').text).toBe(erased));
+      clickNav(app, 'Profile'); fail = true;
+      const button = nodes(renderProfile()).find(node => node.type === 'button' &&
+        (node.props as { children?: string }).children === 'Delete all local data');
+      expect(button).toBeDefined();
+      (button!.props as { onClick(): void }).onClick();
+      await vi.waitFor(() => expect(nodes(renderProfile()).some(node =>
+        (node.props as { children?: ReactNode }).children === 'Could not delete all local data.')).toBe(true));
+      expect((await seed.snapshot()).paragraphs).toEqual([]);
+      expect(component(app, 'ProfilePanel').records).toEqual([]);
+      clickNav(app, 'Notebook');
+      const editor = nodes(renderNotebook()).find(node => node.type === 'textarea');
+      expect(editor).toBeDefined();
+      expect((editor!.props as { value: string }).value).toBe('');
+      expect(component(app, 'NotebookPanel').storageStatus).toBe('error');
+      const fresh = 'New text only.';
+      (editor!.props as { onChange(event: { target: { value: string } }): void })
+        .onChange({ target: { value: fresh } });
+      await vi.waitFor(async () => expect((await seed.snapshot()).paragraphs.map(p => p.text)).toEqual([fresh]));
+      expect((await seed.snapshot()).paragraphs.some(p => p.text.includes(erased))).toBe(false);
+    } finally { for (const cleanup of app.cleanups) cleanup(); seed.close(); }
+  }, 15000);
+
+it.each(['epoch', 'marker', 'success'] as const)(
+  'reconciles a newer cloud opt-in after a committed clear with %s cleanup', async fault => {
+    vi.stubGlobal('BroadcastChannel', Channel);
+    vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+    vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+    const values = new Map<string, string>([['tp.welcomeSeen', 'true'], ['tp.removedSampleIds', '["old-id"]']]);
+    vi.stubGlobal('localStorage', { getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        if (fault === 'epoch' && key === 'tp.sampleRemovalEpoch') throw new Error('epoch fault');
+        values.set(key, value);
+      }, removeItem: (key: string) => {
+        if (fault === 'marker' && key === 'tp.removedSampleIds') throw new Error('marker fault');
+        values.delete(key);
+      } });
+    const seed = await openLocalStore();
+    await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+    await seed.saveNotebook('This old notebook text must be removed before the other App chooses cloud mode.', 0);
+    let release!: () => void; let committed!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const hasCommitted = new Promise<void>(resolve => { committed = resolve; });
+    const original = LocalStore.prototype.clearAll;
+    const spy = vi.spyOn(LocalStore.prototype, 'clearAll').mockImplementation(async function (this: LocalStore,
+      storage) {
+      await original.call(this, storage); committed(); await gate;
+    });
+    const a = h.newInstance(); const b = h.newInstance(); const profile = h.newInstance();
+    const renderProfile = () => {
+      const props = component(a, 'ProfilePanel') as Parameters<typeof ProfilePanel>[0];
+      h.enter(profile); return ProfilePanel(props);
+    };
+    try {
+      mount(a); mount(b);
+      await vi.waitFor(() => {
+        expect(component(a, 'NotebookPanel').storageStatus).toBe('saved');
+        expect(component(b, 'NotebookPanel').storageStatus).toBe('saved');
+      });
+      clickNav(a, 'Profile');
+      const button = nodes(renderProfile()).find(node => node.type === 'button' &&
+        (node.props as { children?: string }).children === 'Delete all local data');
+      (button!.props as { onClick(): void }).onClick();
+      await hasCommitted;
+      component(b, 'Notices').chooseCloud();
+      await vi.waitFor(() => {
+        expect(component(a, 'StatusBar').cloudMode).toBe(true);
+        expect(component(b, 'StatusBar').cloudMode).toBe(true);
+      });
+      expect(await seed.cloudModeConsent()).toBe(true);
+      release();
+      await vi.waitFor(() => expect(component(a, 'StatusBar').cloudMode).toBe(true));
+      if (fault !== 'success') {
+        await vi.waitFor(() => expect(nodes(renderProfile()).some(node =>
+          (node.props as { children?: ReactNode }).children === 'Could not delete all local data.')).toBe(true));
+      }
+      clickNav(a, 'Notebook');
+      await vi.waitFor(() => expect(component(a, 'NotebookPanel').storageStatus)
+        .toBe(fault === 'success' ? 'saved' : 'error'));
+      expect(component(a, 'StatusBar').cloudMode).toBe(true);
+      expect(component(a, 'NotebookPanel').text).toBe('');
+      expect((await seed.snapshot()).paragraphs).toEqual([]);
+      expect(adapter).not.toHaveBeenCalled();
+      expect((await seed.snapshot()).cloudProcessingSends).toEqual([]);
+    } finally {
+      release(); spy.mockRestore(); for (const cleanup of [...a.cleanups, ...b.cleanups]) cleanup(); seed.close();
+    }
+  }, 15000);
+
+it('keeps session-only sample suppression when writing its marker fails', async () => {
+  vi.stubGlobal('BroadcastChannel', Channel);
+  vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+  const values = new Map<string, string>();
+  vi.stubGlobal('localStorage', { getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      if (key === 'tp.removedSampleIds') throw new Error('Storage full');
+      values.set(key, value);
+    }, removeItem: (key: string) => values.delete(key) });
+  const seed = await openLocalStore();
+  await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+  const app = h.newInstance();
+  try {
+    mount(app);
+    await vi.waitFor(() => expect(component(app, 'Welcome').sampleAvailable).toBe(true));
+    component(app, 'Welcome').trySample();
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').sampleActive).toBe(true));
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').storageStatus).toBe('saved'));
+    component(app, 'NotebookPanel').removeSample();
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').removedSampleIds).toHaveLength(5));
+    expect(values.has('tp.removedSampleIds')).toBe(false);
+    for (const focus of listeners.get('focus') ?? []) focus();
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').removedSampleIds).toHaveLength(5));
+    clickNav(app, 'Profile'); await component(app, 'ProfilePanel').clearAll();
+    clickNav(app, 'Notebook');
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').removedSampleIds).toEqual([]));
+  } finally { for (const cleanup of app.cleanups) cleanup(); seed.close(); }
+}, 15000);
+
+it('does not write a marker after Delete all overtakes a committed sample removal', async () => {
+  vi.stubGlobal('BroadcastChannel', Channel);
+  vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+  const values = new Map<string, string>();
+  vi.stubGlobal('localStorage', { getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => values.set(key, value), removeItem: (key: string) => values.delete(key) });
+  const seed = await openLocalStore();
+  await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const original = LocalStore.prototype.saveNotebook;
+  const spy = vi.spyOn(LocalStore.prototype, 'saveNotebook').mockImplementation(async function (this: LocalStore,
+    text, now, expected) {
+    const result = await original.call(this, text, now, expected);
+    if (!text && expected) await gate;
+    return result;
+  });
+  const app = h.newInstance();
+  try {
+    mount(app);
+    await vi.waitFor(() => expect(component(app, 'Welcome').sampleAvailable).toBe(true));
+    component(app, 'Welcome').trySample();
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').sampleActive).toBe(true));
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').storageStatus).toBe('saved'));
+    component(app, 'NotebookPanel').removeSample();
+    await vi.waitFor(async () => expect((await seed.snapshot()).paragraphs).toHaveLength(0));
+    clickNav(app, 'Profile');
+    await component(app, 'ProfilePanel').clearAll();
+    release();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(values.has('tp.removedSampleIds')).toBe(false);
+    expect((await seed.snapshot()).paragraphs).toEqual([]);
+  } finally { release(); spy.mockRestore(); for (const cleanup of app.cleanups) cleanup(); seed.close(); }
 }, 15000);
 
 it('refuses a stale sample removal after another tab replaces the notebook', async () => {

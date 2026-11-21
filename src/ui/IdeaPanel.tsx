@@ -10,6 +10,7 @@ import { isGrounded } from '../ai/suggestionsSafety';
 import { researchFailureMessage } from '../ai/researchFailure';
 import { copy, displayMessage } from './copy';
 import { dedupeKeptOut, findPlanNames, nameWarning } from './planNames';
+import { isHeadingBlock } from '../structure/planStructure';
 
 export function IdeaPanel({ snapshot, idea, view, start, send, retry, decline, searching = false,
   checkingSend = false, busy = false, planTexts }: {
@@ -25,6 +26,7 @@ export function IdeaPanel({ snapshot, idea, view, start, send, retry, decline, s
   const heads = lineageHeads(snapshot.lineages ?? []);
   const kinds = ['decision', 'constraint', 'assumption', 'open-question'];
   const eligible = snapshot.items.filter(item => item.status === 'current' && kinds.includes(item.kind) &&
+    snapshot.paragraphs.some(paragraph => paragraph.id === item.paragraphId && !isHeadingBlock(paragraph.text)) &&
     heads.some(head => head.itemId === item.id && lineageEligibility(head.lineageId, head.version,
       snapshot.paragraphs, snapshot.lineages ?? [], snapshot.jobs) === 'eligible'));
   const job = idea && snapshot.jobs.find(value => value.key === idea.describeJobKey);

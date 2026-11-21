@@ -25,6 +25,18 @@ import { navigationItems } from './navigation';
 import { splitParagraphs } from '../store/matcher';
 
 const emptySnapshot = (): Snapshot => ({ paragraphs: [], items: [], profile: [], jobs: [] });
+const removedSampleKey = 'tp.removedSampleIds';
+const sampleEpochKey = 'tp.sampleRemovalEpoch';
+type SampleMarker = { epoch: string; ids: string[] };
+function readSampleMarker(): SampleMarker | null {
+  try {
+    const epoch = localStorage.getItem(sampleEpochKey) ?? '';
+    const value: unknown = JSON.parse(localStorage.getItem(removedSampleKey) ?? 'null');
+    const record = value && typeof value === 'object' && !Array.isArray(value) ? value as Partial<SampleMarker> : null;
+    const ids = Array.isArray(value) && !epoch ? value : record?.epoch === epoch ? record.ids : [];
+    return { epoch, ids: Array.isArray(ids) ? ids.filter((item): item is string => typeof item === 'string') : [] };
+  } catch { return null; }
+}
 export function StorageNotice({ notice }: { notice: string }) {
   return notice ? <p role="alert">{notice}</p> : null;
 }
@@ -38,6 +50,11 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
   const [text, setText] = useState('');
   const textRef = useRef('');
   const [sampleActive, setSampleActive] = useState(false);
+  const initialMarker = useMemo(readSampleMarker, []);
+  const [removedSampleIds, setRemovedSampleIds] = useState<string[]>(() => initialMarker?.ids ?? []);
+  const sampleEpoch = useRef<string | null>(initialMarker?.epoch ?? null);
+  const sampleFallback = useRef<string[]>([]);
+  const sampleGeneration = useRef(0);
   const sampleIds = useRef<string[]>([]);
   const displayedParagraphs = useRef<Snapshot['paragraphs']>([]);
   const [welcomeVisible, setWelcomeVisible] = useState(() => {
@@ -174,15 +191,25 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
         if (storeRef.current) void refreshData().catch(() => setStorageStatus('error'));
       };
     } catch { channelRef.current = null; }
+    const syncRemovedSamples = () => {
+      const marker = readSampleMarker();
+      if (!marker) return;
+      if (sampleEpoch.current !== null && marker.epoch !== sampleEpoch.current) sampleFallback.current = [];
+      sampleEpoch.current = marker.epoch;
+      setRemovedSampleIds([...new Set([...marker.ids, ...sampleFallback.current])]);
+    };
     const sync = () => {
+      syncRemovedSamples();
       if (storeRef.current) void refreshData().then(() => {
         if (document.visibilityState === 'visible') void schedulerRef.current?.tick();
       }).catch(() => setStorageStatus('error'));
     };
     window.addEventListener('focus', sync);
+    window.addEventListener('storage', syncRemovedSamples);
     document.addEventListener('visibilitychange', sync);
     return () => {
       window.removeEventListener('focus', sync);
+      window.removeEventListener('storage', syncRemovedSamples);
       document.removeEventListener('visibilitychange', sync);
       channel?.close(); channelRef.current = null;
     };
@@ -265,11 +292,38 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
         expected.length !== sampleIds.current.length || expected.some(p => !sampleIds.current.includes(p.id))) {
       setStorageNotice('Your notebook changed, so nothing was removed.'); return;
     }
+    const observedMarker = readSampleMarker();
+    if (observedMarker && sampleEpoch.current !== null && observedMarker.epoch !== sampleEpoch.current) {
+      sampleFallback.current = []; setRemovedSampleIds(observedMarker.ids);
+    }
+    if (observedMarker) sampleEpoch.current = observedMarker.epoch;
     const sequence = ++revision.current;
+    const generation = sampleGeneration.current;
+    const initialEpoch = sampleEpoch.current;
     schedulerRef.current?.edited();
     storageStatusRef.current = 'saving'; setStorageStatus('saving');
     try {
       await store.saveNotebook('', Date.now(), expected);
+      if (sequence !== revision.current || generation !== sampleGeneration.current || !mounted.current) return;
+      const marker = readSampleMarker();
+      if (marker && marker.epoch !== initialEpoch) {
+        sampleEpoch.current = marker.epoch; sampleFallback.current = []; setRemovedSampleIds(marker.ids);
+        const next = await store.snapshot();
+        if (sequence !== revision.current || !mounted.current) return;
+        reconcile(next); displayedParagraphs.current = next.paragraphs;
+        const value = next.paragraphs.map(paragraph => paragraph.text).join('\n\n');
+        textRef.current = value; setText(value); sampleIds.current = []; setSampleActive(false);
+        storageStatusRef.current = 'saved'; setStorageStatus('saved'); schedulerRef.current?.saved();
+        return;
+      }
+      const epoch = marker?.epoch ?? initialEpoch ?? '';
+      const removed = [...new Set([...(marker?.ids ?? []), ...sampleFallback.current,
+        ...expected.map(value => value.id)])];
+      sampleEpoch.current = epoch;
+      try {
+        localStorage.setItem(removedSampleKey, JSON.stringify({ epoch, ids: removed })); sampleFallback.current = [];
+      } catch { sampleFallback.current = removed; }
+      setRemovedSampleIds(removed);
       const next = await store.snapshot();
       if (sequence === revision.current && mounted.current) {
         reconcile(next); textRef.current = ''; setText(''); displayedParagraphs.current = [];
@@ -312,12 +366,24 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
       const store = storeRef.current;
       if (!store) throw new Error('Local storage unavailable.');
       await store.clearAll(localStorage);
+      sampleGeneration.current++;
+      textRef.current = ''; setText('');
+      displayedParagraphs.current = []; sampleIds.current = []; sampleFallback.current = [];
+      setSampleActive(false); setRemovedSampleIds([]);
+      ++refreshSeq.current; reconcile(emptySnapshot());
       cloudConsentRef.current = false; setCloudConsent(false);
-      announceMode();
       setResearch({}); setIdeaResearch({}); setResearchErrors({}); setResearchPhase({}); setResearchMetrics([]);
-      textRef.current = ''; setText(''); setSampleActive(false);
-      try { localStorage.removeItem('tp.sampleActive'); } catch { /* Local only. */ }
-      await refreshData();
+      announceMode();
+      let markerFailed = false;
+      try {
+        const epoch = crypto.randomUUID();
+        localStorage.setItem(sampleEpochKey, epoch); sampleEpoch.current = epoch;
+        localStorage.removeItem(removedSampleKey);
+        try { localStorage.removeItem('tp.sampleActive'); } catch { /* Local only. */ }
+      } catch { markerFailed = true; }
+      let refreshFailed = false;
+      try { await refreshData(); } catch { refreshFailed = true; }
+      if (markerFailed || refreshFailed) throw new Error('Local deletion cleanup failed.');
       storageStatusRef.current = 'saved'; setStorageStatus('saved');
       schedulerRef.current?.saved();
     } catch {
@@ -517,7 +583,8 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
           if (!store || !await store.declineIdea(id)) throw new Error('Could not decline this description.');
           await refreshData();
         }} /></div>
-        <NotebookPanel text={text} save={save} storageStatus={storageStatus} sampleActive={sampleActive &&
+        <NotebookPanel text={text} save={save} storageStatus={storageStatus} removedSampleIds={removedSampleIds}
+        sampleActive={sampleActive &&
           snapshot.paragraphs.length === sampleIds.current.length &&
           snapshot.paragraphs.every(p => sampleIds.current.includes(p.id))}
         trySample={!welcomeVisible ? () => { void loadSample(samplePlan).catch(error => setStorageNotice(
@@ -526,6 +593,7 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
         snapshot={snapshot} configured={config !== null}
         ready={cloudMode ? settings.values.cloud_enabled : service.state.kind === 'ready'}
         cloudMode={cloudMode} foreground={foreground}
+        extractVersion={settings.values.prompt_set === 'v1' ? 'extract.v1' : 'extract.v2'}
         research={research} researchErrors={researchErrors} searching={searching} checkingSend={checking}
         researchAgain={researchQuestion}
         checkThis={async itemId => {

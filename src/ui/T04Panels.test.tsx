@@ -22,6 +22,16 @@ it('renders an honest saved state and explicit notebook empty states', () => {
     promptVersion: 'extract.v2', status: 'done', attempts: 1, createdAt: 0, nextRunAt: 0 });
   expect(emptyReason(snapshot, true, true)).toContain('Nothing found');
 });
+it('uses actual mode and prompt eligibility before a short structure is enqueued', () => {
+  const snapshot = empty();
+  snapshot.paragraphs.push({ id: 'p', projectId: 'default', order: 0, version: 1, updatedAt: 0,
+    text: '- one\n- two\n- three' });
+  expect(emptyReason(snapshot, true, false, false, 'extract.v2')).toContain('on-device model');
+  expect(emptyReason(snapshot, true, true, false, 'extract.v2')).not.toContain('12 words');
+  expect(emptyReason(snapshot, true, true, false, 'extract.v1')).toContain('12 words');
+  expect(emptyReason(snapshot, true, true, true, 'extract.v2')).toContain('12 words');
+  expect(emptyReason(snapshot, true, true, false, 'extract.v2', false)).toContain('Paused while away');
+});
 it('distinguishes queued, running and hidden extraction work', () => {
   const snapshot = empty();
   snapshot.paragraphs.push({ id: 'p', projectId: 'default', order: 0, version: 1, updatedAt: 0,
@@ -34,7 +44,7 @@ it('distinguishes queued, running and hidden extraction work', () => {
   expect(render(true)).not.toContain('Reading your paragraph on this device');
   snapshot.jobs[0].status = 'running';
   expect(render(true)).toContain('Reading your paragraph on this device');
-  expect(render(false)).toContain('Waiting to read');
+  expect(render(false)).toContain('Paused while away');
   expect(render(false)).not.toContain('Reading your paragraph on this device');
 });
 it('renders the local profile form, import/export and deletion controls', () => {

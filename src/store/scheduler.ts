@@ -1,7 +1,8 @@
 import { LocalError, type Job } from '../ai/localModel';
 import { CloudProcessingError } from '../ai/cloudProcessing';
 import { safeErrorName } from '../ai/errorMetadata';
-import { extract, type ExtractVersion } from '../pipeline/extract';
+import { extractStructured, type ExtractVersion } from '../pipeline/extract';
+import { extractionUnits, isHeadingBlock } from '../structure/planStructure';
 import { compare } from '../pipeline/compare';
 import { describeIdea } from '../pipeline/describeIdea';
 import { chooseProfileRecords, runAngles, runQuestion, runWhyNote } from '../pipeline/triage';
@@ -83,8 +84,21 @@ export class Scheduler {
       if (this.stopped || this.paused || this.blocked || !ready || generation !== this.generation) return;
       const claimed = await this.store.claim(this.now(), mode);
       if (!claimed) return;
+      if (claimed.job.step === 'extract' && isHeadingBlock(claimed.paragraph.text)) {
+        await this.store.supersedeJob(claimed.job);
+        return;
+      }
       this.changed();
       const controller = new AbortController();
+      const rowBatch = mode === 'on_device' && claimed.job.step === 'extract' &&
+        claimed.job.promptVersion === 'extract.v2' && extractionUnits(claimed.paragraph.text).length > 1;
+      const onVisibilityChange = () => {
+        if (typeof document !== 'undefined' && document.visibilityState !== 'visible') controller.abort();
+      };
+      if (rowBatch && typeof document !== 'undefined') {
+        document.addEventListener?.('visibilitychange', onVisibilityChange);
+        onVisibilityChange();
+      }
       let dispatched = false;
       this.active = controller;
       this.activeJob = claimed;
@@ -96,8 +110,9 @@ export class Scheduler {
           if (claimed.job.promptVersion !== 'extract.v1' && claimed.job.promptVersion !== 'extract.v2') {
             throw new Error('Invalid extract prompt version.');
           }
-          const result = await extract(run, 'My plan', claimed.paragraph.text,
-            controller.signal, claimed.job.promptVersion);
+          const result = await extractStructured(run, 'My plan', claimed.paragraph.text,
+            controller.signal, claimed.job.promptVersion, mode === 'on_device');
+          if (rowBatch) onVisibilityChange();
           if (this.stopped || controller.signal.aborted || generation !== this.generation) {
             await this.store.fail(claimed.job, 'AbortError', true, this.now());
           } else {
@@ -188,6 +203,9 @@ export class Scheduler {
         await this.store.finalizeReady();
         await this.store.reconcileOutbox();
       } finally {
+        if (rowBatch && typeof document !== 'undefined') {
+          document.removeEventListener?.('visibilitychange', onVisibilityChange);
+        }
         if (this.active === controller) { this.active = undefined; this.activeJob = undefined; }
       }
     } catch {

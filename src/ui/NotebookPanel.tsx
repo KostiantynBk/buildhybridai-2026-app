@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { MIN_WORDS, wordCount, type ProfileRecord, type Snapshot } from '../store';
+import { MIN_WORDS, type ProfileRecord, type Snapshot } from '../store';
 import { fingerprintsMatch } from '../store/fingerprint';
 import type { ThoughtCard } from '../store/triageTypes';
 import { lineageHeads } from '../store/lineage';
@@ -12,6 +12,7 @@ import { ResearchBlock } from './ResearchBlock';
 import { isGrounded } from '../ai/suggestionsSafety';
 import { lineageEligibility } from '../store/eligibility';
 import { splitParagraphs } from '../store/matcher';
+import { extractionEligible, isHeadingBlock, paragraphLabel } from '../structure/planStructure';
 import { DraftControls } from './DraftControls';
 import { copy, displayMessage } from './copy';
 
@@ -55,23 +56,26 @@ function FreshWhy({ card, profile }: { card: ThoughtCard; profile: ProfileRecord
   return card.why && checked === signature ? <WhyContent card={card} profile={profile} /> : null;
 }
 export function emptyReason(snapshot: Snapshot, configured: boolean, ready: boolean,
-  cloudMode = false): string {
-  if (!snapshot.paragraphs.length) return 'Start writing a plan to see what it relies on.';
-  if (snapshot.paragraphs.every(p => wordCount(p.text) < MIN_WORDS)) {
+  cloudMode = false, version: 'extract.v1' | 'extract.v2' = 'extract.v2', foreground = true): string {
+  const paragraphs = snapshot.paragraphs.filter(paragraph => !isHeadingBlock(paragraph.text));
+  if (!paragraphs.length) return 'Start writing a plan to see what it relies on.';
+  const mode = cloudMode ? 'in_cloud' : 'on_device';
+  if (paragraphs.every(p => !extractionEligible(p.text, mode, version, MIN_WORDS))) {
     return `A paragraph needs at least ${MIN_WORDS} words before it can be checked.`;
   }
   if (!configured) return 'Waiting: Firebase is not configured. Your notebook stays local.';
+  if (!foreground) return 'Paused while away. Return to this tab to continue.';
   if (!ready) return cloudMode ? 'Cloud processing is disabled; cloud jobs are paused.' :
     'Waiting for the on-device model. Prepare the model to continue.';
   if (snapshot.jobs.some(job => job.step === 'extract' && job.status === 'failed' &&
-      snapshot.paragraphs.some(p => p.id === job.paragraphId && p.version === job.paragraphVersion))) {
+      paragraphs.some(p => p.id === job.paragraphId && p.version === job.paragraphVersion))) {
     return copy.extractionFailed;
   }
   if (snapshot.jobs.some(job => job.step === 'extract' && (job.status === 'pending' || job.status === 'running') &&
-      snapshot.paragraphs.some(p => p.id === job.paragraphId && p.version === job.paragraphVersion))) {
+      paragraphs.some(p => p.id === job.paragraphId && p.version === job.paragraphVersion))) {
     return copy.waitingRead;
   }
-  if (snapshot.paragraphs.some(p => wordCount(p.text) >= MIN_WORDS && !snapshot.jobs.some(j =>
+  if (paragraphs.some(p => extractionEligible(p.text, mode, version, MIN_WORDS) && !snapshot.jobs.some(j =>
     j.paragraphId === p.id && j.paragraphVersion === p.version && j.status === 'done'))) {
     return copy.waiting;
   }
@@ -80,13 +84,14 @@ export function emptyReason(snapshot: Snapshot, configured: boolean, ready: bool
 export function NotebookPanel({ text, save, storageStatus, snapshot, configured, ready, feedback, research,
   researchAgain, researchErrors, searching, checkingSend, cloudMode = false, foreground = true, checkThis, sendDraft,
   declineDraft, reopenDraft, sampleActive = false, trySample, removeSample, cardOnly = false,
-  controlsDisabled = false }: {
+  controlsDisabled = false, removedSampleIds = [], extractVersion = 'extract.v2' }: {
   text: string; save: (value: string) => void; storageStatus: 'loading' | 'saving' | 'saved' | 'error';
   snapshot: Snapshot; configured: boolean; ready: boolean;
   feedback?: (cardId: string, value: Feedback) => void; research?: Record<string, ResearchView>;
   researchAgain?: (id: string) => Promise<void>; researchErrors?: Record<string, string>;
   searching?: Record<string, boolean>; checkingSend?: Record<string, boolean>; cloudMode?: boolean;
-  foreground?: boolean; cardOnly?: boolean; controlsDisabled?: boolean;
+  foreground?: boolean; cardOnly?: boolean; controlsDisabled?: boolean; removedSampleIds?: readonly string[];
+  extractVersion?: 'extract.v1' | 'extract.v2';
   checkThis?: (itemId: string) => Promise<void>;
   sendDraft?: (cardId: string, text: string) => Promise<void>;
   declineDraft?: (cardId: string) => Promise<void>; reopenDraft?: (cardId: string) => Promise<void>;
@@ -94,23 +99,29 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
 }) {
   const [researchError, setResearchError] = useState('');
   const heads = lineageHeads(snapshot.lineages ?? []);
-  const removed = heads.filter(lineage => lineage.status === 'removed' &&
+  const headingIds = new Set(snapshot.paragraphs.filter(paragraph => isHeadingBlock(paragraph.text))
+    .map(paragraph => paragraph.id));
+  const removed = heads.filter(lineage => !headingIds.has(lineage.paragraphId) &&
+    !removedSampleIds.includes(lineage.paragraphId) && lineage.status === 'removed' &&
     (!snapshot.paragraphs.some(p => p.id === lineage.paragraphId) || snapshot.paragraphs.some(p =>
       p.id === lineage.paragraphId && p.version === lineage.paragraphVersion)));
-  const groups = snapshot.paragraphs.map(paragraph => ({ paragraph, items: snapshot.items.filter(item =>
+  const groups = snapshot.paragraphs.filter(paragraph => !isHeadingBlock(paragraph.text))
+    .map(paragraph => ({ paragraph, items: snapshot.items.filter(item =>
     item.status === 'current' && item.paragraphId === paragraph.id && item.paragraphVersion === paragraph.version) }));
   const visibleGroups = storageStatus === 'saved' ? groups.filter(group => group.items.length > 0) : [];
-  const unchecked = heads.filter(lineage => lineage.unchecked && !groups.some(group =>
+  const unchecked = heads.filter(lineage => !headingIds.has(lineage.paragraphId) && lineage.unchecked &&
+    !groups.some(group =>
     group.items.some(item => item.lineageId === lineage.lineageId)));
-  const visibleCards = (snapshot.cards ?? []).filter(card => card.questionStatus !== 'marked' && !card.supersededMark);
+  const visibleCards = (snapshot.cards ?? []).filter(card => card.questionStatus !== 'marked' && !card.supersededMark &&
+    !snapshot.paragraphs.some(paragraph => paragraph.id === card.paragraphId && isHeadingBlock(paragraph.text)));
   const currentExtractionFailed = storageStatus === 'saved' && snapshot.jobs.some(job => job.step === 'extract' &&
     job.status === 'failed' && snapshot.paragraphs.some(p => p.id === job.paragraphId &&
-      p.version === job.paragraphVersion));
+      p.version === job.paragraphVersion && !isHeadingBlock(p.text)));
   const reading = storageStatus === 'saved' && ready && foreground && snapshot.jobs.find(job =>
     job.step === 'extract' && job.status === 'running' &&
     (job.runMode ?? 'on_device') === (cloudMode ? 'in_cloud' : 'on_device') &&
     snapshot.paragraphs.some(p => p.id === job.paragraphId &&
-      p.version === job.paragraphVersion));
+      p.version === job.paragraphVersion && !isHeadingBlock(p.text)));
   const hasItems = visibleGroups.length > 0 || visibleCards.length > 0 || (storageStatus === 'saved' &&
     [...removed, ...unchecked].some(lineage => snapshot.items.some(item => item.id === lineage.itemId)));
   return (
@@ -138,11 +149,12 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
         {researchError && <p role="alert">{researchError}</p>}
         {!hasItems && !currentExtractionFailed && !reading && <div className="empty" role="status"><p>
           {storageStatus === 'saving' ? 'Saving changes before checking this plan.' : storageStatus === 'error'
-            ? 'Cannot check unsaved changes.' : emptyReason(snapshot, configured, ready, cloudMode)}</p></div>}
+            ? 'Cannot check unsaved changes.' :
+              emptyReason(snapshot, configured, ready, cloudMode, extractVersion, foreground)}</p></div>}
         {visibleGroups.filter(group => !cardOnly || group.items.some(item => (snapshot.cards ?? []).some(card =>
           card.itemLineageId === item.lineageId && card.questionStatus === 'marked')))
           .map(({ paragraph, items }) => <section key={paragraph.id}>
-          <h3>Paragraph {paragraph.order + 1}</h3>
+          <h3>{paragraphLabel(paragraph, snapshot.paragraphs)}</h3>
           {items.filter(item => !cardOnly || (snapshot.cards ?? []).some(card =>
             card.itemLineageId === item.lineageId && card.questionStatus === 'marked')).map(item => {
             const head = heads.find(lineage => lineage.lineageId === item.lineageId);

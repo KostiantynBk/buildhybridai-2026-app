@@ -43,6 +43,19 @@ it('keeps exactly one footer live status when the setup button is disabled', () 
   expect((html.match(/role="status"/g) ?? [])).toHaveLength(1);
   expect(html).toContain('not configured');
 });
+it('offers Gemma setup in every model state and cloud mode', () => {
+  const states = [{ kind: 'unsupported' }, { kind: 'unavailable' }, { kind: 'downloadable' },
+    { kind: 'downloading', progress: 0.4 }, { kind: 'warming' }, { kind: 'ready' },
+    { kind: 'error', reason: 'failed' }] as const;
+  for (const state of states) for (const cloudMode of [false, true]) {
+    const service = { state, browserAvailability: 'available', preparing: false, retryRequired: false,
+      warmLatencyMs: null, privacyFaults: 0 } as unknown as LocalModelService;
+    const html = renderToStaticMarkup(createElement(StatusBar, { service, configured: true, foreground: true,
+      cloudMode }));
+    expect(html).toContain('Tested with Gemma 4 — how to enable it');
+    expect(html).toContain('aria-expanded="false"');
+  }
+});
 it('enables retry only when configured, visible and not already preparing', () => {
   const error = { kind: 'error', reason: 'failed' } as const;
   expect(canPrepare(true, true, false, error)).toBe(true);

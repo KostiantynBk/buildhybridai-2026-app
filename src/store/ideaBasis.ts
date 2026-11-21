@@ -1,8 +1,10 @@
 import type { Paragraph } from './matcher';
+import { isHeadingBlock } from '../structure/planStructure';
 
 export type OpeningBasis = { id: string; version: number; order: number };
 export function firstParagraph(paragraphs: readonly Paragraph[]): Paragraph | undefined {
-  return [...paragraphs].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id))[0];
+  return [...paragraphs].filter(paragraph => !isHeadingBlock(paragraph.text))
+    .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id))[0];
 }
 export function openingMatches(basis: OpeningBasis | undefined, paragraphs: readonly Paragraph[],
   required = false): boolean {

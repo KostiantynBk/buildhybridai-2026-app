@@ -1,6 +1,7 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import { matchParagraphs, type Paragraph } from './matcher';
 import { firstParagraph, openingMatches, sentenceBoundedOpening, type OpeningBasis } from './ideaBasis';
+import { extractionEligible, isHeadingBlock } from '../structure/planStructure';
 import { safeErrorName } from '../ai/errorMetadata';
 import { isResearchFailureCode, type ResearchFailureCode } from '../ai/researchFailure';
 import { calculateStaleness } from './staleness';
@@ -101,6 +102,7 @@ export type Snapshot = { paragraphs: Paragraph[]; items: StoredItem[]; profile: 
 type LegacyStorage = Pick<Storage, 'getItem' | 'removeItem'>;
 function currentTriageItems(paragraph: Paragraph, items: StoredItem[], versions: LineageVersion[],
   version: TriageVersion = TRIAGE_PROMPT_SET): TriageItem[] {
+  if (isHeadingBlock(paragraph.text)) return [];
   const heads = lineageHeads(versions);
   const list = items.filter(item => item.paragraphId === paragraph.id && item.paragraphVersion === paragraph.version &&
     item.status === 'current' && item.lineageId).sort((a, b) => (a.order ?? 0) - (b.order ?? 0) ||
@@ -237,7 +239,8 @@ export class LocalStore {
         await tx.objectStore('jobs').put({ ...active, status: 'superseded', errorName: 'PlanChanged' });
       }
       const heads = lineageHeads(versions);
-      const current = new Set(paragraphs.flatMap(paragraph => currentTriageItems(paragraph, items, versions, 'v2.1'))
+      const current = new Set(paragraphs.filter(paragraph => !isHeadingBlock(paragraph.text))
+        .flatMap(paragraph => currentTriageItems(paragraph, items, versions, 'v2.1'))
         .map(item => item.lineageId));
       const kinds = ['assumption', 'decision', 'constraint', 'open-question'];
       const selected = items.filter(item => item.status === 'current' && item.lineageId &&
@@ -314,7 +317,8 @@ export class LocalStore {
     return (await this.db.get('meta', 'cloud-mode-consent'))?.value === true;
   }
   async setCloudModeConsent(value: boolean): Promise<void> {
-    const tx = this.db.transaction(['meta', 'jobs', 'comparisonBatches', 'cards', 'funnel'], 'readwrite');
+    const tx = this.db.transaction(['meta', 'jobs', 'comparisonBatches', 'cards', 'funnel', 'paragraphs'],
+      'readwrite');
     void tx.done.catch(() => undefined);
     try {
       const previous = (await tx.objectStore('meta').get('cloud-mode-consent'))?.value === true;
@@ -326,13 +330,22 @@ export class LocalStore {
         }
       }
       if (value) for (const job of await tx.objectStore('jobs').getAll()) {
-        if (job.status === 'pending' && job.runMode === 'on_device' && job.cloudEligible &&
-            job.step === 'extract' && job.promptVersion === 'extract.v2') {
+        if (job.status !== 'pending' || job.step !== 'extract' || job.promptVersion !== 'extract.v2') continue;
+        const paragraph = await tx.objectStore('paragraphs').get(job.paragraphId);
+        if (paragraph?.version === job.paragraphVersion && wordCount(paragraph.text) < MIN_WORDS) {
+          await tx.objectStore('jobs').put({ ...job, runMode: 'on_device', cloudEligible: false });
+        } else if (job.runMode === 'on_device' && job.cloudEligible) {
           await tx.objectStore('jobs').put({ ...job, runMode: 'in_cloud' });
         }
       }
       if (!value) for (const job of await tx.objectStore('jobs').getAll()) {
         if (job.runMode !== 'in_cloud' || !['pending', 'running'].includes(job.status)) continue;
+        const paragraph = job.step === 'extract' ? await tx.objectStore('paragraphs').get(job.paragraphId) : undefined;
+        if (job.status === 'pending' && paragraph?.version === job.paragraphVersion &&
+            wordCount(paragraph.text) < MIN_WORDS) {
+          await tx.objectStore('jobs').put({ ...job, runMode: 'on_device', cloudEligible: false });
+          continue;
+        }
         await tx.objectStore('jobs').put({ ...job, status: 'failed', errorName: 'CloudModeRevoked' });
         if (job.step === 'compare' && job.lineageId) {
           const batch = await tx.objectStore('comparisonBatches').get(batchKey(job.paragraphId, job.paragraphVersion));
@@ -910,14 +923,14 @@ export class LocalStore {
         if ((!current || current.version !== job.paragraphVersion) &&
             (job.status === 'pending' || job.status === 'running')) {
           await tx.objectStore('jobs').put({ ...job, status: 'superseded' });
-          if (!current && job.requested && job.cardId) {
+          if ((!current || isHeadingBlock(current.text)) && job.requested && job.cardId) {
             const card = await tx.objectStore('cards').get(job.cardId);
             if (card?.questionStatus === 'waiting') await tx.objectStore('cards').put({ ...card,
               questionStatus: 'blocked', questionReason: 'stale' });
           }
           if (job.cardId && (job.step === 'question' || job.step === 'whynote')) {
             const card = await tx.objectStore('cards').get(job.cardId);
-            if (current && card) {
+            if (current && !isHeadingBlock(current.text) && card) {
               await tx.objectStore('jobs').put({ ...job, key: `${job.key}#retarget@${current.version}`,
                 paragraphVersion: current.version, status: 'pending', nextRunAt: now });
             } else if (card && job.step === 'question') {
@@ -927,7 +940,9 @@ export class LocalStore {
         }
       }
       for (const card of await tx.objectStore('cards').getAll()) {
-        if (!byId.has(card.paragraphId) && card.askedDirectly && card.questionStatus === 'waiting') {
+        const paragraph = byId.get(card.paragraphId);
+        if (((!paragraph && card.askedDirectly) || (paragraph && isHeadingBlock(paragraph.text))) &&
+            card.questionStatus === 'waiting') {
           await tx.objectStore('cards').put({ ...card, questionStatus: 'blocked', questionReason: 'stale' });
         }
       }
@@ -946,22 +961,35 @@ export class LocalStore {
   }
   async enqueueSettled(now: number, promptVersion: 'extract.v1' | 'extract.v2',
     _mode: 'on_device' | 'in_cloud' = 'on_device'): Promise<void> {
-    const tx = this.db.transaction(['paragraphs', 'jobs', 'meta'], 'readwrite');
+    const tx = this.db.transaction(['paragraphs', 'jobs', 'meta', 'cards'], 'readwrite');
     void tx.done.catch(() => undefined);
     try {
       const mode = (await tx.objectStore('meta').get('cloud-mode-consent'))?.value ? 'in_cloud' : 'on_device';
       const actualPrompt = mode === 'in_cloud' ? 'extract.v2' : promptVersion;
+      const jobs = await tx.objectStore('jobs').getAll();
+      const cards = await tx.objectStore('cards').getAll();
       for (const p of await tx.objectStore('paragraphs').getAll()) {
-        if (now - p.updatedAt < SETTLE_MS || wordCount(p.text) < MIN_WORDS) continue;
+        if (isHeadingBlock(p.text)) {
+          for (const job of jobs) if (job.paragraphId === p.id && job.step !== 'describe' &&
+            (job.status === 'pending' || job.status === 'running')) {
+            await tx.objectStore('jobs').put({ ...job, status: 'superseded' });
+          }
+          for (const card of cards) if (card.paragraphId === p.id && card.questionStatus === 'waiting') {
+            await tx.objectStore('cards').put({ ...card, questionStatus: 'blocked', questionReason: 'stale' });
+          }
+          continue;
+        }
+        if (now - p.updatedAt < SETTLE_MS || !extractionEligible(p.text, mode, actualPrompt, MIN_WORDS)) continue;
         const key = jobKey(p.id, p.version);
         const existing = await tx.objectStore('jobs').get(key);
         if (!existing) {
           await tx.objectStore('jobs').put({ key, paragraphId: p.id, paragraphVersion: p.version,
             step: 'extract', promptVersion: actualPrompt, status: 'pending', attempts: 0, createdAt: now,
             nextRunAt: now, runMode: mode,
-            cloudEligible: actualPrompt === 'extract.v2' && TRIAGE_PROMPT_SET === 'v2.1' });
+            cloudEligible: actualPrompt === 'extract.v2' && TRIAGE_PROMPT_SET === 'v2.1' &&
+              wordCount(p.text) >= MIN_WORDS });
         } else if (mode === 'in_cloud' && existing.status === 'pending' && existing.runMode === 'on_device' &&
-            existing.cloudEligible && existing.promptVersion === 'extract.v2') {
+            existing.cloudEligible && existing.promptVersion === 'extract.v2' && wordCount(p.text) >= MIN_WORDS) {
           await tx.objectStore('jobs').put({ ...existing, runMode: 'in_cloud' });
         }
       }
@@ -1069,8 +1097,19 @@ export class LocalStore {
           continue;
         }
         const paragraph = await tx.objectStore('paragraphs').get(job.paragraphId);
-        if (!paragraph || paragraph.version !== job.paragraphVersion) {
+        if (!paragraph || paragraph.version !== job.paragraphVersion ||
+            (job.step !== 'describe' && isHeadingBlock(paragraph.text))) {
           await tx.objectStore('jobs').put({ ...job, status: 'superseded' });
+          if (paragraph && paragraph.version === job.paragraphVersion && isHeadingBlock(paragraph.text) &&
+              (job.step === 'question' || (job.step === 'angles' && job.requested)) && job.cardId) {
+            const card = await tx.objectStore('cards').get(job.cardId);
+            if (card?.questionStatus === 'waiting') await tx.objectStore('cards').put({ ...card,
+              questionStatus: 'blocked', questionReason: 'stale' });
+          }
+          continue;
+        }
+        if (mode === 'in_cloud' && job.step === 'extract' && wordCount(paragraph.text) < MIN_WORDS) {
+          await tx.objectStore('jobs').put({ ...job, runMode: 'on_device', cloudEligible: false });
           continue;
         }
         if (job.cardId && (job.step === 'question' || job.step === 'whynote')) {

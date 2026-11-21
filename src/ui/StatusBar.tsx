@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { LocalModelService, State } from '../ai/localModel';
 import { builtInSettings, type SettingsSnapshot } from '../settings/defaults';
-import { copy } from './copy';
+import { chromeSetup, copy } from './copy';
 
 export function modelLabel(state: State): string {
   switch (state.kind) {
@@ -72,6 +72,7 @@ export function StatusBar({
   navigate?: (page: 'Outbox' | 'Profile') => void;
 }) {
   const [privacy, setPrivacy] = useState(false);
+  const [setup, setSetup] = useState(false);
   return (
     <footer className="status">
       <div>
@@ -84,6 +85,9 @@ export function StatusBar({
         </div>
         <button className="quiet" aria-expanded={privacy} onClick={() => setPrivacy(value => !value)}>
           What leaves your laptop</button>
+        <button className="quiet" aria-expanded={setup} onClick={() => setSetup(value => !value)}>
+          Tested with Gemma 4 — how to enable it</button>
+        {setup && <ol>{chromeSetup.map(step => <li key={step}>{step}</li>)}</ol>}
         {privacy && <section className="privacy-panel" aria-label="What leaves your laptop">
           <p>On-device mode keeps notebook processing on this device.</p>
           <p>{copy.firebaseContact}</p>

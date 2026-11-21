@@ -2,6 +2,8 @@ import type { Job } from '../ai/localModel';
 import { extractV1 } from './prompts/extract.v1';
 import { extractV2 } from './prompts/extract.v2';
 import { bindTemplate } from './bindTemplate';
+import { extractionUnits } from '../structure/planStructure';
+import { LocalError } from '../ai/localModel';
 
 export type Item = { kind: string; text: string; quote: string; topics: string[] };
 export type Extraction = { items: Item[] };
@@ -19,12 +21,38 @@ export const normalizeQuote = (value: string) =>
 export function extractInput(title: string, paragraph: string): string {
   return bindTemplate(extractV1.inputTemplate, { '{title}': title, '{paragraph}': paragraph });
 }
+export async function extractStructured(
+  runner: LocalRunner, title: string, paragraph: string, signal?: AbortSignal,
+  version: ExtractVersion = 'extract.v1', split = true,
+) {
+  const units = split && version === 'extract.v2' ? extractionUnits(paragraph) : [paragraph];
+  if (units.length === 1) return extract(runner, title, paragraph, signal, version);
+  const seen = new Set<string>();
+  const items: Item[] = [];
+  let source: string | undefined;
+  for (const unit of units) {
+    if (signal?.aborted) throw new LocalError('cancelled', 'Cancelled before dispatch.');
+    const result = await extract(runner, title, unit, signal, version, paragraph);
+    if (source !== undefined && source !== result.source) {
+      throw new LocalError('privacy-fault', 'Extraction sources did not match.');
+    }
+    source = result.source;
+    for (const item of result.items) {
+      const quote = normalizeQuote(item.quote);
+      if (!paragraph.includes(item.quote) || seen.has(quote)) continue;
+      seen.add(quote); items.push(item);
+    }
+  }
+  return { items, source: source ?? '' };
+}
+
 export async function extract(
   runner: LocalRunner,
   title: string,
   paragraph: string,
   signal?: AbortSignal,
   version: ExtractVersion = 'extract.v1',
+  exactParagraph?: string,
 ) {
   const prompt = extractInput(title, paragraph);
   const definition = extractionPrompts[version];
@@ -44,7 +72,9 @@ export async function extract(
       quoteExact++;
     }
     const normalized = normalizeQuote(item.quote);
-    if (!normalized || !normalizeQuote(paragraph).includes(normalized)) {
+    if (!normalized || (exactParagraph !== undefined &&
+        (!paragraph.includes(item.quote) || !exactParagraph.includes(item.quote))) ||
+        !normalizeQuote(paragraph).includes(normalized)) {
       droppedBadQuotes++;
       continue;
     }
