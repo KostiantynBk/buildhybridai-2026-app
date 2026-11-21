@@ -9,16 +9,18 @@ import { ResearchBlock } from './ResearchBlock';
 import { isGrounded } from '../ai/suggestionsSafety';
 import { researchFailureMessage } from '../ai/researchFailure';
 import { copy, displayMessage } from './copy';
+import { dedupeKeptOut, findPlanNames, nameWarning } from './planNames';
 
 export function IdeaPanel({ snapshot, idea, view, start, send, retry, decline, searching = false,
-  checkingSend = false, busy = false }: {
+  checkingSend = false, busy = false, planTexts }: {
   snapshot: Snapshot; idea?: IdeaRecord; view?: ResearchView; busy?: boolean; searching?: boolean;
-  checkingSend?: boolean;
+  checkingSend?: boolean; planTexts?: readonly string[];
   start(): Promise<void>; send(id: string, text: string): Promise<void>; retry(id: string): Promise<void>;
   decline(id: string): Promise<void>;
 }) {
   const [text, setText] = useState(idea?.draft ?? '');
   const [message, setMessage] = useState('');
+  const keptOut = dedupeKeptOut(idea?.keptOut ?? []);
   useEffect(() => { setText(idea?.draft ?? ''); }, [idea?.id, idea?.draft]);
   const heads = lineageHeads(snapshot.lineages ?? []);
   const kinds = ['decision', 'constraint', 'assumption', 'open-question'];
@@ -48,6 +50,12 @@ export function IdeaPanel({ snapshot, idea, view, start, send, retry, decline, s
   const cannotApprove = openingChanged || basisStatuses.some(status => status === 'stale' || status === 'terminal');
   const checking = basisStatuses.some(status => status === 'checking');
   const uncertain = basisStatuses.some(status => status === 'terminal' || status === 'stale');
+  let names: string[] = [];
+  let nameCheckFailed = false;
+  if (idea?.status === 'ready' && job?.status === 'done' && !cannotApprove) {
+    try { names = findPlanNames(text, planTexts ?? snapshot.paragraphs.map(paragraph => paragraph.text)); }
+    catch { nameCheckFailed = true; }
+  }
   const act = (fn: () => Promise<void>) => { setMessage(''); void fn().catch(error => setMessage(
     error instanceof Error ? displayMessage(error.message) : 'Could not complete this action.')); };
   return <section className="panel idea-card"><h2>Research this idea</h2>
@@ -75,10 +83,13 @@ export function IdeaPanel({ snapshot, idea, view, start, send, retry, decline, s
     {idea?.status === 'ready' && job?.status === 'done' && <>
       <label>Public description <textarea value={text} onChange={event => setText(event.target.value)} /></label>
       {!idea.draft && <p>{IDEA_DRAFT_HINT}</p>}
-      {idea.keptOut.length > 0 && <p>Left out of the description: {idea.keptOut.join(', ')}</p>}
+      {keptOut.length > 0 && <p>Left out of the description: {keptOut.join(', ')}</p>}
       {cannotApprove && <p>{stale ? copy.definite : copy.uncertain} Draft again.</p>}
       {cannotApprove ? <button disabled={busy} onClick={() => act(start)}>Draft again</button> : <>
-        <button disabled={busy} onClick={() => act(() => send(idea.id, text))}>Send this description</button>
+        {nameCheckFailed ? <p>Couldn't check this text for names from your plan. Review it before sending.</p> :
+          names.length > 0 && <p>{nameWarning(names)}</p>}
+        <button disabled={busy} onClick={() => act(() => send(idea.id, text))}>
+          {nameCheckFailed || names.length > 0 ? 'Send anyway' : 'Send this description'}</button>
         <button disabled={busy} onClick={() => act(() => decline(idea.id))}>Don't send</button></>}
     </>}
     {entry?.status === 'withdrawn' && <p>Withdrawn: your plan or privacy settings changed. Draft again.</p>}

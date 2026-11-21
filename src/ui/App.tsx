@@ -22,6 +22,7 @@ import { Welcome } from './Welcome';
 import { samplePlan } from './samplePlan';
 import { copy } from './copy';
 import { navigationItems } from './navigation';
+import { splitParagraphs } from '../store/matcher';
 
 const emptySnapshot = (): Snapshot => ({ paragraphs: [], items: [], profile: [], jobs: [] });
 export function StorageNotice({ notice }: { notice: string }) {
@@ -493,7 +494,7 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
             ? error.message : 'Could not load the sample.'));
         }} startBlank={dismissWelcome} />}
       {page === 'Notebook' ? <><div hidden={snapshot.paragraphs.length === 0 || !text.trim()}>
-        <IdeaPanel snapshot={snapshot} idea={latestIdea}
+        <IdeaPanel snapshot={snapshot} idea={latestIdea} planTexts={splitParagraphs(text)}
         view={latestIdea && ideaResearch[latestIdea.id]}
         searching={!!latestIdea && !!searching[`idea:${latestIdea.id}`]}
         checkingSend={!!latestIdea && !!checking[`idea:${latestIdea.id}`]}

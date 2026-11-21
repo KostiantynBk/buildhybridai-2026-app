@@ -3,12 +3,14 @@ import type { ThoughtCard, OutboxEntry } from '../store/triageTypes';
 import { researchFailureMessage } from '../ai/researchFailure';
 import { withdrawalText } from './OutboxPage';
 import { copy, displayMessage } from './copy';
+import { findPlanNames, nameWarning } from './planNames';
 
 export function DraftControls({ card, outbox, receiptStatus, failureCode, researchError, searching = false,
-  checkingSend = false, statusInParent = false, controlsDisabled = false, send, decline, reopen, research }: {
+  checkingSend = false, statusInParent = false, controlsDisabled = false, planTexts = [], send, decline, reopen,
+  research }: {
   card: ThoughtCard; outbox?: OutboxEntry; receiptStatus?: 'sent' | 'completed' | 'failed'; failureCode?: string;
   researchError?: string; searching?: boolean; checkingSend?: boolean; statusInParent?: boolean;
-  controlsDisabled?: boolean;
+  controlsDisabled?: boolean; planTexts?: readonly string[];
   send?: (cardId: string, text: string) => Promise<void>;
   decline?: (cardId: string) => Promise<void>;
   reopen?: (cardId: string) => Promise<void>;
@@ -35,14 +37,22 @@ export function DraftControls({ card, outbox, receiptStatus, failureCode, resear
     {reopen && <button disabled={busy || controlsDisabled} onClick={() => act(() => reopen(card.id))}>Reopen</button>}
     {message && <p role="alert">{message}</p>}</div>;
   if (card.questionStatus !== 'ready') return null;
+  let names: string[] = [];
+  let nameCheckFailed = false;
+  if (!outbox && send) {
+    try { names = findPlanNames(text, planTexts); } catch { nameCheckFailed = true; }
+  }
   return <section><h4>Was this question useful?</h4>
     {card.noCheckable && <p>ThoughtPartner found nothing it could look up here. You can write your own question.</p>}
     {!outbox && <><label>Question <textarea value={text} onChange={event => {
       edited.current = true; setText(event.target.value);
     }} /></label>
       {(card.draftKeptOut ?? []).length > 0 && <p>Left out of the question: {card.draftKeptOut!.join(', ')}</p>}
+      {send && (nameCheckFailed ?
+        <p>Couldn't check this text for names from your plan. Review it before sending.</p> :
+        names.length > 0 && <p>{nameWarning(names)}</p>)}
       {send && <button disabled={busy || controlsDisabled} onClick={() => act(() => send(card.id, text))}>
-        Send this question</button>}
+        {nameCheckFailed || names.length > 0 ? 'Send anyway' : 'Send this question'}</button>}
       {decline && <button disabled={busy || controlsDisabled} onClick={() => act(() => decline(card.id))}>
         Don't send</button>}</>}
     {outbox && <><p>{outbox.question}</p>

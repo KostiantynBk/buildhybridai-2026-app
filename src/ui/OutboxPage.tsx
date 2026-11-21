@@ -4,6 +4,7 @@ import type { Snapshot } from '../store';
 import { lineageEligibility } from '../store/eligibility';
 import { researchFailureMessage } from '../ai/researchFailure';
 import { copy } from './copy';
+import { dedupeKeptOut } from './planNames';
 
 export function withdrawalText(entry: OutboxEntry): string {
   return entry.withdrawReason === 'listed-term' ? 'Withdrawn: contains a term on your never-send list.' :
@@ -61,7 +62,7 @@ export function OutboxPage({ entries, decide, remove, snapshot, saving = false, 
           .filter(receipt => receipt.entryId === entry.id).sort((a, b) => b.sentAt - a.sentAt)[0]?.status ?? '') &&
         <p>Previous status: {statusText(entry, snapshot, researchErrors?.[entry.id])}</p>}
       {entry.keptOut.length > 0 && <p>Left out of the {entry.kind === 'idea' ? 'description' : 'question'}: {
-        entry.keptOut.join(', ')}</p>}
+        (entry.kind === 'idea' ? dedupeKeptOut(entry.keptOut) : entry.keptOut).join(', ')}</p>}
       {entry.questionOrigin === 'manual' ? <p>Question written by you.</p> : entry.questionPromptVersion &&
         <p>Question prompt: {entry.questionPromptVersion}
           {entry.triageVersion ? ` · Triage: ${entry.triageVersion}` : ''}</p>}

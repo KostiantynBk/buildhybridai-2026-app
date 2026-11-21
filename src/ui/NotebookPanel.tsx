@@ -11,6 +11,7 @@ import type { ResearchView } from '../ai/researchFlow';
 import { ResearchBlock } from './ResearchBlock';
 import { isGrounded } from '../ai/suggestionsSafety';
 import { lineageEligibility } from '../store/eligibility';
+import { splitParagraphs } from '../store/matcher';
 import { DraftControls } from './DraftControls';
 import { copy, displayMessage } from './copy';
 
@@ -227,6 +228,7 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
                   .catch(() => setResearchError('Could not check the changed statement.'));
               }}>Check again</button>}
             <DraftControls card={card} outbox={outbox} receiptStatus={receipts[0]?.status} send={sendDraft}
+              planTexts={splitParagraphs(text)}
               failureCode={receipts[0]?.failureCode} researchError={outbox && researchErrors?.[outbox.id]}
               searching={!!outbox && !!searching?.[outbox.id]} checkingSend={!!outbox && !!checkingSend?.[outbox.id]}
               statusInParent controlsDisabled={controlsDisabled} decline={declineDraft} reopen={reopenDraft}
