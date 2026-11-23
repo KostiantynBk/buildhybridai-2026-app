@@ -13,8 +13,10 @@ export const config = readConfig({
   VITE_RECAPTCHA_ENTERPRISE_SITE_KEY: import.meta.env.VITE_RECAPTCHA_ENTERPRISE_SITE_KEY,
   ...(import.meta.env.DEV ? { VITE_APPCHECK_DEBUG: import.meta.env.VITE_APPCHECK_DEBUG } : {}),
 });
+let pageService: LocalModelService | undefined;
 export function createService() {
-  return new LocalModelService({
+  if (pageService) return pageService;
+  pageService = new LocalModelService({
     configured: config !== null,
     hasApi: () => typeof browserApi()?.availability === 'function',
     availability: () => browserApi()!.availability(languageOptions),
@@ -29,6 +31,7 @@ export function createService() {
     },
     now: () => performance.now(),
   });
+  return pageService;
 }
 export function startReadiness(service: LocalModelService): () => void {
   return startAutoPrepare(service, config !== null, {

@@ -7,6 +7,7 @@ export function startAutoPrepare(
 ): () => void {
   let stopped = false;
   let attempted = false;
+  const owner = new AbortController();
   const maybePrepare = () => {
     if (stopped || attempted || !configured || !env.hasApi() || !env.foreground() ||
         service.browserAvailability !== 'available' || service.state.kind !== 'downloadable' || service.preparing ||
@@ -17,6 +18,6 @@ export function startAutoPrepare(
     void service.prepare().catch(() => undefined);
   };
   const unsubscribe = env.onVisibility(maybePrepare);
-  void service.probe().then(maybePrepare).catch(() => undefined);
-  return () => { stopped = true; unsubscribe(); };
+  void service.probe(owner.signal).then(maybePrepare).catch(() => undefined);
+  return () => { stopped = true; owner.abort(); unsubscribe(); };
 }

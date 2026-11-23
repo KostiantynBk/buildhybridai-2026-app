@@ -226,7 +226,7 @@ describe('readiness and local inference', () => {
     await attempt;
     expect(f.service.state.kind).toBe('ready');
   });
-  it('rechecks after device failure, refuses queued jobs, then recovers', async () => {
+  it('settles device failure, refuses queued jobs, then checks during explicit recovery', async () => {
     const f = fixture();
     await f.service.probe();
     await f.service.prepare();
@@ -236,17 +236,17 @@ describe('readiness and local inference', () => {
     const queued = f.service.runLocal(task);
     await expect(failed).rejects.toMatchObject({ code: 'device-error' });
     await expect(queued).rejects.toMatchObject({ code: 'not-ready' });
-    expect(f.service.state.kind).toBe('unavailable');
+    expect(f.service.state.kind).toBe('error');
     await f.service.prepare();
     expect(f.service.state.kind).toBe('ready');
   });
-  it('requires an explicit retry when a device error reprobes as available', async () => {
+  it('requires an explicit retry after a device error', async () => {
     const f = fixture({ available: 'available' });
     await f.service.probe();
     await f.service.prepare();
     f.generate.mockRejectedValueOnce(new Error('device failure'));
     await expect(f.service.runLocal(task)).rejects.toMatchObject({ code: 'device-error' });
-    expect(f.service.state.kind).toBe('downloadable');
+    expect(f.service.state.kind).toBe('error');
     expect(f.service.retryRequired).toBe(true);
     await f.service.prepare();
     expect(f.service.retryRequired).toBe(false);

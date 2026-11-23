@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { MAX_ATTEMPTS, MIN_WORDS, type ProfileRecord, type Snapshot } from '../store';
+import { MAX_ATTEMPTS, MIN_WORDS, type ProfileRecord, type Snapshot, type StoredJob } from '../store';
 import { fingerprintsMatch } from '../store/fingerprint';
 import type { ThoughtCard } from '../store/triageTypes';
 import { lineageHeads } from '../store/lineage';
@@ -84,7 +84,8 @@ export function emptyReason(snapshot: Snapshot, configured: boolean, ready: bool
 export function NotebookPanel({ text, save, storageStatus, snapshot, configured, ready, feedback, research,
   researchAgain, researchErrors, searching, checkingSend, cloudMode = false, foreground = true, checkThis, sendDraft,
   declineDraft, reopenDraft, sampleActive = false, trySample, removeSample, cardOnly = false,
-  controlsDisabled = false, removedSampleIds = [], extractVersion = 'extract.v2' }: {
+  controlsDisabled = false, removedSampleIds = [], extractVersion = 'extract.v2',
+  modelState, retryRequired = false, activeClaim, ownedClaim, prepareAgain, storagePaused = false }: {
   text: string; save: (value: string) => void; storageStatus: 'loading' | 'saving' | 'saved' | 'error';
   snapshot: Snapshot; configured: boolean; ready: boolean;
   feedback?: (cardId: string, value: Feedback) => void; research?: Record<string, ResearchView>;
@@ -92,6 +93,9 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
   searching?: Record<string, boolean>; checkingSend?: Record<string, boolean>; cloudMode?: boolean;
   foreground?: boolean; cardOnly?: boolean; controlsDisabled?: boolean; removedSampleIds?: readonly string[];
   extractVersion?: 'extract.v1' | 'extract.v2';
+  modelState?: string; retryRequired?: boolean; activeClaim?: StoredJob; ownedClaim?: StoredJob;
+  prepareAgain?: () => void;
+  storagePaused?: boolean;
   checkThis?: (itemId: string) => Promise<void>;
   sendDraft?: (cardId: string, text: string) => Promise<void>;
   declineDraft?: (cardId: string) => Promise<void>; reopenDraft?: (cardId: string) => Promise<void>;
@@ -115,11 +119,12 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
   const visibleCards = (snapshot.cards ?? []).filter(card => card.questionStatus !== 'marked' && !card.supersededMark &&
     !snapshot.paragraphs.some(paragraph => paragraph.id === card.paragraphId && isHeadingBlock(paragraph.text)));
   const currentExtractionFailed = storageStatus === 'saved' && snapshot.jobs.some(job => job.step === 'extract' &&
-    job.status === 'failed' && snapshot.paragraphs.some(p => p.id === job.paragraphId &&
+    job.status === 'failed' && job.failureReason !== 'model-input-quota' &&
+    snapshot.paragraphs.some(p => p.id === job.paragraphId &&
       p.version === job.paragraphVersion && !isHeadingBlock(p.text)));
-  const reading = storageStatus === 'saved' && ready && foreground && snapshot.jobs.find(job =>
-    job.step === 'extract' && job.status === 'running' &&
-    (job.runMode ?? 'on_device') === (cloudMode ? 'in_cloud' : 'on_device') &&
+  const reading = !storagePaused && storageStatus === 'saved' && ready && foreground && snapshot.jobs.find(job =>
+    job.step === 'extract' && job.status === 'running' && job.key === activeClaim?.key &&
+    job.attempts === activeClaim.attempts && (job.runMode ?? 'on_device') === (cloudMode ? 'in_cloud' : 'on_device') &&
     snapshot.paragraphs.some(p => p.id === job.paragraphId &&
       p.version === job.paragraphVersion && !isHeadingBlock(p.text)));
   const automaticAngles = snapshot.jobs.filter(job => job.step === 'angles' && !job.requested &&
@@ -127,9 +132,27 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
       !isHeadingBlock(p.text)));
   const modeAngles = automaticAngles.filter(job => (job.runMode ?? 'on_device') ===
     (cloudMode ? 'in_cloud' : 'on_device') && job.status !== 'superseded');
-  const looking = storageStatus === 'saved' && ready && foreground && modeAngles.some(job => job.status === 'running');
-  const failedAngles = new Set(automaticAngles.filter(job => job.status === 'failed' && job.attempts >= MAX_ATTEMPTS)
+  const looking = !storagePaused && storageStatus === 'saved' && ready && foreground && modeAngles.some(job =>
+    job.status === 'running' && job.key === activeClaim?.key && job.attempts === activeClaim.attempts);
+  const failedAngles = new Set(automaticAngles.filter(job => job.status === 'failed' &&
+    (job.attempts >= MAX_ATTEMPTS || job.failureReason === 'model-input-quota'))
     .map(job => job.paragraphId)).size;
+  const work = snapshot.jobs.filter(job => (job.step === 'extract' || (job.step === 'angles' && !job.requested)) &&
+    (job.status === 'pending' || job.status === 'running') && snapshot.paragraphs.some(p =>
+      p.id === job.paragraphId && p.version === job.paragraphVersion && !isHeadingBlock(p.text)));
+  const waiting = new Set(work.map(job => job.paragraphId)).size;
+  const otherModeOnly = work.length > 0 && work.every(job => (job.runMode ?? 'on_device') !==
+    (cloudMode ? 'in_cloud' : 'on_device'));
+  const stalled = !cloudMode && modelState === 'stalled';
+  const needsPrepare = !cloudMode && retryRequired;
+  const owned = ownedClaim ?? activeClaim;
+  const unconfirmed = work.some(job => job.status === 'running' &&
+    (job.key !== owned?.key || job.attempts !== owned.attempts));
+  const settling = work.some(job => job.status === 'running' && job.key === owned?.key &&
+    job.attempts === owned.attempts && (job.key !== activeClaim?.key || job.attempts !== activeClaim.attempts));
+  const quota = snapshot.jobs.some(job => job.step === 'extract' && job.status === 'failed' &&
+    job.failureReason === 'model-input-quota' && snapshot.paragraphs.some(p =>
+      p.id === job.paragraphId && p.version === job.paragraphVersion));
   const hasItems = visibleGroups.length > 0 || visibleCards.length > 0 || (storageStatus === 'saved' &&
     [...removed, ...unchecked].some(lineage => snapshot.items.some(item => item.id === lineage.itemId)));
   return (
@@ -151,9 +174,40 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
       </section>}
       <aside className="panel thoughts"><span className="eyebrow">Alongside your work</span>
         <h2>What your plan relies on</h2>
-        {(currentExtractionFailed || reading || looking || (storageStatus === 'saved' && failedAngles > 0)) &&
+        {(currentExtractionFailed || reading || looking || quota || work.length > 0 || storagePaused ||
+          stalled || (storageStatus === 'saved' && failedAngles > 0)) &&
           <div role="status" aria-live="polite">
             {currentExtractionFailed && <p>{copy.extractionFailed}</p>}
+            {quota && <p>The on-device model couldn't process this part.</p>}
+            {storagePaused && <p>Automatic work is paused because browser storage is full.
+              Save the notebook to retry.</p>}
+            {stalled && <p>
+              The on-device model stopped responding. Reload this page to continue reading.
+            </p>}
+            {!storagePaused && work.length > 0 && !stalled && storageStatus === 'saving' &&
+              <p>Saving changes before checking.</p>}
+            {!storagePaused && work.length > 0 && !stalled && storageStatus === 'error' &&
+              <p>Work is paused because local changes could not be saved.</p>}
+            {!storagePaused && work.length > 0 && !stalled && storageStatus === 'loading' &&
+              <p>Opening local storage.</p>}
+            {!storagePaused && work.length > 0 && !stalled && storageStatus === 'saved' && !foreground &&
+              <p>Paused while away.</p>}
+            {!storagePaused && work.length > 0 && !stalled && storageStatus === 'saved' && foreground && needsPrepare &&
+              <p>
+              {waiting} {waiting === 1 ? 'paragraph is' : 'paragraphs are'} waiting.{' '}
+              <button onClick={prepareAgain} disabled={!prepareAgain}>Prepare again</button>
+            </p>}
+            {!storagePaused && work.length > 0 && !stalled && storageStatus === 'saved' && foreground &&
+              !needsPrepare && !ready && <p>Waiting for the selected model to be ready.</p>}
+            {!storagePaused && work.length > 0 && !stalled && storageStatus === 'saved' && foreground && ready &&
+              !needsPrepare && unconfirmed && <p>A previous attempt is interrupted or may be running in another tab.
+              </p>}
+            {!storagePaused && !stalled && storageStatus === 'saved' && foreground && ready && !needsPrepare &&
+              settling && <p>Finishing work in this tab…</p>}
+            {!storagePaused && work.length > 0 && !stalled && storageStatus === 'saved' && foreground && ready &&
+              !needsPrepare && !unconfirmed && !settling && !reading && !looking && (otherModeOnly
+                ? <p>Work is waiting for its original processing mode.</p>
+                : <p>{waiting} {waiting === 1 ? 'paragraph' : 'paragraphs'} queued.</p>)}
             {reading && <p>{reading.runMode === 'in_cloud' ? copy.readingCloud : copy.readingLocal}</p>}
             {looking && <p>Looking for things worth checking (
               {modeAngles.filter(job => job.status === 'done' || job.status === 'failed').length + 1}
@@ -164,7 +218,9 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
             </p>}
           </div>}
         {researchError && <p role="alert">{researchError}</p>}
-        {!hasItems && !currentExtractionFailed && !reading && !looking && <div className="empty" role="status"><p>
+        {!hasItems && !currentExtractionFailed && !reading && !looking && !work.length && !quota && !stalled &&
+          !storagePaused &&
+          <div className="empty" role="status"><p>
           {storageStatus === 'saving' ? 'Saving changes before checking this plan.' : storageStatus === 'error'
             ? 'Cannot check unsaved changes.' :
               emptyReason(snapshot, configured, ready, cloudMode, extractVersion, foreground)}</p></div>}

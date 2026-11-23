@@ -39,8 +39,9 @@ it('distinguishes queued, running and hidden extraction work', () => {
   snapshot.jobs.push({ key: 'p@1#extract', paragraphId: 'p', paragraphVersion: 1, step: 'extract',
     promptVersion: 'extract.v2', status: 'pending', attempts: 0, createdAt: 0, nextRunAt: 0 });
   const render = (foreground: boolean) => renderToStaticMarkup(<NotebookPanel text="plan" save={() => {}}
-    storageStatus="saved" snapshot={snapshot} configured ready foreground={foreground} />);
-  expect(render(true)).toContain('Waiting to read');
+    storageStatus="saved" snapshot={snapshot} configured ready foreground={foreground}
+    activeClaim={snapshot.jobs[0].status === 'running' ? snapshot.jobs[0] : undefined} />);
+  expect(render(true)).toContain('1 paragraph queued');
   expect(render(true)).not.toContain('Reading your paragraph on this device');
   snapshot.jobs[0].status = 'running';
   expect(render(true)).toContain('Reading your paragraph on this device');
@@ -58,14 +59,44 @@ it('shows queued automatic angle progress only while visible and reports exhaust
   }
   snapshot.jobs.push({ ...snapshot.jobs[3], key: 'requested', requested: true });
   const render = (foreground: boolean) => renderToStaticMarkup(<NotebookPanel text="plan" save={() => {}}
-    storageStatus="saved" snapshot={snapshot} configured ready foreground={foreground} />);
+    storageStatus="saved" snapshot={snapshot} configured ready foreground={foreground}
+    activeClaim={snapshot.jobs[1]} />);
   expect(render(true)).toContain('Looking for things worth checking (3 of 4 queued)');
   expect(render(false)).not.toContain('Looking for things worth checking');
+  expect(render(true)).toContain('Couldn&#x27;t look for things worth checking in 1 paragraph.');
+  snapshot.jobs[3].attempts = 1; snapshot.jobs[3].failureReason = 'model-input-quota';
   expect(render(true)).toContain('Couldn&#x27;t look for things worth checking in 1 paragraph.');
   snapshot.jobs[0].status = 'superseded'; snapshot.jobs[2].status = 'superseded';
   expect(render(true)).toContain('Looking for things worth checking (2 of 2 queued)');
   snapshot.jobs[3].paragraphVersion = 0;
   expect(render(true)).not.toContain('Couldn&#x27;t look for things worth checking');
+});
+it('shows preparing, stalled, queued, active, paused and unconfirmed work truthfully', () => {
+  const snapshot = empty();
+  snapshot.paragraphs.push({ id: 'p', projectId: 'default', order: 0, version: 1, updatedAt: 0,
+    text: 'one two three four five six seven eight nine ten eleven twelve' });
+  snapshot.jobs.push({ key: 'p#extract', paragraphId: 'p', paragraphVersion: 1, step: 'extract',
+    promptVersion: 'extract.v2', status: 'pending', attempts: 1, createdAt: 0, nextRunAt: 0 });
+  const render = (props: Partial<Parameters<typeof NotebookPanel>[0]>) => renderToStaticMarkup(
+    <NotebookPanel text="plan" save={() => {}} storageStatus="saved" snapshot={snapshot}
+      configured ready {...props} />);
+  expect(render({})).toContain('1 paragraph queued.');
+  expect(render({ foreground: false })).toContain('Paused while away.');
+  expect(render({ ready: false, retryRequired: true, prepareAgain: () => {} }))
+    .toContain('1 paragraph is waiting.');
+  expect(render({ ready: false, retryRequired: true, prepareAgain: () => {} })).toContain('Prepare again');
+  expect(render({ ready: false, modelState: 'stalled' })).toContain('Reload this page to continue reading.');
+  expect(render({ ready: false })).toContain('Waiting for the selected model to be ready.');
+  snapshot.jobs[0].status = 'running';
+  expect(render({})).toContain('A previous attempt is interrupted or may be running in another tab.');
+  expect(render({ activeClaim: snapshot.jobs[0] })).toContain('Reading your paragraph on this device');
+  snapshot.jobs[0].status = 'failed'; snapshot.jobs[0].failureReason = 'model-input-quota';
+  expect(render({})).toContain('The on-device model couldn&#x27;t process this part.');
+  snapshot.jobs[0].failureReason = 'future-reason' as typeof snapshot.jobs[0]['failureReason'];
+  expect(render({})).toContain('We could not finish reading this paragraph.');
+  expect(render({})).not.toContain('The on-device model couldn&#x27;t process this part.');
+  delete snapshot.jobs[0].failureReason;
+  expect(render({})).toContain('We could not finish reading this paragraph.');
 });
 it('renders the local profile form, import/export and deletion controls', () => {
   const html = renderToStaticMarkup(<ProfilePanel records={[]} save={async () => {}} remove={async () => {}}

@@ -1,5 +1,5 @@
 import { LocalError, type Job } from '../ai/localModel';
-import { CloudProcessingError } from '../ai/cloudProcessing';
+import { CloudProcessingError, StorageQuotaError } from '../ai/cloudProcessing';
 import { safeErrorName } from '../ai/errorMetadata';
 import { extractStructured, type ExtractVersion } from '../pipeline/extract';
 import { extractionUnits, isHeadingBlock } from '../structure/planStructure';
@@ -15,6 +15,7 @@ export interface LocalService {
   state: { kind: string };
   subscribe(listener: () => void): () => void;
   isReadyFor?(mode: 'on_device' | 'in_cloud'): Promise<boolean>;
+  isGeneratingFor?(mode: 'on_device' | 'in_cloud'): boolean;
   runLocal<T>(job: Job<T>): Promise<{ data: T; latencyMs: number; source: string; raw: string }>;
 }
 export class Scheduler {
@@ -22,6 +23,10 @@ export class Scheduler {
   private busy = false;
   private paused = false;
   private blocked = false;
+  private storageBlocked = false;
+  private resumeNeeded = false;
+  private storageRecovery?: { job: StoredJob; name: string; cancelled: boolean; fatal: boolean;
+    dispatched: boolean; modelQuota: boolean };
   private generation = 0;
   private timer: ReturnType<typeof setInterval> | undefined;
   private unsubscribe: (() => void) | undefined;
@@ -30,14 +35,34 @@ export class Scheduler {
   private readonly sessionId = crypto.randomUUID();
   constructor(private readonly store: LocalStore, private readonly service: LocalService,
     private readonly version: () => ExtractVersion, private readonly changed: () => void,
-    private readonly now: () => number = Date.now, private readonly failed: () => void = () => {}) {}
+    private readonly now: () => number = Date.now, private readonly failed: (error?: unknown) => void = () => {}) {}
   async start(): Promise<void> {
     this.stopped = false;
-    await this.store.resume();
-    if (this.stopped) return;
-    this.unsubscribe = this.service.subscribe(() => { void this.tick(); });
-    this.timer = setInterval(() => { void this.tick(); }, 1000);
-    await this.tick();
+    try {
+      await this.store.resume();
+    } catch (error) {
+      if (safeErrorName(error) !== 'QuotaExceededError') throw error;
+      this.resumeNeeded = true;
+      this.storageFailure(error);
+    } finally {
+      if (!this.stopped) {
+        this.unsubscribe = this.service.subscribe(() => { void this.tick(); });
+        this.timer = setInterval(() => { void this.tick(); }, 1000);
+      }
+    }
+    if (!this.stopped) await this.tick();
+  }
+  storagePaused(): boolean { return this.storageBlocked; }
+  private storageFailure(error: unknown): void {
+    this.storageBlocked = true;
+    this.failed(error);
+  }
+  ownedClaim(): StoredJob | undefined {
+    return !this.stopped && !this.active?.signal.aborted ? this.activeJob?.job : undefined;
+  }
+  activeClaim(): StoredJob | undefined {
+    const job = this.ownedClaim();
+    return job && (this.service.isGeneratingFor?.(job.runMode ?? 'on_device') ?? true) ? job : undefined;
   }
   stop(): void {
     this.stopped = true;
@@ -66,14 +91,25 @@ export class Scheduler {
     }
   }
   saved(): void {
+    this.storageBlocked = false;
     this.paused = false;
     void this.tick();
   }
   async tick(): Promise<void> {
-    if (this.busy || this.stopped || this.paused) return;
+    if (this.busy || this.stopped || this.paused || this.storageBlocked) return;
     this.busy = true;
     const generation = this.generation;
     try {
+      if (this.resumeNeeded) {
+        await this.store.resume();
+        this.resumeNeeded = false;
+      }
+      if (this.storageRecovery) {
+        const retry = this.storageRecovery;
+        await this.store.fail(retry.job, retry.name, retry.cancelled, this.now(), retry.fatal,
+          retry.dispatched, retry.modelQuota);
+        this.storageRecovery = undefined;
+      }
       const mode = await this.store.cloudModeConsent() ? 'in_cloud' : 'on_device';
       await this.store.finalizeReady();
       await this.store.reconcileOutbox();
@@ -88,7 +124,6 @@ export class Scheduler {
         await this.store.supersedeJob(claimed.job);
         return;
       }
-      this.changed();
       const controller = new AbortController();
       const rowBatch = mode === 'on_device' && claimed.job.step === 'extract' &&
         claimed.job.promptVersion === 'extract.v2' && extractionUnits(claimed.paragraph.text).length > 1;
@@ -102,9 +137,14 @@ export class Scheduler {
       let dispatched = false;
       this.active = controller;
       this.activeJob = claimed;
+      this.changed();
       if (this.stopped || generation !== this.generation) controller.abort();
+      let inferenceError: unknown;
       try {
-        const run = <T,>(job: Job<T>) => this.service.runLocal({ ...job, requiredMode: mode });
+        const run = async <T,>(job: Job<T>) => {
+          try { return await this.service.runLocal({ ...job, requiredMode: mode }); }
+          catch (error) { inferenceError = error; throw error; }
+        };
         if (controller.signal.aborted) throw new LocalError('cancelled', 'Cancelled before dispatch.');
         if (claimed.job.step === 'extract') {
           if (claimed.job.promptVersion !== 'extract.v1' && claimed.job.promptVersion !== 'extract.v2') {
@@ -190,26 +230,39 @@ export class Scheduler {
         await this.store.finalizeReady();
         await this.store.reconcileOutbox();
       } catch (error) {
-        const cancelled = controller.signal.aborted || (error instanceof LocalError && error.code === 'cancelled') ||
-          (error instanceof CloudProcessingError && error.deferred);
+        const timeout = error instanceof LocalError && error.code === 'timeout';
+        const cancelled = !timeout && (controller.signal.aborted ||
+          (error instanceof LocalError && error.code === 'cancelled') ||
+          (error instanceof CloudProcessingError && error.deferred));
         const name = error instanceof LocalError && error.diagnostics?.errorName
           ? safeErrorName({ name: error.diagnostics.errorName }) : safeErrorName(error);
-        const fatal = (error instanceof LocalError &&
+        const modelQuota = mode === 'on_device' && error === inferenceError &&
+          error instanceof LocalError && error.code === 'model-quota';
+        const fatal = modelQuota || (error instanceof LocalError &&
           ['privacy-fault', 'not-configured', 'unsupported'].includes(error.code)) ||
           (error instanceof CloudProcessingError && !error.deferred);
         if (error instanceof LocalError && error.code === 'privacy-fault') this.blocked = true;
-        await this.store.fail(claimed.job, name, cancelled, this.now(), fatal,
-          claimed.job.step !== 'extract' && dispatched);
-        await this.store.finalizeReady();
-        await this.store.reconcileOutbox();
+        if (error instanceof StorageQuotaError || (error !== inferenceError && !(error instanceof LocalError) &&
+            safeErrorName(error) === 'QuotaExceededError')) {
+          this.storageFailure(error);
+        }
+        const wasDispatched = claimed.job.step !== 'extract' && dispatched;
+        this.storageRecovery = { job: claimed.job, name, cancelled, fatal, dispatched: wasDispatched, modelQuota };
+        await this.store.fail(claimed.job, name, cancelled, this.now(), fatal, wasDispatched, modelQuota);
+        this.storageRecovery = undefined;
+        if (!this.storageBlocked) {
+          await this.store.finalizeReady();
+          await this.store.reconcileOutbox();
+        }
       } finally {
         if (rowBatch && typeof document !== 'undefined') {
           document.removeEventListener?.('visibilitychange', onVisibilityChange);
         }
         if (this.active === controller) { this.active = undefined; this.activeJob = undefined; }
       }
-    } catch {
-      this.failed();
+    } catch (error) {
+      if (safeErrorName(error) === 'QuotaExceededError') this.storageFailure(error);
+      else this.failed(error);
     } finally {
       this.busy = false;
       this.changed();

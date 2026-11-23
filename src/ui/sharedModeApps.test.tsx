@@ -39,7 +39,7 @@ const h = vi.hoisted(() => {
 });
 vi.mock('react', async importOriginal => ({ ...await importOriginal<typeof import('react')>(),
   useState: h.useState, useRef: h.useRef, useMemo: h.useMemo, useEffect: h.useEffect }));
-const localFixture = vi.hoisted(() => ({ ready: false, run: vi.fn() }));
+const localFixture = vi.hoisted(() => ({ ready: false, generating: true, run: vi.fn() }));
 const adapter = vi.hoisted(() => vi.fn().mockResolvedValue({ source: 'in_cloud', text: '{"items":[]}' }));
 const researchAdapter = vi.hoisted(() => vi.fn().mockResolvedValue({ source: 'in_cloud', result: {
   text: 'Grounded answer fixture', parts: ['Grounded answer fixture'], sources: [], supports: [],
@@ -56,7 +56,7 @@ vi.mock('./service', () => ({ config: { apiKey: 'example', authDomain: 'example'
   createService: () => ({ state: { kind: localFixture.ready ? 'ready' : 'unsupported' },
     browserAvailability: localFixture.ready ? 'available' : 'unsupported',
     warmLatencyMs: null, privacyFaults: 0, preparing: false, retryRequired: false,
-    subscribe: () => () => {}, runLocal: localFixture.run }),
+    subscribe: () => () => {}, isGeneratingFor: () => localFixture.generating, runLocal: localFixture.run }),
   startReadiness: () => () => {}, useForeground: () => true }));
 vi.mock('../settings/remoteSettings', async () => {
   const { builtInSettings } = await import('../settings/defaults');
@@ -118,7 +118,7 @@ function add(type: string, callback: () => void) {
 function remove(type: string, callback: () => void) { listeners.get(type)?.delete(callback); }
 afterEach(() => {
   vi.unstubAllGlobals(); listeners.clear(); Channel.channels.clear(); adapter.mockClear(); researchAdapter.mockClear();
-  localFixture.ready = false; localFixture.run.mockReset();
+  localFixture.ready = false; localFixture.generating = true; localFixture.run.mockReset();
 });
 
 it('loads and removes a sample without changing profile or Never send, and persists welcome dismissal', async () => {
@@ -629,6 +629,171 @@ it('preserves the edited idea draft when a blank save fails and the same plan re
   }
 }, 15000);
 
+it('shows same-tab finishing status while the completed model result is being saved', async () => {
+  vi.stubGlobal('BroadcastChannel', Channel);
+  vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('localStorage', { getItem: () => 'true', removeItem: () => {}, setItem: () => {} });
+  const seed = await openLocalStore();
+  await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+  const plan = 'A fictional startup plan contains enough words for local model extraction and review.';
+  await seed.saveNotebook(plan, 0);
+  localFixture.ready = true;
+  localFixture.run.mockImplementation(async () => {
+    localFixture.generating = false;
+    return { data: { items: [] }, source: 'on_device', latencyMs: 1, raw: '' };
+  });
+  let release!: () => void; let held = false;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const original = LocalStore.prototype.complete;
+  const spy = vi.spyOn(LocalStore.prototype, 'complete').mockImplementation(async function (this: LocalStore,
+    job, items, now, source) {
+    held = true; await gate; return original.call(this, job, items, now, source);
+  });
+  const app = h.newInstance(); const notebook = h.newInstance();
+  try {
+    mount(app);
+    await vi.waitFor(() => expect(held).toBe(true));
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').snapshot.jobs
+      .some((job: { status: string }) => job.status === 'running')).toBe(true));
+    const props = component(app, 'NotebookPanel') as Parameters<typeof NotebookPanel>[0];
+    expect(props.ownedClaim?.status).toBe('running');
+    expect(props.activeClaim).toBeUndefined();
+    h.enter(notebook);
+    const html = renderToStaticMarkup(NotebookPanel(props));
+    expect(html).toContain('Finishing work in this tab');
+    expect(html).not.toContain('interrupted or may be running in another tab');
+    expect(html).not.toContain('Reading your paragraph on this device');
+  } finally { release(); spy.mockRestore(); for (const cleanup of app.cleanups) cleanup(); seed.close(); }
+}, 15000);
+
+it('recovers a startup resume quota after the next successful notebook save', async () => {
+  vi.stubGlobal('BroadcastChannel', Channel);
+  vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('localStorage', { getItem: () => 'true', removeItem: () => {}, setItem: () => {} });
+  const seed = await openLocalStore();
+  await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+  const plan = 'A fictional startup plan contains enough words for local model extraction and review.';
+  await seed.saveNotebook(plan, 0); await seed.enqueueSettled(4000, 'extract.v2');
+  expect((await seed.claim(4000))?.job.status).toBe('running');
+  localFixture.ready = true;
+  localFixture.run.mockResolvedValue({ data: { items: [] }, source: 'on_device', latencyMs: 1, raw: '' });
+  const original = IDBObjectStore.prototype.put;
+  let inject = true;
+  const spy = vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(function (this: IDBObjectStore, value, key) {
+    if (inject && this.name === 'jobs' && (value as { status?: string }).status === 'pending') {
+      inject = false; throw new DOMException('fixture', 'QuotaExceededError');
+    }
+    return original.call(this, value, key);
+  });
+  const app = h.newInstance();
+  try {
+    mount(app);
+    await vi.waitFor(() => expect(component(app, 'StorageNotice').notice).toBe('Browser storage is full.'));
+    expect(component(app, 'NotebookPanel').storageStatus).toBe('saved');
+    expect(component(app, 'NotebookPanel').storagePaused).toBe(true);
+    expect(localFixture.run).not.toHaveBeenCalled();
+    component(app, 'NotebookPanel').save(plan);
+    await vi.waitFor(() => expect(component(app, 'StorageNotice').notice).toBe(''));
+    await vi.waitFor(() => expect(localFixture.run).toHaveBeenCalled(), { timeout: 8000 });
+    await vi.waitFor(async () => expect((await seed.snapshot()).jobs[0].status).toBe('done'));
+  } finally { spy.mockRestore(); for (const cleanup of app.cleanups) cleanup(); seed.close(); }
+}, 15000);
+
+it('keeps a saved editor and pauses automatic work after an items-store quota error', async () => {
+  vi.stubGlobal('BroadcastChannel', Channel);
+  vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('localStorage', { getItem: () => 'true', removeItem: () => {}, setItem: () => {} });
+  const seed = await openLocalStore();
+  await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+  const plan = 'A fictional project tracks the local ledger with enough words to run model extraction.\n\n' +
+    'A second fictional paragraph holds another plan with enough words for the local model.';
+  await seed.saveNotebook(plan, 0);
+  localFixture.ready = true;
+  localFixture.run.mockResolvedValue({ data: { items: [{ kind: 'assumption', text: 'Ledger',
+    quote: 'fictional project', topics: [] }] }, source: 'on_device', latencyMs: 1, raw: '' });
+  const original = IDBObjectStore.prototype.put;
+  let inject = true;
+  const spy = vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(function (this: IDBObjectStore, value, key) {
+    if (inject && this.name === 'items') { inject = false; throw new DOMException('fixture', 'QuotaExceededError'); }
+    return original.call(this, value, key);
+  });
+  const app = h.newInstance();
+  try {
+    mount(app);
+    await vi.waitFor(() => expect(component(app, 'StorageNotice').notice).toBe('Browser storage is full.'));
+    expect(component(app, 'NotebookPanel').storageStatus).toBe('saved');
+    expect(component(app, 'NotebookPanel').storagePaused).toBe(true);
+    expect(component(app, 'NotebookPanel').text).toBe(plan);
+    const calls = localFixture.run.mock.calls.length;
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(localFixture.run).toHaveBeenCalledTimes(calls);
+    component(app, 'NotebookPanel').save(plan);
+    await vi.waitFor(() => expect(component(app, 'StorageNotice').notice).toBe(''));
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').storagePaused).toBe(false));
+  } finally { spy.mockRestore(); for (const cleanup of app.cleanups) cleanup(); seed.close(); }
+}, 15000);
+
+it('pauses automatic cloud work after reservation-store quota without dispatch', async () => {
+  vi.stubGlobal('BroadcastChannel', Channel);
+  vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('localStorage', { getItem: () => 'true', removeItem: () => {}, setItem: () => {} });
+  const seed = await openLocalStore();
+  await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+  const plan = 'A fictional project tracks the local ledger with enough words to run model extraction.';
+  await seed.saveNotebook(plan, 0);
+  const original = IDBObjectStore.prototype.add;
+  let inject = true;
+  const spy = vi.spyOn(IDBObjectStore.prototype, 'add').mockImplementation(function (this: IDBObjectStore, value, key) {
+    if (inject && this.name === 'cloudProcessing') {
+      inject = false; throw new DOMException('fixture', 'QuotaExceededError');
+    }
+    return original.call(this, value, key);
+  });
+  const app = h.newInstance();
+  try {
+    mount(app);
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').storageStatus).toBe('saved'));
+    component(app, 'Notices').chooseCloud();
+    await vi.waitFor(() => expect(component(app, 'StorageNotice').notice).toBe('Browser storage is full.'),
+      { timeout: 8000 });
+    expect(component(app, 'NotebookPanel').storageStatus).toBe('saved');
+    expect(component(app, 'NotebookPanel').storagePaused).toBe(true);
+    expect(adapter).not.toHaveBeenCalled();
+    expect((await seed.snapshot()).cloudProcessingSends).toEqual([]);
+  } finally { spy.mockRestore(); for (const cleanup of app.cleanups) cleanup(); seed.close(); }
+}, 15000);
+
+it('reports browser storage quota on save and clears it after a successful retry', async () => {
+  vi.stubGlobal('BroadcastChannel', Channel);
+  vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('localStorage', { getItem: () => null, removeItem: () => {}, setItem: () => {} });
+  const seed = await openLocalStore();
+  await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+  const original = LocalStore.prototype.saveNotebook;
+  let fail = true;
+  const spy = vi.spyOn(LocalStore.prototype, 'saveNotebook').mockImplementation(async function (this: LocalStore,
+    text, now, expected) {
+    if (fail) { fail = false; throw Object.assign(new Error('fixture'), { name: 'QuotaExceededError' }); }
+    return original.call(this, text, now, expected);
+  });
+  const app = h.newInstance();
+  try {
+    mount(app);
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').storageStatus).toBe('saved'));
+    component(app, 'NotebookPanel').save('A new local plan.');
+    await vi.waitFor(() => expect(component(app, 'StorageNotice').notice).toBe('Browser storage is full.'));
+    expect(component(app, 'NotebookPanel').storageStatus).toBe('error');
+    component(app, 'NotebookPanel').save('A new local plan.');
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').storageStatus).toBe('saved'));
+    expect(component(app, 'StorageNotice').notice).toBe('');
+  } finally { spy.mockRestore(); for (const cleanup of app.cleanups) cleanup(); seed.close(); }
+}, 15000);
+
 it('uses the existing cloud opt-in when chosen from the welcome', async () => {
   vi.stubGlobal('BroadcastChannel', Channel);
   const confirm = vi.fn().mockReturnValue(true);
@@ -674,7 +839,7 @@ it('reconciles two mounted App instances on opt-in, opt-out and a missed broadca
     });
     await vi.waitFor(() => expect(adapter).toHaveBeenCalled(), { timeout: 5000 });
     await vi.waitFor(async () => expect((await seed.snapshot()).jobs[0])
-      .toMatchObject({ runMode: 'in_cloud', measuredSource: 'in_cloud' }));
+      .toMatchObject({ runMode: 'in_cloud', measuredSource: 'in_cloud' }), { timeout: 8000 });
     component(a, 'NotebookPanel').save(
       'This initial paragraph has enough words to create a waiting extraction for the cloud test.');
     await vi.waitFor(() => expect(component(a, 'NotebookPanel').storageStatus).toBe('saved'));

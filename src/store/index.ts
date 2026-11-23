@@ -53,7 +53,7 @@ export interface StoredJob {
   status: 'pending' | 'running' | 'done' | 'superseded' | 'failed'; attempts: number; createdAt: number;
   nextRunAt: number; errorName?: string; measuredSource?: 'on_device' | 'in_cloud';
   runMode?: 'on_device' | 'in_cloud'; cloudEligible?: boolean;
-  failureReason?: 'interrupted-at-attempt-limit' | 'revalidation-failed';
+  failureReason?: 'interrupted-at-attempt-limit' | 'revalidation-failed' | 'model-input-quota';
 }
 interface ComparisonBatch {
   key: string; paragraphId: string; paragraphVersion: number; old: PriorLineage[]; items: StoredItem[];
@@ -480,6 +480,7 @@ export class LocalStore {
         tx.objectStore('profile').getAll(), tx.objectStore('cards').getAll(),
         tx.objectStore('anglesConsidered').getAll(),
       ]);
+      if (current && current.attempts !== job.attempts) { await tx.done; return false; }
       const version = versionFromPrompt(job.promptVersion);
       if (job.requested) {
         const card = job.cardId ? cards.find(value => value.id === job.cardId) : undefined;
@@ -693,6 +694,7 @@ export class LocalStore {
         job.cardId ? tx.objectStore('cards').get(job.cardId) : Promise.resolve(undefined),
         tx.objectStore('lineageVersions').getAll(), tx.objectStore('privacy').get('never-send'),
       ]);
+      if (current && current.attempts !== job.attempts) { await tx.done; return false; }
       const head = card && lineageHeads(versions).find(value => value.lineageId === card.itemLineageId);
       if (!current || current.step !== 'question' || current.status !== 'running' || !card || !paragraph ||
           paragraph.version !== job.paragraphVersion || !head || head.version !== card.itemVersion ||
@@ -757,6 +759,7 @@ export class LocalStore {
       const [current, card, paragraph, versions] = await Promise.all([tx.objectStore('jobs').get(job.key),
         job.cardId ? tx.objectStore('cards').get(job.cardId) : Promise.resolve(undefined),
         tx.objectStore('paragraphs').get(job.paragraphId), tx.objectStore('lineageVersions').getAll()]);
+      if (current && current.attempts !== job.attempts) { await tx.done; return false; }
       const head = card && lineageHeads(versions).find(value => value.lineageId === card.itemLineageId);
       if (!current || current.step !== 'whynote' || current.status !== 'running' || !card || !paragraph ||
           paragraph.version !== job.paragraphVersion || !head || head.version !== card.itemVersion ||
@@ -1067,8 +1070,20 @@ export class LocalStore {
     try {
       const storedMode = (await tx.objectStore('meta').get('cloud-mode-consent'))?.value ? 'in_cloud' : 'on_device';
       if (mode !== storedMode) { await tx.done; return null; }
+      const paragraphs = await tx.objectStore('paragraphs').getAll();
+      const order = new Map(paragraphs.map(paragraph => [paragraph.id, paragraph.order]));
+      const priority = (job: StoredJob) => job.requested || job.step === 'question' || job.step === 'describe' ? 0 : 1;
       const jobs = (await tx.objectStore('jobs').getAll()).filter(j => j.status === 'pending' && j.nextRunAt <= now)
-        .sort((a, b) => a.createdAt - b.createdAt || a.key.localeCompare(b.key));
+        .sort((a, b) => {
+          if (mode === 'in_cloud') return a.createdAt - b.createdAt || a.key.localeCompare(b.key);
+          const p = priority(a) - priority(b);
+          if (p) return p;
+          const kind = Number(a.step !== 'extract') - Number(b.step !== 'extract');
+          if (kind) return kind;
+          return (a.step === 'extract' && b.step === 'extract'
+            ? (order.get(a.paragraphId) ?? Infinity) - (order.get(b.paragraphId) ?? Infinity) : 0) ||
+            a.createdAt - b.createdAt || a.key.localeCompare(b.key);
+        });
       for (const job of jobs) {
         if ((job.runMode ?? 'on_device') !== mode) continue;
         if (mode === 'in_cloud' && !((job.step === 'extract' && job.promptVersion === 'extract.v2') ||
@@ -1147,6 +1162,7 @@ export class LocalStore {
     try {
       const currentJob = await tx.objectStore('jobs').get(job.key);
       const paragraph = await tx.objectStore('paragraphs').get(job.paragraphId);
+      if (currentJob && currentJob.attempts !== job.attempts) { await tx.done; return false; }
       if (!currentJob || currentJob.step !== 'extract' || currentJob.status !== 'running' || !paragraph ||
           paragraph.version !== job.paragraphVersion) {
         if (currentJob?.status === 'running') await tx.objectStore('jobs').put({ ...currentJob, status: 'superseded' });
@@ -1295,7 +1311,7 @@ export class LocalStore {
     void tx.done.catch(() => undefined);
     try {
       const current = await tx.objectStore('jobs').get(job.key);
-      if (current?.status === 'running') {
+      if (current?.status === 'running' && current.attempts === job.attempts) {
         await tx.objectStore('jobs').put({ ...current, status: 'superseded' });
         if (current.requested && current.cardId) {
           const card = await tx.objectStore('cards').get(current.cardId);
@@ -1324,6 +1340,7 @@ export class LocalStore {
       const current = await tx.objectStore('jobs').get(job.key);
       const paragraph = await tx.objectStore('paragraphs').get(job.paragraphId);
       const batch = await tx.objectStore('comparisonBatches').get(batchKey(job.paragraphId, job.paragraphVersion));
+      if (current && current.attempts !== job.attempts) { await tx.done; return false; }
       if (!current || current.status !== 'running' || current.step !== 'compare' || !current.lineageId ||
           !paragraph || paragraph.version !== job.paragraphVersion || !batch) {
         if (current?.status === 'running') await tx.objectStore('jobs').put({ ...current, status: 'superseded' });
@@ -1344,14 +1361,14 @@ export class LocalStore {
     }
   }
   async fail(job: StoredJob, errorName: string, cancelled: boolean, now = Date.now(), fatal = false,
-    dispatched = false): Promise<void> {
+    dispatched = false, modelQuota = false): Promise<void> {
     const tx = this.db.transaction(['jobs', 'paragraphs', 'comparisonBatches', 'lineageVersions', 'cards', 'funnel',
       'outbox'], 'readwrite');
     void tx.done.catch(() => undefined);
     try {
       const current = await tx.objectStore('jobs').get(job.key);
       const paragraph = await tx.objectStore('paragraphs').get(job.paragraphId);
-      if (current?.status === 'running' && (current.step !== 'describe' || current.attempts === job.attempts)) {
+      if (current?.status === 'running' && current.attempts === job.attempts) {
         if (!paragraph || paragraph.version !== job.paragraphVersion) {
           await tx.objectStore('jobs').put({ ...current, status: 'superseded' });
         } else if (cancelled && !dispatched) {
@@ -1361,6 +1378,7 @@ export class LocalStore {
           const terminal = fatal || current.attempts >= MAX_ATTEMPTS;
           const safeName = safeErrorName({ name: errorName });
           await tx.objectStore('jobs').put({ ...current, errorName: safeName,
+            ...(modelQuota ? { failureReason: 'model-input-quota' as const } : {}),
             status: terminal ? 'failed' : 'pending', nextRunAt: now + 5000 * 2 ** (current.attempts - 1) });
           if (terminal && ['angles', 'question', 'whynote'].includes(current.step)) {
             const card = current.cardId ? await tx.objectStore('cards').get(current.cardId) : undefined;

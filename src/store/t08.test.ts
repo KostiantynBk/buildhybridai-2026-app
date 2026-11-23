@@ -332,9 +332,9 @@ it('suppresses an automatic mark racing a requested check for the same pair', as
     await store.enqueueAngles(5000);
     const initial = await store.snapshot();
     const target = initial.items.find(item => item.kind === 'assumption')!;
-    const requested = await store.requestCheck(target.id, 6000);
     const automatic = await store.claim(6000);
     const automaticInput = await store.anglesInput(automatic!.job);
+    const requested = await store.requestCheck(target.id, 6000);
     const concern = { item: 1, angle: 'end-user' as const, concern: 'What are the public hosting limits?',
       checkable: true };
     await store.completeAngles(automatic!.job, automaticInput!, [concern], 's', 6000, 'on_device');

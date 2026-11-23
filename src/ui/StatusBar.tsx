@@ -17,6 +17,8 @@ export function modelLabel(state: State): string {
       return 'warming up';
     case 'ready':
       return 'ready';
+    case 'stalled':
+      return 'stopped responding — reload';
     case 'error':
       return `error — ${state.reason}`;
   }
@@ -105,7 +107,8 @@ export function StatusBar({
         <button
           disabled={!canPrepare(configured, foreground, service.preparing, service.state)}
           onClick={() => { void service.prepare().catch(() => undefined); }}
-        >{service.state.kind === 'error' || service.retryRequired ? 'Set up model' : 'Download model'}</button>
+        >{service.retryRequired ? 'Prepare again' : service.state.kind === 'error' ? 'Set up model' :
+          'Download model'}</button>
         {!canPrepare(configured, foreground, service.preparing, service.state) &&
           <p>{prepareDisabledReason(configured, foreground, service.preparing)}</p>}
       </div>}

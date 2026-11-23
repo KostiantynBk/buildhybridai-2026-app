@@ -23,6 +23,7 @@ import { samplePlan } from './samplePlan';
 import { copy } from './copy';
 import { navigationItems } from './navigation';
 import { splitParagraphs } from '../store/matcher';
+import { safeErrorName } from '../ai/errorMetadata';
 
 const emptySnapshot = (): Snapshot => ({ paragraphs: [], items: [], profile: [], jobs: [] });
 const removedSampleKey = 'tp.removedSampleIds';
@@ -172,7 +173,12 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
           mode => renderedModeRef.current === mode);
         scheduler = new Scheduler(opened, pipeline,
           () => settingsRef.current.values.prompt_set === 'v1' ? 'extract.v1' : 'extract.v2', update,
-          Date.now, () => { if (mounted.current) setStorageStatus('error'); });
+          Date.now, error => {
+            if (mounted.current) {
+              if (safeErrorName(error) === 'QuotaExceededError') setStorageNotice('Browser storage is full.');
+              else setStorageStatus('error');
+            }
+          });
         schedulerRef.current = scheduler;
         await scheduler.start();
       } catch {
@@ -237,10 +243,14 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
         displayedParagraphs.current = saved;
         if (sampleIds.current.length && (saved.length !== sampleIds.current.length ||
           saved.some(p => !sampleIds.current.includes(p.id)))) setSampleActive(false);
+        setStorageNotice(current => current === 'Browser storage is full.' ? '' : current);
         storageStatusRef.current = 'saved'; setStorageStatus('saved'); schedulerRef.current?.saved();
       }
-    }).catch(() => {
-      if (mounted.current) { storageStatusRef.current = 'error'; setStorageStatus('error'); }
+    }).catch(error => {
+      if (mounted.current) {
+        if (safeErrorName(error) === 'QuotaExceededError') setStorageNotice('Browser storage is full.');
+        storageStatusRef.current = 'error'; setStorageStatus('error');
+      }
     });
   };
   const dismissWelcome = () => {
@@ -592,7 +602,10 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
         removeSample={() => { void removeSample(); }}
         snapshot={snapshot} configured={config !== null}
         ready={cloudMode ? settings.values.cloud_enabled : service.state.kind === 'ready'}
-        cloudMode={cloudMode} foreground={foreground}
+        cloudMode={cloudMode} foreground={foreground} modelState={service.state.kind}
+        retryRequired={service.retryRequired} activeClaim={schedulerRef.current?.activeClaim()}
+        ownedClaim={schedulerRef.current?.ownedClaim()} storagePaused={schedulerRef.current?.storagePaused()}
+        prepareAgain={() => { void service.prepare().catch(() => undefined); }}
         extractVersion={settings.values.prompt_set === 'v1' ? 'extract.v1' : 'extract.v2'}
         research={research} researchErrors={researchErrors} searching={searching} checkingSend={checking}
         researchAgain={researchQuestion}

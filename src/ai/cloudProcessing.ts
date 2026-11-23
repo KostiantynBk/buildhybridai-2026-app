@@ -4,6 +4,7 @@ import type { AppConfig } from '../config';
 import type { LocalStore } from '../store';
 import { firebaseAI } from './firebase';
 import { LocalError, type Job } from './localModel';
+import { safeErrorName } from './errorMetadata';
 import { researchError } from './researchFlow';
 import { extractV2 } from '../pipeline/prompts/extract.v2';
 import { compareV1 } from '../pipeline/prompts/compare.v1';
@@ -12,6 +13,9 @@ import { questionV21 } from '../pipeline/prompts/question.v2.1';
 import { describeV1 } from '../pipeline/prompts/describe.v1';
 import { describeV2 } from '../pipeline/prompts/describe.v2';
 
+export class StorageQuotaError extends Error {
+  constructor() { super('Browser storage is full.'); this.name = 'QuotaExceededError'; }
+}
 export class CloudProcessingError extends Error {
   constructor(message: string, public readonly deferred = false) { super(message); this.name = 'CloudProcessingError'; }
 }
@@ -51,26 +55,33 @@ export class CloudProcessingService {
     return () => { this.listeners.delete(listener); };
   };
   private notify(message: string) { this.message = message; this.listeners.forEach(listener => listener()); }
+  private async storage<T>(operation: () => Promise<T>): Promise<T> {
+    try { return await operation(); } catch (error) {
+      if (safeErrorName(error) === 'QuotaExceededError') throw new StorageQuotaError();
+      throw error;
+    }
+  }
   async runLocal<T>(job: Job<T>): Promise<{ data: T; latencyMs: number; source: string; raw: string }> {
     const allowed = [extractV2, compareV1, anglesV21, questionV21, describeV1, describeV2].some(prompt =>
       job.instructions === prompt && job.schema === prompt.schema);
     if (!allowed) throw new CloudProcessingError('This legacy or unrecognized prompt cannot use cloud mode.');
     for (let attempt = 0; attempt < 2; attempt++) {
       if (!this.visible()) throw new CloudProcessingError('Cloud processing is paused while away.', true);
-      if (!this.enabled() || !await this.store.cloudModeConsent() || job.signal?.aborted) {
+      if (!this.enabled() || !await this.storage(() => this.store.cloudModeConsent()) || job.signal?.aborted) {
         throw new CloudProcessingError('Cloud mode is disabled or consent was revoked.', true);
       }
       const sentAt = this.now();
-      const reservation = await this.store.reserveCloudProcessing(sentAt);
+      const reservation = await this.storage(() => this.store.reserveCloudProcessing(sentAt));
       if (reservation === null) {
-        const message = await this.store.cloudModeConsent() ? 'Cloud mode daily limit reached. Resets tomorrow.'
+        const message = await this.storage(() => this.store.cloudModeConsent())
+          ? 'Cloud mode daily limit reached. Resets tomorrow.'
           : 'Cloud mode consent was revoked.';
         this.notify(message); throw new CloudProcessingError(message, true);
       }
       let dispatched = false;
       let preserveReservation = false;
       try {
-        if (!this.enabled() || !await this.store.cloudModeConsent() || job.signal?.aborted) {
+        if (!this.enabled() || !await this.storage(() => this.store.cloudModeConsent()) || job.signal?.aborted) {
           throw new CloudProcessingError('Cloud mode is disabled or consent was revoked.', true);
         }
         if (!this.visible()) {
@@ -81,7 +92,7 @@ export class CloudProcessingService {
         job.onDispatch?.();
         this.changed();
         const result = await this.adapter(job, this.model());
-        if (!this.enabled() || !await this.store.cloudModeConsent() || job.signal?.aborted) {
+        if (!this.enabled() || !await this.storage(() => this.store.cloudModeConsent()) || job.signal?.aborted) {
           this.notify('Cloud response discarded because cloud mode or permission changed.');
           throw new CloudProcessingError('Cloud response discarded because cloud mode or permission changed.', true);
         }
@@ -99,9 +110,14 @@ export class CloudProcessingService {
           source: result.source, raw: result.text };
       } catch (error) {
         if (!dispatched && !preserveReservation) {
-          await this.store.cancelCloudProcessingReservation(reservation).catch(() => undefined);
+          await this.storage(() => this.store.cancelCloudProcessingReservation(reservation)).catch(error => {
+            if (error instanceof StorageQuotaError) throw error;
+          });
         }
-        if (error instanceof LocalError || error instanceof CloudProcessingError) throw error;
+        if (error instanceof LocalError || error instanceof CloudProcessingError ||
+            error instanceof StorageQuotaError) {
+          throw error;
+        }
         const classified = researchError(error);
         if (classified.network && attempt === 0) continue;
         const message = classified.message.replace('Search research', 'Cloud processing')

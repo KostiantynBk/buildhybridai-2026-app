@@ -58,10 +58,10 @@ describe('safe failure diagnostics', () => {
     expect(result.complete).toBe(false);
     expect(result.rows).toHaveLength(1);
     expect(result.rows[0]).toMatchObject({
-      error: 'device-error',
-      errorClass: 'device-error',
+      error: name === 'QuotaExceededError' ? 'model-quota' : 'device-error',
+      errorClass: name === 'QuotaExceededError' ? 'model-quota' : 'device-error',
       errorName: name,
-      availabilityAfter: 'downloadable',
+      availabilityAfter: null,
       elapsedMs: 125,
       hidden: true,
       latencyMs: null,
@@ -72,7 +72,6 @@ describe('safe failure diagnostics', () => {
     expect(serialized).not.toContain('stack');
     const status = formatFailureStatus(result.rows[0]);
     expect(status).toContain(name);
-    expect(status).toContain('downloadable');
     expect(status).toContain('125 ms');
     expect(status).not.toContain(sentinel);
   });

@@ -1,12 +1,12 @@
 import Ajv from 'ajv';
-import { hiddenNow, safeAvailability, safeErrorName } from './errorMetadata';
+import { hiddenNow, safeErrorName } from './errorMetadata';
 
 export const languageOptions = {
   expectedInputs: [{ type: 'text' as const, languages: ['en'] }],
   expectedOutputs: [{ type: 'text' as const, languages: ['en'] }],
 };
 export type State =
-  | { kind: 'unsupported' | 'unavailable' | 'downloadable' | 'warming' | 'ready' }
+  | { kind: 'unsupported' | 'unavailable' | 'downloadable' | 'warming' | 'ready' | 'stalled' }
   | { kind: 'downloading'; progress: number }
   | { kind: 'error'; reason: string };
 export type FaultCode =
@@ -16,6 +16,8 @@ export type FaultCode =
   | 'privacy-fault'
   | 'invalid-output'
   | 'device-error'
+  | 'model-quota'
+  | 'timeout'
   | 'cancelled';
 export interface ErrorDiagnostics {
   source?: string;
@@ -78,6 +80,9 @@ const warmSchema = {
   additionalProperties: false,
 };
 const ajv = new Ajv();
+// A single native generation has 180 seconds after dispatch; timeout requires a page reload.
+export const LOCAL_GENERATION_TIMEOUT_MS = 180_000;
+export const LOCAL_AVAILABILITY_TIMEOUT_MS = 30_000;
 
 export class LocalModelService {
   state: State = { kind: 'unsupported' };
@@ -86,16 +91,27 @@ export class LocalModelService {
   preparing = false;
   retryRequired = false;
   warmLatencyMs: number | null = null;
+  generating = false;
+  private stalled = false;
+  private probeGeneration = 0;
   private listeners = new Set<() => void>();
   private tail: Promise<unknown> = Promise.resolve();
   constructor(private readonly deps: Dependencies) {}
+  isGeneratingFor = (mode: 'on_device' | 'in_cloud') => mode === 'on_device' && this.generating;
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
     };
   };
+  private isStalled(): boolean { return this.stalled; }
+  private isReadyOrPreparing(): boolean { return this.preparing || this.state.kind === 'ready'; }
+  private assertNotStalled(): void {
+    if (this.stalled) throw new LocalError('timeout', 'Reload before preparing again.');
+  }
   private setState(state: State) {
+    if (this.stalled && state.kind !== 'stalled') return;
+    if (state.kind === 'stalled') this.stalled = true;
     this.state = state;
     this.listeners.forEach((listener) => listener());
   }
@@ -121,14 +137,35 @@ export class LocalModelService {
       }
     });
   }
-  async probe(): Promise<void> {
+  private async availability(obsolete: () => boolean = () => false): Promise<string> {
+    this.assertNotStalled();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const value = await Promise.race([this.deps.availability(), new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          if (obsolete()) { reject(new LocalError('cancelled', 'The readiness check was superseded.')); return; }
+          this.setState({ kind: 'stalled' });
+          reject(new LocalError('timeout', 'The on-device model stopped responding.'));
+        }, LOCAL_AVAILABILITY_TIMEOUT_MS);
+      })]);
+      this.assertNotStalled();
+      return value;
+    } finally { if (timer) clearTimeout(timer); }
+  }
+  async probe(signal?: AbortSignal): Promise<void> {
+    const generation = ++this.probeGeneration;
+    if (signal?.aborted || this.isStalled() || this.isReadyOrPreparing()) return;
     if (!this.deps.hasApi()) {
       this.browserAvailability = 'unsupported';
       this.setState({ kind: 'unsupported' });
       return;
     }
+    const observed = this.state;
+    const obsolete = () => Boolean(signal?.aborted) || generation !== this.probeGeneration ||
+      this.state !== observed || this.isReadyOrPreparing();
     try {
-      const value = await this.deps.availability();
+      const value = await this.availability(obsolete);
+      if (this.isStalled() || obsolete()) return;
       this.browserAvailability = value;
       if (value === 'unavailable') {
         this.setState({ kind: 'unavailable' });
@@ -140,6 +177,7 @@ export class LocalModelService {
         this.setState({ kind: 'error', reason: 'Unknown model availability.' });
       }
     } catch {
+      if (this.isStalled() || obsolete()) return;
       this.browserAvailability = 'check failed';
       this.setState({ kind: 'error', reason: 'Could not check model availability.' });
     }
@@ -155,6 +193,7 @@ export class LocalModelService {
     }
   }
   async prepare(): Promise<void> {
+    this.assertNotStalled();
     this.guardConfigAndApi();
     const retry = this.retryRequired || this.state.kind === 'error' || this.state.kind === 'unavailable';
     if (
@@ -169,11 +208,12 @@ export class LocalModelService {
       // Construct synchronously in the activation handler, before awaiting model work.
       const model = this.deps.createModel();
       // Start both checks before yielding; the SDK itself rechecks availability before downloading.
-      const availability = retry ? this.deps.availability() : Promise.resolve(null);
-      const preparation = model.prepare((progress) =>
-        this.setState({ kind: 'downloading', progress: Math.max(0, Math.min(1, progress)) }),
-      );
+      const availability = retry ? this.availability() : Promise.resolve(null);
+      const preparation = model.prepare((progress) => {
+        if (!this.isStalled()) this.setState({ kind: 'downloading', progress: Math.max(0, Math.min(1, progress)) });
+      });
       const [check, prepared] = await Promise.allSettled([availability, preparation]);
+      this.assertNotStalled();
       if (prepared.status === 'rejected') {
         throw prepared.reason;
       }
@@ -185,15 +225,20 @@ export class LocalModelService {
       }
       this.setState({ kind: 'warming' });
       await this.enqueue(async () => {
+        this.assertNotStalled();
         while (!this.deps.isForeground()) {
           await this.waitForeground();
+          this.assertNotStalled();
         }
+        this.assertNotStalled();
         const result = await this.execute(model, {
           prompt: 'Return JSON with ready set to true.',
           schema: warmSchema,
         });
+        this.assertNotStalled();
         this.warmLatencyMs = result.latencyMs;
       });
+      this.assertNotStalled();
       this.preparing = false;
       this.retryRequired = false;
       this.setState({ kind: 'ready' });
@@ -212,6 +257,7 @@ export class LocalModelService {
   async runLocal<T>(
     job: Job<T>,
   ): Promise<{ data: T; latencyMs: number; source: string; raw: string }> {
+    this.assertNotStalled();
     this.guardConfigAndApi();
     if (job.signal?.aborted) {
       throw new LocalError('cancelled', 'Local job cancelled before dispatch.');
@@ -220,9 +266,12 @@ export class LocalModelService {
       throw new LocalError('not-ready', 'Prepare the local model first.');
     }
     return this.enqueue(async () => {
+      this.assertNotStalled();
       while (!this.deps.isForeground()) {
         await this.waitForeground();
+        this.assertNotStalled();
       }
+      this.assertNotStalled();
       if (job.signal?.aborted) {
         throw new LocalError('cancelled', 'Local job cancelled before dispatch.');
       }
@@ -233,7 +282,7 @@ export class LocalModelService {
       const dispatchStart = this.deps.now();
       try {
         const model = this.deps.createModel();
-        return await this.execute<T>(model, job);
+        return await this.execute<T>(model, job, true);
       } catch (error) {
         const elapsedMs = Math.max(0, this.deps.now() - dispatchStart);
         const hidden = this.deps.isHidden ? this.deps.isHidden() : hiddenNow();
@@ -249,11 +298,11 @@ export class LocalModelService {
           });
         }
         this.retryRequired = true;
-        await this.probe();
+        this.setState({ kind: 'error', reason: 'The on-device model needs preparing again.' });
         throw new LocalError('device-error', 'Local model request failed.', {
           ...previous,
           errorName,
-          availabilityAfter: safeAvailability(this.browserAvailability),
+          availabilityAfter: null,
           elapsedMs,
           hidden,
         });
@@ -263,11 +312,35 @@ export class LocalModelService {
   private async execute<T>(
     model: Model,
     job: Job<T>,
+    bounded = false,
   ): Promise<{ data: T; latencyMs: number; source: string; raw: string }> {
+    this.assertNotStalled();
     this.guardConfigAndApi();
     const start = this.deps.now();
     job.onDispatch?.();
-    const response = await model.generate(job.prompt, job.schema, job.instructions);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let response: Awaited<ReturnType<Model['generate']>>;
+    try {
+      if (bounded) { this.generating = true; this.listeners.forEach(listener => listener()); }
+      const generation = model.generate(job.prompt, job.schema, job.instructions);
+      response = bounded ? await Promise.race([generation, new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          this.setState({ kind: 'stalled' });
+          reject(new LocalError('timeout', 'The on-device model stopped responding.', { errorName: 'TimeoutError' }));
+        }, LOCAL_GENERATION_TIMEOUT_MS);
+      })]) : await generation;
+    } catch (error) {
+      if (error instanceof LocalError) throw error;
+      const errorName = safeErrorName(error);
+      if (errorName === 'QuotaExceededError') {
+        throw new LocalError('model-quota', "The on-device model couldn't process this part.", { errorName });
+      }
+      throw new LocalError('device-error', 'Local model request failed.', { errorName });
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (bounded) { this.generating = false; this.listeners.forEach(listener => listener()); }
+    }
+    this.assertNotStalled();
     const latencyMs = this.deps.now() - start;
     if (response.source !== 'on_device') {
       this.privacyFaults++;

@@ -121,6 +121,26 @@ it('rejects escaped-pipe role swaps but keeps legacy exact quotes', async () => 
     }
   }
 });
+it('rejects CR list-boundary substitutions in whole-block routes while preserving legacy quotes', async () => {
+  const text = '- Review draft each morning.\n- Keep the archive local for this project.\n' +
+    '- Save a signed copy for tomorrow.';
+  const altered = '- Review *draft each morning.\r- Keep the archive* local for this project.\r' +
+    '- Save a signed copy for tomorrow.';
+  for (const version of ['extract.v1', 'extract.v2'] as const) {
+    const crSource = text.replace(/\n/g, '\r');
+    const sourceRun = async <T,>() => ({ data: { items: [{ kind: 'assumption', text: 'fixture',
+      quote: altered, topics: [] }] } as T, source: version === 'extract.v1' ? 'on_device' : 'in_cloud',
+      raw: '', latencyMs: 1 });
+    expect((await extractStructured(sourceRun, 'My plan', crSource, undefined, version, false)).items).toEqual([]);
+    for (const [quote, accepted] of [[altered, false], [altered.replace(/\r/g, '\n'), false],
+      [altered.replace(/\r/g, '\r\n'), false], [text, true], [text.replace(/\n/g, '\r'), true]] as const) {
+      const run = async <T,>() => ({ data: { items: [{ kind: 'assumption', text: 'fixture', quote, topics: [] }] } as T,
+        source: version === 'extract.v1' ? 'on_device' : 'in_cloud', raw: '', latencyMs: 1 });
+      const result = await extractStructured(run, 'My plan', text, undefined, version, false);
+      expect(result.items.length).toBe(accepted ? 1 : 0);
+    }
+  }
+});
 it('maps cloud quotes while keeping a single full-paragraph request', async () => {
   const paragraph = 'Plan: **on-device** model.\n- One item\n- Two items\n- Three items';
   const seen: string[] = [];

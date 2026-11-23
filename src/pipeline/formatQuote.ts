@@ -11,7 +11,8 @@ const after = (text: string, index: number) =>
   index < text.length ? String.fromCodePoint(text.codePointAt(index)!) : '';
 
 export function supportsFormattingRecovery(value: string): boolean {
-  return !value.includes('\\') && !value.includes('](') && !value.includes('![') && !/<[A-Za-z/!]/u.test(value) &&
+  return !value.includes('\\') && !value.includes('\r') && !value.includes('](') && !value.includes('![') &&
+    !/<[A-Za-z/!]/u.test(value) &&
     !/^(?: {0,3})(?:`{3,}|~{3,})/mu.test(value) && !/^(?: {4}|\t)/mu.test(value);
 }
 
