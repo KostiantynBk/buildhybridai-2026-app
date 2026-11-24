@@ -9,7 +9,11 @@ import { stubSafeSuggestionParser } from '../ai/testSuggestionParser';
 const h = vi.hoisted(() => {
   type Instance = { slots: unknown[]; index: number; effects: Array<() => void>; cleanups: Array<() => void> };
   let current: Instance;
+  let autoConsent = true;
+  const consentMessages: string[] = [];
   return {
+    consentMessages,
+    setAutoConsent(value: boolean) { autoConsent = value; },
     newInstance: (): Instance => ({ slots: [], index: 0, effects: [], cleanups: [] }),
     enter(instance: Instance) { current = instance; instance.index = 0; },
     useState<T>(initial: T | (() => T)) {
@@ -17,6 +21,11 @@ const h = vi.hoisted(() => {
       if (!(i in instance.slots)) instance.slots[i] = typeof initial === 'function' ? (initial as () => T)() : initial;
       return [instance.slots[i], (value: T | ((old: T) => T)) => {
         instance.slots[i] = typeof value === 'function' ? (value as (old: T) => T)(instance.slots[i] as T) : value;
+        const request = instance.slots[i] as { message?: string; finish?: (accepted: boolean) => void } | null;
+        if (autoConsent && request && typeof request.message === 'string' && typeof request.finish === 'function') {
+          consentMessages.push(request.message);
+          queueMicrotask(() => request.finish?.(true));
+        }
       }] as [T, (value: T | ((old: T) => T)) => void];
     },
     useRef<T>(value: T) {
@@ -119,6 +128,7 @@ function remove(type: string, callback: () => void) { listeners.get(type)?.delet
 afterEach(() => {
   vi.unstubAllGlobals(); listeners.clear(); Channel.channels.clear(); adapter.mockClear(); researchAdapter.mockClear();
   localFixture.ready = false; localFixture.generating = true; localFixture.run.mockReset();
+  h.setAutoConsent(true); h.consentMessages.length = 0;
 });
 
 it('loads and removes a sample without changing profile or Never send, and persists welcome dismissal', async () => {
@@ -603,16 +613,19 @@ it('preserves the edited idea draft when a blank save fails and the same plan re
     expect((nodes(renderIdea()).find(node => node.type === 'textarea')!.props as { value: string }).value)
       .toBe('My corrected public wording');
     component(app, 'NotebookPanel').save('');
+    expect(component(app, 'CheckShortlist').showMarks).toBe(false);
     expect(ideaWrapper(app).props.hidden).toBe(true);
     const hiddenWrapper = ideaWrapper(app);
     h.enter(child);
     expect(renderToStaticMarkup(hiddenWrapper)).toMatch(/^<div hidden="">/);
     release();
     await vi.waitFor(() => expect(component(app, 'NotebookPanel').storageStatus).toBe('error'));
+    expect(component(app, 'CheckShortlist').showMarks).toBe(false);
     expect(ideaWrapper(app).props.hidden).toBe(true);
     component(app, 'NotebookPanel').save(plan);
     await vi.waitFor(() => expect(component(app, 'NotebookPanel').storageStatus).toBe('saved'));
     expect(ideaWrapper(app).props.hidden).toBe(false);
+    expect(component(app, 'CheckShortlist').showMarks).toBe(true);
     expect((nodes(renderIdea()).find(node => node.type === 'textarea')!.props as { value: string }).value)
       .toBe('My corrected public wording');
     const after = await seed.snapshot();
@@ -808,8 +821,9 @@ it('uses the existing cloud opt-in when chosen from the welcome', async () => {
     await vi.waitFor(() => expect(component(app, 'Welcome').sampleAvailable).toBe(true));
     component(app, 'Welcome').chooseCloud();
     await vi.waitFor(async () => expect(await seed.cloudModeConsent()).toBe(true));
-    expect(confirm).toHaveBeenCalledOnce();
-    expect(confirm.mock.calls[0][0]).toContain('statements and concerns');
+    expect(confirm).not.toHaveBeenCalled();
+    expect(h.consentMessages).toHaveLength(1);
+    expect(h.consentMessages[0]).toContain('statements and concerns');
     expect(adapter).not.toHaveBeenCalled();
   } finally { for (const cleanup of app.cleanups) cleanup(); seed.close(); }
 }, 15000);
@@ -1120,8 +1134,9 @@ it('keeps pre-send checking and disabled Send across navigation before any reque
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   const original = LocalStore.prototype.preSendCheck;
-  const spy = vi.spyOn(LocalStore.prototype, 'preSendCheck').mockImplementation(async function (this: LocalStore, id) {
-    await gate; return original.call(this, id);
+  const spy = vi.spyOn(LocalStore.prototype, 'preSendCheck').mockImplementation(async function (this: LocalStore,
+    id, grantText) {
+    await gate; return original.call(this, id, grantText);
   });
   const seed = await openLocalStore();
   await seed.clearAll({ getItem: () => null, removeItem: () => {} });
@@ -1305,4 +1320,229 @@ it('approves and starts research once from two card actions; private edits never
     for (const cleanup of [...a.cleanups, ...b.cleanups]) cleanup();
     seed.close();
   }
+}, 15000);
+
+it.each(['cancel', 'escape', 'send', 'stored'] as const)(
+  'handles question consent via %s without duplicate send', async action => {
+  h.setAutoConsent(false);
+  vi.stubGlobal('BroadcastChannel', Channel);
+  vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('localStorage', { getItem: () => null, removeItem: () => {} });
+  const seed = await openLocalStore();
+  await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+  const paragraph = 'The hosting service supports fifty visitors while serving a public catalogue for users.';
+  await seed.saveNotebook(paragraph, 0); await seed.enqueueSettled(4000, 'extract.v2');
+  const extract = await seed.claim(4000);
+  await seed.complete(extract!.job, [{ kind: 'assumption', text: 'Fifty visitors',
+    quote: 'The hosting service supports fifty visitors', topics: [] }], 4000);
+  await seed.finalizeReady();
+  const check = await seed.requestCheck((await seed.snapshot()).items[0].id, 5000);
+  const angles = await seed.claim(5000);
+  await seed.completeAngles(angles!.job, (await seed.anglesInput(angles!.job))!, [], 's', 5000, 'on_device');
+  if (action === 'stored') await seed.setCloudConsent(true);
+  const app = h.newInstance();
+  try {
+    mount(app);
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').storageStatus).toBe('saved'));
+    const promise = component(app, 'NotebookPanel').sendDraft(check.cardId, 'What are hosting limits?');
+    const outcome = promise.then(() => 'sent', (error: Error) => error.message);
+    if (action === 'stored') {
+      expect(await outcome).toBe('sent');
+      expect(researchAdapter).toHaveBeenCalledOnce();
+      expect(() => component(app, 'ConsentDialog')).toThrow('Missing ConsentDialog');
+      return;
+    }
+    await vi.waitFor(() => expect(component(app, 'ConsentDialog').request.message)
+      .toContain('What are hosting limits?'));
+    const request = component(app, 'ConsentDialog').request;
+    expect(researchAdapter).not.toHaveBeenCalled();
+    const { ConsentDialog } = await import('./ConsentDialog');
+    h.enter(h.newInstance());
+    const dialog = ConsentDialog({ request });
+    if (action === 'escape') {
+      const preventDefault = vi.fn();
+      (dialog.props as any).onCancel({ preventDefault });
+      expect(preventDefault).toHaveBeenCalledOnce();
+    } else {
+      const button = nodes(dialog).find(node => node.type === 'button' &&
+        (node.props as any).children === (action === 'send' ? 'Send' : 'Cancel'))!;
+      (button.props as any).onClick();
+      if (action === 'send') (button.props as any).onClick();
+    }
+    if (action === 'send') {
+      expect(await outcome).toBe('sent');
+      expect(researchAdapter).toHaveBeenCalledOnce();
+      expect(researchAdapter.mock.calls[0][0]).toBe('What are hosting limits?');
+      expect(await seed.cloudConsent()).toBe(true);
+    } else {
+      expect(await outcome).toContain('Research consent was not granted');
+      expect(researchAdapter).not.toHaveBeenCalled();
+      expect(await seed.cloudConsent()).toBe(false);
+    }
+  } finally { for (const cleanup of app.cleanups) cleanup(); seed.close(); }
+}, 15000);
+
+it.each(['cancel', 'escape', 'send'] as const)('handles description consent via %s', async action => {
+  h.setAutoConsent(false);
+  vi.stubGlobal('BroadcastChannel', Channel);
+  vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('localStorage', { getItem: () => null, removeItem: () => {} });
+  const seed = await openLocalStore();
+  await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+  const paragraph = 'The hosting plan supports visitors while a payment service handles purchases for people.';
+  await seed.saveNotebook(paragraph, 0); await seed.enqueueSettled(4000, 'extract.v2');
+  const extract = await seed.claim(4000);
+  await seed.complete(extract!.job, [
+    { kind: 'assumption', text: 'Hosting supports visitors', quote: 'The hosting plan supports visitors', topics: [] },
+    { kind: 'decision', text: 'Payment handles purchases', quote: 'a payment service handles purchases', topics: [] },
+    { kind: 'constraint', text: 'Purchases are for people', quote: 'purchases for people', topics: [] },
+  ], 4000); await seed.finalizeReady();
+  const idea = (await seed.startIdea(5000)).idea!;
+  const description = 'A notebook helps builders understand the decisions behind their product plans.';
+  await seed.finishIdeaDraft((await seed.claim(5000))!.job, description, []);
+  const app = h.newInstance();
+  try {
+    mount(app);
+    await vi.waitFor(() => expect(component(app, 'IdeaPanel').snapshot.ideas).toHaveLength(1));
+    const promise = component(app, 'IdeaPanel').send(idea.id, description);
+    const outcome = promise.then(() => 'sent', (error: Error) => error.message);
+    await vi.waitFor(() => expect(component(app, 'ConsentDialog').request.message).toContain(description));
+    const request = component(app, 'ConsentDialog').request;
+    const { ConsentDialog } = await import('./ConsentDialog');
+    h.enter(h.newInstance());
+    const dialog = ConsentDialog({ request });
+    if (action === 'escape') (dialog.props as any).onCancel({ preventDefault() {} });
+    else {
+      const button = nodes(dialog).find(node => node.type === 'button' &&
+        (node.props as any).children === (action === 'send' ? 'Send' : 'Cancel'))!;
+      (button.props as any).onClick();
+      if (action === 'send') (button.props as any).onClick();
+    }
+    if (action === 'send') {
+      expect(await outcome).toBe('sent');
+      expect(researchAdapter).toHaveBeenCalledOnce();
+      expect(researchAdapter.mock.calls[0][0]).toBe(description);
+      expect(await seed.cloudConsent()).toBe(true);
+    } else {
+      expect(await outcome).toContain('Research consent was not granted');
+      expect(researchAdapter).not.toHaveBeenCalled();
+      expect(await seed.cloudConsent()).toBe(false);
+    }
+  } finally { for (const cleanup of app.cleanups) cleanup(); seed.close(); }
+}, 15000);
+
+it.each(['cancel', 'escape', 'send'] as const)('handles cloud mode consent via %s', async action => {
+  h.setAutoConsent(false);
+  vi.stubGlobal('BroadcastChannel', Channel);
+  vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('localStorage', { getItem: () => null, removeItem: () => {} });
+  const seed = await openLocalStore();
+  await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+  const app = h.newInstance();
+  try {
+    mount(app);
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').storageStatus).toBe('saved'));
+    component(app, 'Notices').chooseCloud();
+    component(app, 'Notices').chooseCloud();
+    const request = component(app, 'ConsentDialog').request;
+    expect(request.message).toContain('statements and concerns');
+    expect(request.cloudMode).toBe(true);
+    const { ConsentDialog } = await import('./ConsentDialog');
+    h.enter(h.newInstance());
+    const dialog = ConsentDialog({ request });
+    if (action === 'escape') (dialog.props as any).onCancel({ preventDefault() {} });
+    else {
+      const button = nodes(dialog).find(node => node.type === 'button' &&
+        (node.props as any).children === (action === 'send' ? 'OK' : 'Cancel'))!;
+      (button.props as any).onClick();
+      (button.props as any).onClick();
+    }
+    if (action === 'send') await vi.waitFor(async () => expect(await seed.cloudModeConsent()).toBe(true));
+    else { await new Promise(resolve => setTimeout(resolve, 10)); expect(await seed.cloudModeConsent()).toBe(false); }
+  } finally { for (const cleanup of app.cleanups) cleanup(); seed.close(); }
+}, 15000);
+
+it.each(['clear', 'never-send', 'clear-before-send', 'never-send-before-send'] as const)(
+  'cancels an invalidated question dialog after peer %s', async change => {
+  h.setAutoConsent(false);
+  vi.stubGlobal('BroadcastChannel', Channel);
+  vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('localStorage', { getItem: () => null, removeItem: () => {} });
+  const seed = await openLocalStore();
+  await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+  const paragraph = 'The hosting service supports fifty visitors while serving a public catalogue for users.';
+  await seed.saveNotebook(paragraph, 0); await seed.enqueueSettled(4000, 'extract.v2');
+  const extract = await seed.claim(4000);
+  await seed.complete(extract!.job, [{ kind: 'assumption', text: 'Fifty visitors',
+    quote: 'The hosting service supports fifty visitors', topics: [] }], 4000);
+  await seed.finalizeReady();
+  const check = await seed.requestCheck((await seed.snapshot()).items[0].id, 5000);
+  const angles = await seed.claim(5000);
+  await seed.completeAngles(angles!.job, (await seed.anglesInput(angles!.job))!, [], 's', 5000, 'on_device');
+  const app = h.newInstance();
+  try {
+    mount(app);
+    await vi.waitFor(() => expect(component(app, 'NotebookPanel').storageStatus).toBe('saved'));
+    const outcome = component(app, 'NotebookPanel').sendDraft(check.cardId, 'What are hosting limits?')
+      .then(() => 'sent', (error: Error) => error.message);
+    await vi.waitFor(() => expect(component(app, 'ConsentDialog').request.message).toContain('hosting'));
+    const obsolete = component(app, 'ConsentDialog').request;
+    if (change.startsWith('clear')) await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+    else await seed.putNeverSend(['hosting']);
+    if (!change.endsWith('before-send')) {
+      for (const focus of listeners.get('focus') ?? []) focus();
+      await vi.waitFor(() => expect(() => component(app, 'ConsentDialog')).toThrow('Missing ConsentDialog'));
+    }
+    obsolete.finish(true);
+    expect(await outcome).toContain(change.endsWith('before-send') ? 'privacy settings changed' :
+      'Research consent was not granted');
+    expect(await seed.cloudConsent()).toBe(false);
+    expect(researchAdapter).not.toHaveBeenCalled();
+  } finally { for (const cleanup of app.cleanups) cleanup(); seed.close(); }
+}, 15000);
+
+it.each(['clear', 'never-send', 'clear-before-send', 'never-send-before-send'] as const)(
+  'cancels an invalidated description dialog after peer %s', async change => {
+  h.setAutoConsent(false);
+  vi.stubGlobal('BroadcastChannel', Channel);
+  vi.stubGlobal('window', { confirm: () => true, addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: add, removeEventListener: remove });
+  vi.stubGlobal('localStorage', { getItem: () => null, removeItem: () => {} });
+  const seed = await openLocalStore();
+  await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+  const paragraph = 'The hosting plan supports visitors while a payment service handles purchases for people.';
+  await seed.saveNotebook(paragraph, 0); await seed.enqueueSettled(4000, 'extract.v2');
+  const extract = await seed.claim(4000);
+  await seed.complete(extract!.job, [
+    { kind: 'assumption', text: 'Hosting supports visitors', quote: 'The hosting plan supports visitors', topics: [] },
+    { kind: 'decision', text: 'Payment handles purchases', quote: 'a payment service handles purchases', topics: [] },
+    { kind: 'constraint', text: 'Purchases are for people', quote: 'purchases for people', topics: [] },
+  ], 4000); await seed.finalizeReady();
+  const idea = (await seed.startIdea(5000)).idea!;
+  const description = 'A notebook helps builders understand the decisions behind their product plans.';
+  await seed.finishIdeaDraft((await seed.claim(5000))!.job, description, []);
+  const app = h.newInstance();
+  try {
+    mount(app);
+    await vi.waitFor(() => expect(component(app, 'IdeaPanel').snapshot.ideas).toHaveLength(1));
+    const outcome = component(app, 'IdeaPanel').send(idea.id, description)
+      .then(() => 'sent', (error: Error) => error.message);
+    await vi.waitFor(() => expect(component(app, 'ConsentDialog').request.message).toContain(description));
+    const obsolete = component(app, 'ConsentDialog').request;
+    if (change.startsWith('clear')) await seed.clearAll({ getItem: () => null, removeItem: () => {} });
+    else await seed.putNeverSend(['notebook']);
+    if (!change.endsWith('before-send')) {
+      for (const focus of listeners.get('focus') ?? []) focus();
+      await vi.waitFor(() => expect(() => component(app, 'ConsentDialog')).toThrow('Missing ConsentDialog'));
+    }
+    obsolete.finish(true);
+    expect(await outcome).toContain(change.endsWith('before-send') ? 'privacy settings changed' :
+      'Research consent was not granted');
+    expect(await seed.cloudConsent()).toBe(false);
+    expect(researchAdapter).not.toHaveBeenCalled();
+  } finally { for (const cleanup of app.cleanups) cleanup(); seed.close(); }
 }, 15000);

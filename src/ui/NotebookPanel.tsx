@@ -178,6 +178,7 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
           const privacyChanged = !!outbox && !!research?.[outbox.id]?.changedAfterSend;
           const paragraph = snapshot.paragraphs.find(value => value.id === card.paragraphId);
           const head = heads.find(value => value.lineageId === card.itemLineageId);
+          const headingSource = !!paragraph && isHeadingBlock(paragraph.text);
           const eligibility = lineageEligibility(card.itemLineageId, card.itemVersion, snapshot.paragraphs,
             snapshot.lineages ?? [], snapshot.jobs);
           const failedCheckVisible = card.recheckFailedVersion !== undefined && paragraph &&
@@ -209,6 +210,7 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
               {(stale.stale || failedCheckVisible || eligibility === 'stale' || eligibility === 'terminal' ||
                 privacyChanged) && <p>{provenChange ? copy.definite : copy.uncertain}{' '}
                 {privacyChanged && 'Your privacy settings may also have changed. '}Check again.</p>}
+              {headingSource && <p>{copy.uncertain} The source is now a heading and cannot be checked.</p>}
               {card.questionStatus === 'waiting' && <p>{copy.draftQuestion}</p>}
               {outbox?.status === 'approved' && outbox && checkingSend?.[outbox.id] &&
                 <p>{copy.checkingBeforeResearch}</p>}
@@ -231,7 +233,8 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
               planTexts={splitParagraphs(text)}
               failureCode={receipts[0]?.failureCode} researchError={outbox && researchErrors?.[outbox.id]}
               searching={!!outbox && !!searching?.[outbox.id]} checkingSend={!!outbox && !!checkingSend?.[outbox.id]}
-              statusInParent controlsDisabled={controlsDisabled} decline={declineDraft} reopen={reopenDraft}
+              statusInParent controlsDisabled={controlsDisabled} sendDisabled={headingSource}
+              decline={declineDraft} reopen={reopenDraft}
               research={researchAgain} />
             {outbox && research?.[outbox.id] && <section><h4>What the research found</h4>
               {!isGrounded(research[outbox.id].result) && <p>{copy.noSources}</p>}
@@ -243,7 +246,8 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
               <p>Researched on {new Date(receipt.sentAt).toLocaleDateString()}.
                 Results aren't kept on this device.</p>
               {researchAgain && outbox.status === 'approved' && !searching?.[outbox.id] &&
-                <button disabled={storageStatus !== 'saved' || controlsDisabled || !!checkingSend?.[outbox.id]}
+                <button disabled={storageStatus !== 'saved' || controlsDisabled || headingSource ||
+                  eligibility === 'stale' || eligibility === 'terminal' || !!checkingSend?.[outbox.id]}
                 onClick={() => { void researchAgain(outbox.id).then(() => setResearchError('')).catch(error =>
                   setResearchError(error instanceof Error ? error.message : 'Research could not be completed.')); }}>
                 Research again</button>}

@@ -70,3 +70,42 @@ it('places a check once beneath its statement and puts removed checks at the end
   expect(html.match(/Was this question useful\?/g)).toHaveLength(2);
   expect(html).not.toContain('Why this is here');
 });
+it('keeps the switches in a panel while hiding unsaved marks and renders an unquoted section label', () => {
+  const snapshot = fixture();
+  const render = (showMarks: boolean) => renderToStaticMarkup(<CheckShortlist snapshot={snapshot} view="all"
+    setView={() => {}} check={() => {}} showMarks={showMarks} />);
+  const shown = render(true);
+  expect(shown).toContain('class="panel check-shortlist"');
+  expect(shown).toContain('<blockquote>“Planning statement 0”</blockquote>');
+  expect(shown).toContain('In: Planning statement 0</p>');
+  expect(render(false)).not.toContain('Worth checking first');
+  expect(render(false)).toContain('See all checks');
+  expect(render(false)).toContain('See all statements');
+});
+it('keeps a heading history draft visible but disables sending', () => {
+  const snapshot = fixture();
+  const p = snapshot.paragraphs.find(value => value.id === 'p0')!;
+  p.text = '# Former statement'; p.version++;
+  snapshot.cards![0].questionStatus = 'ready'; snapshot.cards![0].draftQuestion = 'Original question?';
+  const html = renderToStaticMarkup(<NotebookPanel text={p.text} save={() => {}} storageStatus="saved"
+    snapshot={snapshot} configured ready sendDraft={async () => {}} declineDraft={async () => {}} />);
+  expect(html).toContain('Earlier checks');
+  expect(html).toContain('The source is now a heading and cannot be checked.');
+  expect(html).toContain('Original question?');
+  expect(html).toContain('<button disabled="">Send this question</button>');
+  expect(html).toContain('<button>Don&#x27;t send</button>');
+});
+it('disables completed-receipt Research again on a heading history card', () => {
+  const snapshot = fixture();
+  const p = snapshot.paragraphs.find(value => value.id === 'p0')!;
+  p.text = '# Former statement'; p.version++;
+  const card = snapshot.cards![0];
+  card.questionStatus = 'ready'; card.outboxId = 'entry';
+  snapshot.outbox = [{ id: 'entry', cardId: card.id, itemLineageId: card.itemLineageId,
+    itemVersion: card.itemVersion, status: 'approved', question: 'A fictional question?', keptOut: [], createdAt: 1 }];
+  snapshot.researchReceipts = [{ entryId: 'entry', status: 'completed', sentAt: 1 }];
+  const html = renderToStaticMarkup(<NotebookPanel text={p.text} save={() => {}} storageStatus="saved"
+    snapshot={snapshot} configured ready researchAgain={async () => {}} />);
+  expect(html).toContain('The source is now a heading and cannot be checked.');
+  expect(html).toContain('<button disabled="">Research again</button>');
+});

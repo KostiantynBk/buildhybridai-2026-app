@@ -77,7 +77,7 @@ it('updates idea warnings as edited and sends exactly the checked description', 
   expect(idea.keptOut).toEqual(['Stripe', 'stripe', 'Stripe account', 'Project name']);
   setText(tree, 'What does Osteria Lunetta offer?');
   tree = render();
-  expect(renderToStaticMarkup(tree)).toContain('This looks like a name from your plan: Osteria Lunetta.');
+  expect(renderToStaticMarkup(tree)).toContain('This looks like a name from your plan: <span>Osteria Lunetta ');
   expect((sendButton(tree).props as { children: string }).children).toBe('Send anyway');
   (sendButton(tree).props as { onClick(): void }).onClick();
   expect(send).toHaveBeenCalledWith('idea', 'What does Osteria Lunetta offer?');
@@ -102,7 +102,7 @@ it.each(['idea', 'question'] as const)('handles a long text and a genuine matchi
   currentPlan = ['Paolo appears in this short plan.'];
   setText(tree, `Please consider ${long}. Then ask Paolo today.`);
   const shortPlanTree = render();
-  expect(renderToStaticMarkup(shortPlanTree)).toContain('This looks like a name from your plan: Paolo.');
+  expect(renderToStaticMarkup(shortPlanTree)).toContain('This looks like a name from your plan: <span>Paolo ');
   expect((sendButton(shortPlanTree).props as { children: string }).children).toBe('Send anyway');
 });
 it.each(['idea', 'question'] as const)('fails closed if the name check throws on %s', surface => {
@@ -124,7 +124,7 @@ it('updates warnings when the current plan text changes', () => {
     start: async () => {}, send: async () => {}, retry: async () => {}, decline: async () => {} }); };
   render(); h.flush();
   setText(render(), 'What does Osteria Lunetta offer?');
-  expect(renderToStaticMarkup(render())).toContain('This looks like a name from your plan: Osteria Lunetta.');
+  expect(renderToStaticMarkup(render())).toContain('This looks like a name from your plan: <span>Osteria Lunetta ');
   currentPlan = ['Restaurants need a booking page.'];
   expect(renderToStaticMarkup(render())).not.toContain('This looks like a name from your plan');
 });
@@ -135,7 +135,7 @@ it('updates question warnings as edited and sends exactly the checked question',
   render(); h.flush();
   setText(render(), 'Can guests ask Paolo for help?');
   let tree = render();
-  expect(renderToStaticMarkup(tree)).toContain('This looks like a name from your plan: Paolo.');
+  expect(renderToStaticMarkup(tree)).toContain('This looks like a name from your plan: <span>Paolo ');
   expect((sendButton(tree).props as { children: string }).children).toBe('Send anyway');
   (sendButton(tree).props as { onClick(): void }).onClick();
   expect(send).toHaveBeenCalledWith('card', 'Can guests ask Paolo for help?');
@@ -144,4 +144,30 @@ it('updates question warnings as edited and sends exactly the checked question',
   tree = render();
   expect(renderToStaticMarkup(tree)).not.toContain('This looks like a name from your plan');
   expect((sendButton(tree).props as { children: string }).children).toBe('Send this question');
+});
+it.each(['idea', 'question'] as const)('dismisses each name only for the exact %s draft', surface => {
+  h.reset();
+  const currentPlan = ['Paolo and Marina plan an event.'];
+  const render = () => { h.begin(); return surface === 'idea' ? IdeaPanel({ snapshot, idea, planTexts: currentPlan,
+    start: async () => {}, send: async () => {}, retry: async () => {}, decline: async () => {} }) :
+    DraftControls({ card, planTexts: currentPlan, send: async () => {} })!; };
+  render(); h.flush();
+  const original = 'Can guests ask Paolo and Marina for help?';
+  setText(render(), original);
+  const dismiss = (name: string) => {
+    const warning = nodes(render()).find(node => typeof node.type === 'function' && node.type.name === 'NameWarning')!;
+    (warning.props as { dismiss(value: string): void }).dismiss(name);
+  };
+  expect((sendButton(render()).props as { children: string }).children).toBe('Send anyway');
+  dismiss('Paolo');
+  expect(renderToStaticMarkup(render())).not.toContain('Not private: Paolo');
+  expect(renderToStaticMarkup(render())).toContain('Not private: Marina');
+  dismiss('Marina');
+  expect((sendButton(render()).props as { children: string }).children)
+    .toBe(surface === 'idea' ? 'Send this description' : 'Send this question');
+  setText(render(), original + ' Today');
+  expect(renderToStaticMarkup(render())).toContain('Not private: Paolo');
+  setText(render(), original);
+  expect((sendButton(render()).props as { children: string }).children)
+    .toBe(surface === 'idea' ? 'Send this description' : 'Send this question');
 });

@@ -3,22 +3,25 @@ import type { ThoughtCard, OutboxEntry } from '../store/triageTypes';
 import { researchFailureMessage } from '../ai/researchFailure';
 import { withdrawalText } from './OutboxPage';
 import { copy, displayMessage } from './copy';
-import { findPlanNames, nameWarning } from './planNames';
+import { findPlanNames } from './planNames';
+import { NameWarning, useNameDismissals } from './NameWarning';
 import { useAutoGrow } from './useAutoGrow';
 
 export function DraftControls({ card, outbox, receiptStatus, failureCode, researchError, searching = false,
-  checkingSend = false, statusInParent = false, controlsDisabled = false, planTexts = [], draftBuffers, send,
+  checkingSend = false, statusInParent = false, controlsDisabled = false, sendDisabled = false,
+  planTexts = [], draftBuffers, send,
   decline, reopen,
   research }: {
   card: ThoughtCard; outbox?: OutboxEntry; receiptStatus?: 'sent' | 'completed' | 'failed'; failureCode?: string;
   researchError?: string; searching?: boolean; checkingSend?: boolean; statusInParent?: boolean;
-  controlsDisabled?: boolean; planTexts?: readonly string[]; draftBuffers?: Map<string, string>;
+  controlsDisabled?: boolean; sendDisabled?: boolean; planTexts?: readonly string[]; draftBuffers?: Map<string, string>;
   send?: (cardId: string, text: string) => Promise<void>;
   decline?: (cardId: string) => Promise<void>;
   reopen?: (cardId: string) => Promise<void>;
   research?: (id: string) => Promise<void>;
 }) {
   const [text, setText] = useState(() => draftBuffers?.get(card.id) ?? card.draftQuestion ?? '');
+  const dismissals = useNameDismissals(text, card.id);
   const textarea = useAutoGrow(text, `${card.questionStatus}:${outbox?.id ?? ''}`);
   const edited = useRef(draftBuffers?.has(card.id) ?? false);
   useEffect(() => {
@@ -43,7 +46,7 @@ export function DraftControls({ card, outbox, receiptStatus, failureCode, resear
   let names: string[] = [];
   let nameCheckFailed = false;
   if (!outbox && send) {
-    try { names = findPlanNames(text, planTexts); } catch { nameCheckFailed = true; }
+    try { names = dismissals.remaining(findPlanNames(text, planTexts)); } catch { nameCheckFailed = true; }
   }
   return <section>
     {card.noCheckable && <p>ThoughtPartner found nothing it could look up here. You can write your own question.</p>}
@@ -54,8 +57,9 @@ export function DraftControls({ card, outbox, receiptStatus, failureCode, resear
       {(card.draftKeptOut ?? []).length > 0 && <p>Left out of the question: {card.draftKeptOut!.join(', ')}</p>}
       {send && (nameCheckFailed ?
         <p>Couldn't check this text for names from your plan. Review it before sending.</p> :
-        names.length > 0 && <p>{nameWarning(names)}</p>)}
-      {send && <button disabled={busy || controlsDisabled} onClick={() => act(() => send(card.id, text))}>
+        names.length > 0 && <NameWarning names={names} dismiss={dismissals.dismiss} />)}
+      {send && <button disabled={busy || controlsDisabled || sendDisabled}
+        onClick={() => act(() => send(card.id, text))}>
         {nameCheckFailed || names.length > 0 ? 'Send anyway' : 'Send this question'}</button>}
       {decline && <button disabled={busy || controlsDisabled} onClick={() => act(() => decline(card.id))}>
         Don't send</button>}</>}
@@ -74,7 +78,7 @@ export function DraftControls({ card, outbox, receiptStatus, failureCode, resear
       {outbox.status === 'approved' && (searching || checkingSend) && receiptStatus === 'failed' &&
         <p>Previous attempt failed: {researchFailureMessage(failureCode)}</p>}
       {outbox.status === 'approved' && !searching && receiptStatus !== 'completed' && research &&
-        <button disabled={busy || checkingSend || controlsDisabled}
+        <button disabled={busy || checkingSend || controlsDisabled || sendDisabled}
         onClick={() => act(() => research(outbox.id))}>{receiptStatus === 'failed' ? 'Try again' : 'Send now'}
       </button>}</>}
     {message && (!outbox || (outbox.status === 'approved' && !receiptStatus)) && <p role="alert">{message}</p>}

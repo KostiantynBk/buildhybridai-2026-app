@@ -9,9 +9,10 @@ import { ResearchBlock } from './ResearchBlock';
 import { isGrounded } from '../ai/suggestionsSafety';
 import { researchFailureMessage } from '../ai/researchFailure';
 import { copy, displayMessage } from './copy';
-import { dedupeKeptOut, findPlanNames, nameWarning } from './planNames';
+import { dedupeKeptOut, findPlanNames } from './planNames';
 import { isHeadingBlock } from '../structure/planStructure';
 import { useAutoGrow } from './useAutoGrow';
+import { NameWarning, useNameDismissals } from './NameWarning';
 
 export function IdeaPanel({ snapshot, idea, view, start, send, retry, decline, searching = false,
   checkingSend = false, busy = false, planTexts }: {
@@ -21,6 +22,7 @@ export function IdeaPanel({ snapshot, idea, view, start, send, retry, decline, s
   decline(id: string): Promise<void>;
 }) {
   const [text, setText] = useState(idea?.draft ?? '');
+  const dismissals = useNameDismissals(text, idea?.id ?? '');
   const textarea = useAutoGrow(text, `${idea?.id ?? ''}:${snapshot.jobs.find(job =>
     job.key === idea?.describeJobKey)?.status ?? ''}`);
   const [message, setMessage] = useState('');
@@ -58,12 +60,12 @@ export function IdeaPanel({ snapshot, idea, view, start, send, retry, decline, s
   let names: string[] = [];
   let nameCheckFailed = false;
   if (idea?.status === 'ready' && job?.status === 'done' && !cannotApprove) {
-    try { names = findPlanNames(text, planTexts ?? snapshot.paragraphs.map(paragraph => paragraph.text)); }
+    try { names = dismissals.remaining(findPlanNames(text, planTexts ?? snapshot.paragraphs.map(p => p.text))); }
     catch { nameCheckFailed = true; }
   }
   const act = (fn: () => Promise<void>) => { setMessage(''); void fn().catch(error => setMessage(
     error instanceof Error ? displayMessage(error.message) : 'Could not complete this action.')); };
-  return <section className="panel idea-card"><h2>Research this idea</h2>
+  return <section className="panel idea-card" tabIndex={-1}><h2>Research this idea</h2>
     <button className="primary" disabled={busy || drafting || searching || checkingSend || eligible.length < 3}
       onClick={() => act(start)}>
       {view || stale || receipt?.status === 'completed' ? 'Research again' :
@@ -93,7 +95,7 @@ export function IdeaPanel({ snapshot, idea, view, start, send, retry, decline, s
       {cannotApprove && <p>{stale ? copy.definite : copy.uncertain} Draft again.</p>}
       {cannotApprove ? <button disabled={busy} onClick={() => act(start)}>Draft again</button> : <>
         {nameCheckFailed ? <p>Couldn't check this text for names from your plan. Review it before sending.</p> :
-          names.length > 0 && <p>{nameWarning(names)}</p>}
+          names.length > 0 && <NameWarning names={names} dismiss={dismissals.dismiss} />}
         <button disabled={busy} onClick={() => act(() => send(idea.id, text))}>
           {nameCheckFailed || names.length > 0 ? 'Send anyway' : 'Send this description'}</button>
         <button disabled={busy} onClick={() => act(() => decline(idea.id))}>Don't send</button></>}

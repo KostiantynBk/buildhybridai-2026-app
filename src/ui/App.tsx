@@ -26,6 +26,7 @@ import { splitParagraphs } from '../store/matcher';
 import { CheckShortlist } from './CheckShortlist';
 import { hasCurrentStatements } from './marks';
 import { safeErrorName } from '../ai/errorMetadata';
+import { ConsentDialog, consentFocus, type ConsentFocus, type ConsentRequest } from './ConsentDialog';
 
 const emptySnapshot = (): Snapshot => ({ paragraphs: [], items: [], profile: [], jobs: [] });
 const removedSampleKey = 'tp.removedSampleIds';
@@ -78,6 +79,19 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
   const searching = Object.fromEntries(Object.entries(researchPhase)
     .map(([key, value]) => [key, value === 'searching']));
   const checking = Object.fromEntries(Object.entries(researchPhase).map(([key, value]) => [key, value === 'checking']));
+  const [consentRequest, setConsentRequest] = useState<ConsentRequest | null>(null);
+  const pendingConsent = useRef<ConsentRequest | null>(null);
+  const requestConsent = (message: string, cloudMode = false, focus = consentFocus(document.activeElement),
+    validate?: () => Promise<boolean>) => new Promise<boolean>(resolve => {
+      if (pendingConsent.current) { resolve(false); return; }
+      const request: ConsentRequest = { message, cloudMode, ...focus, validate, finish: accepted => {
+        if (pendingConsent.current !== request) return;
+        pendingConsent.current = null; setConsentRequest(null);
+        resolve(accepted);
+      } };
+      pendingConsent.current = request; setConsentRequest(request);
+    });
+  useEffect(() => () => { pendingConsent.current?.finish(false); }, []);
   const [cloudConsent, setCloudConsent] = useState(false);
   const [cloudMode, setCloudMode] = useState(false);
   const renderedModeRef = useRef(false);
@@ -111,6 +125,10 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
     }
     snapshotRef.current = next;
     setSnapshot(next);
+    const pending = pendingConsent.current;
+    if (pending?.validate) void pending.validate().then(valid => {
+      if (!valid && pendingConsent.current === pending) pending.finish(false);
+    }).catch(() => { if (pendingConsent.current === pending) pending.finish(false); });
   };
   const refreshData = async () => {
     const store = storeRef.current;
@@ -410,20 +428,26 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
       clearing.current = false;
     }
   };
+  const enablingCloudMode = useRef(false);
   const enableCloudMode = async () => {
+    if (enablingCloudMode.current) return;
+    enablingCloudMode.current = true;
+    try {
     const store = storeRef.current;
     if (!store || !config || !settingsRef.current.values.cloud_enabled) {
       throw new Error('Cloud mode is unavailable.');
     }
-    if (!window.confirm("In cloud mode, the parts of your plan that ThoughtPartner works on are sent to " +
+    if (!await requestConsent("In cloud mode, the parts of your plan that ThoughtPartner works on are sent to " +
       "Google's Gemini API (through Firebase AI Logic): each paragraph you write, the earlier wording of a " +
       'statement when it checks what changed, and the statements and concerns it derives from them, to write ' +
-      'questions and a short description of your idea. Your profile and your never-send list are not sent.')) return;
+      'questions and a short description of your idea. Your profile and your never-send list are not sent.',
+      true)) return;
     schedulerRef.current?.modeChanged();
     await store.setCloudModeConsent(true);
     announceMode();
     await refreshData();
     void schedulerRef.current?.tick();
+    } finally { enablingCloudMode.current = false; }
   };
   const disableCloudMode = async () => {
     const store = storeRef.current;
@@ -435,7 +459,7 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
     await refreshData();
     void schedulerRef.current?.tick();
   };
-  const researchQuestion = async (id: string) => {
+  const researchQuestion = async (id: string, focus: ConsentFocus = consentFocus(document.activeElement)) => {
     const store = storeRef.current;
     if (inFlight.current.has(id)) throw new Error('Research is already in progress for this question.');
     inFlight.current.add(id);
@@ -447,11 +471,17 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
       if (!await store.cloudConsent()) {
         const entry = (await store.snapshot()).outbox?.find(value => value.id === id && value.status === 'approved');
         if (!entry) throw new Error('Approve this question before researching it.');
-        if (!window.confirm("This question, and nothing else from your notebook or profile, goes to " +
-            `Google's Gemini API with Google Search:\n\n${entry.question}\n\nContinue?`)) {
+        const validate = async () => {
+          const current = (await store.snapshot()).outbox?.find(value => value.id === entry.id);
+          return current?.status === 'approved' && current.question === entry.question &&
+            (await store.preSendCheck(entry.id)).allowed;
+        };
+        if (!await requestConsent("This question, and nothing else from your notebook or profile, goes to " +
+            `Google's Gemini API with Google Search:\n\n${entry.question}\n\nContinue?`, false, focus, validate)) {
           throw new Error('Research consent was not granted.');
         }
-        await store.setCloudConsent(true);
+        const grant = await store.preSendCheck(entry.id, entry.question);
+        if (!grant.allowed) throw new Error('This question cannot be sent: your plan or privacy settings changed.');
       }
       cloudConsentRef.current = true; setCloudConsent(true);
       const initialRevision = revision.current;
@@ -493,7 +523,7 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
       inFlight.current.delete(id); setResearchPhase(current => ({ ...current, [id]: undefined }));
     }
   };
-  const researchIdeaAction = async (ideaId: string) => {
+  const researchIdeaAction = async (ideaId: string, focus: ConsentFocus = consentFocus(document.activeElement)) => {
     const key = `idea:${ideaId}`;
     if (inFlight.current.has(key)) throw new Error('Research is already in progress for this idea.');
     inFlight.current.add(key);
@@ -506,11 +536,22 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
       const idea = (await store.snapshot()).ideas?.find(value => value.id === ideaId);
       if (!idea?.finalText) throw new Error('Approve this description before researching it.');
       if (!await store.cloudConsent()) {
-        if (!window.confirm("This description, and nothing else from your notebook or profile, goes to " +
-            `Google's Gemini API with Google Search:\n\n${idea.finalText}\n\nContinue?`)) {
+        const validate = async () => {
+          const latest = await store.snapshot();
+          const current = latest.ideas?.find(value => value.id === ideaId);
+          const entry = latest.outbox?.find(value => value.id === idea.outboxId);
+          if (!current || current.outboxId !== idea.outboxId || current.finalText !== idea.finalText ||
+              entry?.status !== 'approved' || entry.question !== idea.finalText) return false;
+          const check = await store.preSendIdeaCheck(ideaId);
+          return check.allowed || check.reason === 'no-consent';
+        };
+        if (!await requestConsent("This description, and nothing else from your notebook or profile, goes to " +
+            `Google's Gemini API with Google Search:\n\n${idea.finalText}\n\nContinue?`, false, focus, validate)) {
           throw new Error('Research consent was not granted.');
         }
-        await store.setCloudConsent(true);
+        if (!idea.outboxId) throw new Error('Approve this description before researching it.');
+        const grant = await store.preSendIdeaCheck(ideaId, { entryId: idea.outboxId, text: idea.finalText });
+        if (!grant.allowed) throw new Error('This question cannot be sent: your plan or privacy settings changed.');
       }
       cloudConsentRef.current = true; setCloudConsent(true);
       const initialRevision = revision.current;
@@ -570,12 +611,14 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
           <button key={item} aria-current={page === item ? 'page' : undefined} onClick={() => setPage(item)}>
             {item}
           </button>))}</nav></header>
+      {consentRequest && <ConsentDialog request={consentRequest} />}
       <Notices configured={config !== null} state={service.state} cloudMode={cloudMode}
         cloudEnabled={settings.values.cloud_enabled} chooseCloud={() => {
           void enableCloudMode().catch(() => setStorageNotice('Could not enable cloud mode.'));
         }} />
       <StorageNotice notice={storageNotice} />
-      <main>{welcomeVisible && <Welcome state={service.state} browserAvailability={service.browserAvailability}
+      <main tabIndex={-1}>{welcomeVisible && <Welcome state={service.state}
+        browserAvailability={service.browserAvailability}
         configured={config !== null} foreground={foreground}
         preparing={service.preparing} cloudMode={cloudMode} cloudEnabled={settings.values.cloud_enabled}
         chooseCloud={() => { void enableCloudMode().catch(() => setStorageNotice('Could not enable cloud mode.')); }}
@@ -599,19 +642,21 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
           if (result.reason) throw new Error(result.reason);
           await refreshData(); void schedulerRef.current?.tick();
         }} send={async (id, text) => {
+          const focus = consentFocus(document.activeElement);
           const store = storeRef.current;
           if (!store) throw new Error('Local storage unavailable.');
           if (storageStatusRef.current !== 'saved') throw new Error('Checking your latest change…');
           const result = await store.approveIdea(id, text);
           if (!result.entryId) throw new Error(result.reason ?? 'Could not approve this description.');
-          await refreshData(); await researchIdeaAction(id);
+          await refreshData(); await researchIdeaAction(id, focus);
         }} retry={researchIdeaAction} decline={async id => {
           const store = storeRef.current;
           if (!store || !await store.declineIdea(id)) throw new Error('Could not decline this description.');
           await refreshData();
         }} /></div>
         <CheckShortlist snapshot={snapshot} view={statementView} setView={setStatementView}
-          disabled={storageStatus !== 'saved'} ready={cloudMode ? settings.values.cloud_enabled :
+          showMarks={storageStatus === 'saved'} disabled={storageStatus !== 'saved'}
+          ready={cloudMode ? settings.values.cloud_enabled :
             service.state.kind === 'ready'} foreground={foreground} cloudMode={cloudMode}
           stalled={!cloudMode && service.state.kind === 'stalled'} retryRequired={!cloudMode && service.retryRequired}
           paused={schedulerRef.current?.storagePaused()} activeClaim={schedulerRef.current?.activeClaim()}
@@ -635,13 +680,14 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
         research={research} researchErrors={researchErrors} searching={searching} checkingSend={checking}
         researchAgain={researchQuestion}
         checkThis={checkItem} sendDraft={async (cardId, text) => {
+          const focus = consentFocus(document.activeElement);
           const store = storeRef.current;
           if (!store) throw new Error('Local storage unavailable.');
           if (storageStatusRef.current !== 'saved') throw new Error('Checking your latest change…');
           const result = await store.approveDraft(cardId, text);
           if (!result.entryId) throw new Error(result.reason ?? 'Could not approve this question.');
           try { await refreshData(); } catch { throw new Error('Approved, not sent: local refresh failed.'); }
-          await researchQuestion(result.entryId);
+          await researchQuestion(result.entryId, focus);
         }} declineDraft={async cardId => {
           const store = storeRef.current;
           if (!store || !await store.declineDraft(cardId)) throw new Error('Could not decline this question.');

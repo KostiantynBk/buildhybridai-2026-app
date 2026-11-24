@@ -1497,7 +1497,8 @@ export class LocalStore {
       await tx.done.catch(() => undefined); throw error;
     }
   }
-  async preSendIdeaCheck(ideaId: string): Promise<{ allowed: boolean; reason: string | null }> {
+  async preSendIdeaCheck(ideaId: string, grant?: { entryId: string; text: string }):
+    Promise<{ allowed: boolean; reason: string | null }> {
     const tx = this.db.transaction(['ideas', 'outbox', 'privacy', 'meta', 'lineageVersions', 'paragraphs', 'jobs'],
       'readwrite');
     void tx.done.catch(() => undefined);
@@ -1506,7 +1507,8 @@ export class LocalStore {
       const entry = idea?.outboxId ? await tx.objectStore('outbox').get(idea.outboxId) : undefined;
       if (!idea || !['approved', 'sent', 'failed'].includes(idea.status) || !Array.isArray(idea.basis) ||
           idea.basis.length < 3 || idea.basis.length > 12 || !entry || entry.kind !== 'idea' ||
-          entry.status !== 'approved') {
+          entry.status !== 'approved' || (grant && (entry.id !== grant.entryId || entry.question !== grant.text ||
+            idea.finalText !== grant.text))) {
         await tx.done; return { allowed: false, reason: 'not-approved' };
       }
       const [paragraphs, versions, jobs, terms, consent] = await Promise.all([tx.objectStore('paragraphs').getAll(),
@@ -1530,7 +1532,9 @@ export class LocalStore {
         await tx.objectStore('ideas').put({ ...idea, status: 'withdrawn', updatedAt: Date.now() });
         await tx.done; return { allowed: false, reason };
       }
-      await tx.done; return { allowed: consent?.value === true, reason: consent?.value ? null : 'no-consent' };
+      if (grant) await tx.objectStore('meta').put({ key: 'cloud-consent', value: true });
+      await tx.done;
+      return { allowed: !!grant || consent?.value === true, reason: grant || consent?.value ? null : 'no-consent' };
     } catch (error) {
       try { tx.abort(); } catch { /* Already finished or aborted. */ }
       await tx.done.catch(() => undefined); throw error;
@@ -1647,14 +1651,14 @@ export class LocalStore {
     }
   }
   // Privacy/staleness eligibility only: this hook does not send or authorize a cloud call in T06.
-  async preSendCheck(entryId: string): Promise<{ allowed: boolean; reason: string | null }> {
-    const tx = this.db.transaction(['outbox', 'privacy', 'lineageVersions', 'cards', 'funnel', 'paragraphs', 'jobs'],
-      'readwrite');
+  async preSendCheck(entryId: string, grantText?: string): Promise<{ allowed: boolean; reason: string | null }> {
+    const tx = this.db.transaction(['outbox', 'privacy', 'lineageVersions', 'cards', 'funnel', 'paragraphs', 'jobs',
+      'meta'], 'readwrite');
     void tx.done.catch(() => undefined);
     try {
       const entry = await tx.objectStore('outbox').get(entryId);
       if (!entry || entry.kind === 'idea' || !entry.cardId || !entry.itemLineageId || entry.itemVersion === undefined ||
-          entry.status !== 'approved') {
+          entry.status !== 'approved' || (grantText !== undefined && entry.question !== grantText)) {
         await tx.done;
         return { allowed: false, reason: entry?.status === 'withdrawn' ? entry.withdrawReason ?? 'withdrawn'
           : 'not-approved' };
@@ -1676,6 +1680,7 @@ export class LocalStore {
         if (card) await tx.objectStore('funnel').put(outboxEvent(card, `withdrawn:${reason}`, now));
         await tx.done; return { allowed: false, reason };
       }
+      if (grantText !== undefined) await tx.objectStore('meta').put({ key: 'cloud-consent', value: true });
       await tx.done; return { allowed: true, reason: null };
     } catch (error) {
       try { tx.abort(); } catch { /* Already finished or aborted. */ }
