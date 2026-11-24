@@ -4,20 +4,23 @@ import { researchFailureMessage } from '../ai/researchFailure';
 import { withdrawalText } from './OutboxPage';
 import { copy, displayMessage } from './copy';
 import { findPlanNames, nameWarning } from './planNames';
+import { useAutoGrow } from './useAutoGrow';
 
 export function DraftControls({ card, outbox, receiptStatus, failureCode, researchError, searching = false,
-  checkingSend = false, statusInParent = false, controlsDisabled = false, planTexts = [], send, decline, reopen,
+  checkingSend = false, statusInParent = false, controlsDisabled = false, planTexts = [], draftBuffers, send,
+  decline, reopen,
   research }: {
   card: ThoughtCard; outbox?: OutboxEntry; receiptStatus?: 'sent' | 'completed' | 'failed'; failureCode?: string;
   researchError?: string; searching?: boolean; checkingSend?: boolean; statusInParent?: boolean;
-  controlsDisabled?: boolean; planTexts?: readonly string[];
+  controlsDisabled?: boolean; planTexts?: readonly string[]; draftBuffers?: Map<string, string>;
   send?: (cardId: string, text: string) => Promise<void>;
   decline?: (cardId: string) => Promise<void>;
   reopen?: (cardId: string) => Promise<void>;
   research?: (id: string) => Promise<void>;
 }) {
-  const [text, setText] = useState(card.draftQuestion ?? '');
-  const edited = useRef(false);
+  const [text, setText] = useState(() => draftBuffers?.get(card.id) ?? card.draftQuestion ?? '');
+  const textarea = useAutoGrow(text, `${card.questionStatus}:${outbox?.id ?? ''}`);
+  const edited = useRef(draftBuffers?.has(card.id) ?? false);
   useEffect(() => {
     if (!edited.current && card.draftQuestion !== undefined) setText(card.draftQuestion);
   }, [card.id, card.draftQuestion]);
@@ -42,11 +45,12 @@ export function DraftControls({ card, outbox, receiptStatus, failureCode, resear
   if (!outbox && send) {
     try { names = findPlanNames(text, planTexts); } catch { nameCheckFailed = true; }
   }
-  return <section><h4>Was this question useful?</h4>
+  return <section>
     {card.noCheckable && <p>ThoughtPartner found nothing it could look up here. You can write your own question.</p>}
-    {!outbox && <><label>Question <textarea value={text} onChange={event => {
-      edited.current = true; setText(event.target.value);
-    }} /></label>
+    {!outbox && <><label>Question <textarea ref={textarea} className="draft-textarea" rows={3} value={text}
+      onChange={event => {
+        edited.current = true; draftBuffers?.set(card.id, event.target.value); setText(event.target.value);
+      }} /></label>
       {(card.draftKeptOut ?? []).length > 0 && <p>Left out of the question: {card.draftKeptOut!.join(', ')}</p>}
       {send && (nameCheckFailed ?
         <p>Couldn't check this text for names from your plan. Review it before sending.</p> :

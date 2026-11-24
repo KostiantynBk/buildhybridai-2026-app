@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { MAX_ATTEMPTS, MIN_WORDS, type ProfileRecord, type Snapshot, type StoredJob } from '../store';
 import { fingerprintsMatch } from '../store/fingerprint';
 import type { ThoughtCard } from '../store/triageTypes';
@@ -6,7 +6,7 @@ import { lineageHeads } from '../store/lineage';
 import { containsQuote } from '../pipeline/compare';
 import { calculateStaleness } from '../store/staleness';
 import type { Feedback } from '../store/triageTypes';
-import type { DisplayAngle } from '../pipeline/selectConcerns';
+import { angleLabels, eligibleMarks } from './marks';
 import type { ResearchView } from '../ai/researchFlow';
 import { ResearchBlock } from './ResearchBlock';
 import { isGrounded } from '../ai/suggestionsSafety';
@@ -15,10 +15,7 @@ import { splitParagraphs } from '../store/matcher';
 import { extractionEligible, isHeadingBlock, paragraphLabel } from '../structure/planStructure';
 import { DraftControls } from './DraftControls';
 import { copy, displayMessage } from './copy';
-
-const angleLabels: Record<DisplayAngle, string> = { 'end-user': 'For the user',
-  'cost-at-scale': 'Costs at scale', 'limits-operations': 'Limits and operations',
-  'security-privacy': 'Security and privacy', alternatives: 'Alternatives', 'track-record': 'From your experience' };
+import { focusCheck, type CheckFocusRequest } from './checkFocus';
 
 export function ProfileBlock({ card, profile }: { card: ThoughtCard; profile: ProfileRecord[] }) {
   if (card.triageVersion !== 'v2.1' || card.brief) return null;
@@ -26,7 +23,7 @@ export function ProfileBlock({ card, profile }: { card: ThoughtCard; profile: Pr
     const record = profile.find(value => value.id === id);
     return record ? [record] : [];
   });
-  return records.length ? <div><p>{copy.profileVariant}</p><ul>{records.map(record =>
+  return records.length ? <div><h4>{copy.questionHeading}</h4><p>{copy.profileVariant}</p><ul>{records.map(record =>
     <li key={record.id} style={{ whiteSpace: 'pre-wrap' }}>{record.text}</li>)}</ul></div> : null;
 }
 export function WhyContent({ card, profile }: { card: ThoughtCard; profile: ProfileRecord[] }) {
@@ -53,7 +50,8 @@ function FreshWhy({ card, profile }: { card: ThoughtCard; profile: ProfileRecord
     }).catch(() => { if (active) setChecked(''); });
     return () => { active = false; };
   }, [signature]);
-  return card.why && checked === signature ? <WhyContent card={card} profile={profile} /> : null;
+  return card.why && checked === signature ? <><h4>{copy.questionHeading}</h4>
+    <WhyContent card={card} profile={profile} /></> : null;
 }
 export function emptyReason(snapshot: Snapshot, configured: boolean, ready: boolean,
   cloudMode = false, version: 'extract.v1' | 'extract.v2' = 'extract.v2', foreground = true): string {
@@ -83,25 +81,38 @@ export function emptyReason(snapshot: Snapshot, configured: boolean, ready: bool
 }
 export function NotebookPanel({ text, save, storageStatus, snapshot, configured, ready, feedback, research,
   researchAgain, researchErrors, searching, checkingSend, cloudMode = false, foreground = true, checkThis, sendDraft,
-  declineDraft, reopenDraft, sampleActive = false, trySample, removeSample, cardOnly = false,
+  declineDraft, reopenDraft, sampleActive = false, trySample, removeSample, cardOnly = false, checksOnly = false,
   controlsDisabled = false, removedSampleIds = [], extractVersion = 'extract.v2',
-  modelState, retryRequired = false, activeClaim, ownedClaim, prepareAgain, storagePaused = false }: {
+  modelState, retryRequired = false, activeClaim, ownedClaim, prepareAgain, storagePaused = false, focusRequest }: {
   text: string; save: (value: string) => void; storageStatus: 'loading' | 'saving' | 'saved' | 'error';
   snapshot: Snapshot; configured: boolean; ready: boolean;
   feedback?: (cardId: string, value: Feedback) => void; research?: Record<string, ResearchView>;
   researchAgain?: (id: string) => Promise<void>; researchErrors?: Record<string, string>;
   searching?: Record<string, boolean>; checkingSend?: Record<string, boolean>; cloudMode?: boolean;
-  foreground?: boolean; cardOnly?: boolean; controlsDisabled?: boolean; removedSampleIds?: readonly string[];
+  foreground?: boolean; cardOnly?: boolean; checksOnly?: boolean; controlsDisabled?: boolean;
+  removedSampleIds?: readonly string[];
   extractVersion?: 'extract.v1' | 'extract.v2';
   modelState?: string; retryRequired?: boolean; activeClaim?: StoredJob; ownedClaim?: StoredJob;
   prepareAgain?: () => void;
   storagePaused?: boolean;
+  focusRequest?: CheckFocusRequest | null;
   checkThis?: (itemId: string) => Promise<void>;
   sendDraft?: (cardId: string, text: string) => Promise<void>;
   declineDraft?: (cardId: string) => Promise<void>; reopenDraft?: (cardId: string) => Promise<void>;
   sampleActive?: boolean; trySample?: () => void; removeSample?: () => void;
 }) {
   const [researchError, setResearchError] = useState('');
+  const draftBuffers = useRef(new Map<string, string>());
+  useEffect(() => {
+    const ids = new Set((snapshot.cards ?? []).map(card => card.id));
+    for (const id of draftBuffers.current.keys()) if (!ids.has(id)) draftBuffers.current.delete(id);
+  }, [snapshot.cards]);
+  const cardPrefix = useRef(crypto.randomUUID()).current;
+  const handledFocus = useRef<typeof focusRequest>(null);
+  useEffect(() => {
+    if (!focusRequest || handledFocus.current === focusRequest || typeof document === 'undefined') return;
+    if (focusCheck(focusRequest, document, cardPrefix)) handledFocus.current = focusRequest;
+  }, [focusRequest, snapshot.cards]);
   const heads = lineageHeads(snapshot.lineages ?? []);
   const headingIds = new Set(snapshot.paragraphs.filter(paragraph => isHeadingBlock(paragraph.text))
     .map(paragraph => paragraph.id));
@@ -112,12 +123,11 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
   const groups = snapshot.paragraphs.filter(paragraph => !isHeadingBlock(paragraph.text))
     .map(paragraph => ({ paragraph, items: snapshot.items.filter(item =>
     item.status === 'current' && item.paragraphId === paragraph.id && item.paragraphVersion === paragraph.version) }));
-  const visibleGroups = storageStatus === 'saved' ? groups.filter(group => group.items.length > 0) : [];
+  const visibleGroups = groups.filter(group => group.items.length > 0);
   const unchecked = heads.filter(lineage => !headingIds.has(lineage.paragraphId) && lineage.unchecked &&
     !groups.some(group =>
     group.items.some(item => item.lineageId === lineage.lineageId)));
-  const visibleCards = (snapshot.cards ?? []).filter(card => card.questionStatus !== 'marked' && !card.supersededMark &&
-    !snapshot.paragraphs.some(paragraph => paragraph.id === card.paragraphId && isHeadingBlock(paragraph.text)));
+  const visibleCards = (snapshot.cards ?? []).filter(card => card.questionStatus !== 'marked' && !card.supersededMark);
   const currentExtractionFailed = storageStatus === 'saved' && snapshot.jobs.some(job => job.step === 'extract' &&
     job.status === 'failed' && job.failureReason !== 'model-input-quota' &&
     snapshot.paragraphs.some(p => p.id === job.paragraphId &&
@@ -155,6 +165,96 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
       p.id === job.paragraphId && p.version === job.paragraphVersion));
   const hasItems = visibleGroups.length > 0 || visibleCards.length > 0 || (storageStatus === 'saved' &&
     [...removed, ...unchecked].some(lineage => snapshot.items.some(item => item.id === lineage.itemId)));
+  const markedItems = new Set(eligibleMarks(snapshot).map(value => value.item.id));
+  const inChecksView = (item: Snapshot['items'][number]) => markedItems.has(item.id) ||
+    visibleCards.some(card => card.itemLineageId === item.lineageId);
+  const currentItemIds = new Set(visibleGroups.flatMap(group => group.items.filter(item =>
+    heads.some(head => head.itemId === item.id && head.status !== 'removed')).map(item => item.lineageId)));
+  const earlierCards = visibleCards.filter(card => !currentItemIds.has(card.itemLineageId));
+  const renderCard = (card: ThoughtCard) => {
+          const stale = calculateStaleness(card.id, snapshot.dependencies ?? [], snapshot.lineages ?? []);
+          const provenChange = stale.reasons.some(reason => reason.kind === 'changed' || reason.kind === 'removed');
+          const outbox = snapshot.outbox?.find(entry => entry.id === card.outboxId);
+          const privacyChanged = !!outbox && !!research?.[outbox.id]?.changedAfterSend;
+          const paragraph = snapshot.paragraphs.find(value => value.id === card.paragraphId);
+          const head = heads.find(value => value.lineageId === card.itemLineageId);
+          const eligibility = lineageEligibility(card.itemLineageId, card.itemVersion, snapshot.paragraphs,
+            snapshot.lineages ?? [], snapshot.jobs);
+          const failedCheckVisible = card.recheckFailedVersion !== undefined && paragraph &&
+            (paragraph.version === card.recheckFailedVersion || head?.paragraphVersion !== paragraph.version);
+          const questionStatus = card.questionStatus === 'blocked' ? card.questionReason === 'private detail'
+            ? 'question held back: private detail' : card.questionReason === 'stale'
+              ? 'question unavailable: the statement changed' : card.questionReason === 'revalidation-failed'
+                ? 'question unavailable: an earlier check stopped' : 'question unavailable after local error'
+            : outbox?.status ?? 'preparing';
+          const receipts = outbox ? (snapshot.researchReceipts ?? []).filter(value => value.entryId === outbox.id)
+            .sort((a, b) => b.sentAt - a.sentAt) : [];
+          const receipt = receipts.find(value => value.status === 'completed');
+          const questionJob = snapshot.jobs.find(job => job.cardId === card.id && job.step === 'question' &&
+            job.status === 'done' && job.measuredSource);
+          const angleJob = questionJob && snapshot.jobs.find(job =>
+            questionJob.key.startsWith(`${job.key}#question#`) && job.step === 'angles' &&
+            job.measuredSource === questionJob.measuredSource && job.status === 'done');
+          const extractJob = angleJob && snapshot.jobs.find(job => job.step === 'extract' &&
+            job.paragraphId === angleJob.paragraphId && job.paragraphVersion === angleJob.paragraphVersion &&
+            job.measuredSource === questionJob?.measuredSource && job.status === 'done');
+          const cloudMeasured = !!receipt || !!(outbox && research?.[outbox.id]);
+          const route = [extractJob && (extractJob.measuredSource === 'in_cloud' ? 'Read in the cloud' :
+            'Read on this device'),
+            outbox && (outbox.status === 'approved' || cloudMeasured) && 'Question approved by you',
+            cloudMeasured && 'Researched in the cloud'].filter(Boolean).join(' · ');
+          return <article className="item-card" key={card.id} id={`check-card-${cardPrefix}-${card.id}`} tabIndex={-1}>
+            {route && <p className="muted">{route}</p>}
+            <div role="status" aria-live="polite">
+              {(stale.stale || failedCheckVisible || eligibility === 'stale' || eligibility === 'terminal' ||
+                privacyChanged) && <p>{provenChange ? copy.definite : copy.uncertain}{' '}
+                {privacyChanged && 'Your privacy settings may also have changed. '}Check again.</p>}
+              {card.questionStatus === 'waiting' && <p>{copy.draftQuestion}</p>}
+              {outbox?.status === 'approved' && outbox && checkingSend?.[outbox.id] &&
+                <p>{copy.checkingBeforeResearch}</p>}
+              {outbox?.status === 'approved' && outbox && searching?.[outbox.id] && <p>{copy.searching}</p>}
+            </div>
+            {card.askedDirectly ? <p>{copy.requestedVariant}</p> : card.angle &&
+              <div><strong>{angleLabels[card.angle]}</strong></div>}
+            <blockquote>“{card.itemQuote}”</blockquote>{card.concern && <p>{card.concern}</p>}
+            {!card.askedDirectly && (card.triageVersion === 'v2.1' ?
+              <ProfileBlock card={card} profile={snapshot.profile} /> :
+              <FreshWhy card={card} profile={snapshot.profile} />)}
+            {card.questionStatus === 'blocked' && <p>{questionStatus}</p>}
+            {(eligibility === 'stale' || eligibility === 'terminal') && checkThis &&
+              <button disabled={controlsDisabled || !head?.itemId || head.status === 'removed'} onClick={() => {
+                if (head?.itemId) void checkThis(head.itemId)
+                  .catch(() => setResearchError('Could not check the changed statement.'));
+              }}>Check again</button>}
+            <DraftControls card={card} outbox={outbox} receiptStatus={receipts[0]?.status} send={sendDraft}
+              draftBuffers={draftBuffers.current}
+              planTexts={splitParagraphs(text)}
+              failureCode={receipts[0]?.failureCode} researchError={outbox && researchErrors?.[outbox.id]}
+              searching={!!outbox && !!searching?.[outbox.id]} checkingSend={!!outbox && !!checkingSend?.[outbox.id]}
+              statusInParent controlsDisabled={controlsDisabled} decline={declineDraft} reopen={reopenDraft}
+              research={researchAgain} />
+            {outbox && research?.[outbox.id] && <section><h4>What the research found</h4>
+              {!isGrounded(research[outbox.id].result) && <p>{copy.noSources}</p>}
+              <ResearchBlock result={research[outbox.id].result} />
+              <button disabled={controlsDisabled}
+                onClick={() => { void navigator.clipboard.writeText(research[outbox.id].result.text); }}>
+                Copy</button></section>}
+            {outbox && !research?.[outbox.id] && receipt && <div>
+              <p>Researched on {new Date(receipt.sentAt).toLocaleDateString()}.
+                Results aren't kept on this device.</p>
+              {researchAgain && outbox.status === 'approved' && !searching?.[outbox.id] &&
+                <button disabled={storageStatus !== 'saved' || controlsDisabled || !!checkingSend?.[outbox.id]}
+                onClick={() => { void researchAgain(outbox.id).then(() => setResearchError('')).catch(error =>
+                  setResearchError(error instanceof Error ? error.message : 'Research could not be completed.')); }}>
+                Research again</button>}
+              {researchError && <p role="alert">{researchError}</p>}
+            </div>}
+            {feedback && <div><h4>Was this question useful?</h4>
+              {(['useful', 'already knew', 'not relevant', 'wrong'] as Feedback[]).map(value =>
+                <button key={value} aria-pressed={card.feedback === value}
+                  onClick={() => feedback(card.id, value)}>{value}</button>)}</div>}
+          </article>;
+  };
   return (
     <div className="workspace">
       {!cardOnly && <section className="panel notebook">
@@ -224,12 +324,10 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
           {storageStatus === 'saving' ? 'Saving changes before checking this plan.' : storageStatus === 'error'
             ? 'Cannot check unsaved changes.' :
               emptyReason(snapshot, configured, ready, cloudMode, extractVersion, foreground)}</p></div>}
-        {visibleGroups.filter(group => !cardOnly || group.items.some(item => (snapshot.cards ?? []).some(card =>
-          card.itemLineageId === item.lineageId && card.questionStatus === 'marked')))
-          .map(({ paragraph, items }) => <section key={paragraph.id}>
+        {visibleGroups.map(({ paragraph, items }) => <section key={paragraph.id}
+          hidden={storageStatus !== 'saved' || ((cardOnly || checksOnly) && !items.some(inChecksView))}>
           <h3>{paragraphLabel(paragraph, snapshot.paragraphs)}</h3>
-          {items.filter(item => !cardOnly || (snapshot.cards ?? []).some(card =>
-            card.itemLineageId === item.lineageId && card.questionStatus === 'marked')).map(item => {
+          {items.map(item => {
             const head = heads.find(lineage => lineage.lineageId === item.lineageId);
             const previous = snapshot.items.find(candidate => candidate.id === head?.changedFrom);
             const mark = (snapshot.cards ?? []).find(card => head?.itemId === item.id &&
@@ -239,7 +337,8 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
                 snapshot.lineages ?? [], snapshot.jobs) === 'eligible');
             const source = snapshot.jobs.find(job => job.step === 'extract' && job.status === 'done' &&
               job.paragraphId === item.paragraphId && job.paragraphVersion === item.paragraphVersion)?.measuredSource;
-            return <article className="item-card" key={item.id}>
+            return <div key={item.id} hidden={(cardOnly || checksOnly) && !inChecksView(item)}>
+              <article className="item-card">
               <div><strong>{item.kind}</strong>{source && <span className="muted"> · {
                 source === 'in_cloud' ? 'in the cloud' : 'on device'}</span>}</div>
               <p>{item.text}</p><blockquote>“{item.quote}”</blockquote>
@@ -254,104 +353,25 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
               {head?.needsConfirmation && !head.conflictingEvidence && head.newQuote &&
                 containsQuote(paragraph.text, head.newQuote) && <p>Now: “{head.newQuote}”</p>}
               {head?.unchecked && <p>{copy.uncertain} Please check.</p>}
-            </article>;
+              </article>
+              {visibleCards.filter(card => card.itemLineageId === item.lineageId && head?.itemId === item.id &&
+                head.status !== 'removed').map(renderCard)}
+            </div>;
           })}
         </section>)}
-        {visibleCards.map(card => {
-          const stale = calculateStaleness(card.id, snapshot.dependencies ?? [], snapshot.lineages ?? []);
-          const provenChange = stale.reasons.some(reason => reason.kind === 'changed' || reason.kind === 'removed');
-          const outbox = snapshot.outbox?.find(entry => entry.id === card.outboxId);
-          const privacyChanged = !!outbox && !!research?.[outbox.id]?.changedAfterSend;
-          const paragraph = snapshot.paragraphs.find(value => value.id === card.paragraphId);
-          const head = heads.find(value => value.lineageId === card.itemLineageId);
-          const eligibility = lineageEligibility(card.itemLineageId, card.itemVersion, snapshot.paragraphs,
-            snapshot.lineages ?? [], snapshot.jobs);
-          const failedCheckVisible = card.recheckFailedVersion !== undefined && paragraph &&
-            (paragraph.version === card.recheckFailedVersion || head?.paragraphVersion !== paragraph.version);
-          const questionStatus = card.questionStatus === 'blocked' ? card.questionReason === 'private detail'
-            ? 'question held back: private detail' : card.questionReason === 'stale'
-              ? 'question unavailable: the statement changed' : card.questionReason === 'revalidation-failed'
-                ? 'question unavailable: an earlier check stopped' : 'question unavailable after local error'
-            : outbox?.status ?? 'preparing';
-          const receipts = outbox ? (snapshot.researchReceipts ?? []).filter(value => value.entryId === outbox.id)
-            .sort((a, b) => b.sentAt - a.sentAt) : [];
-          const receipt = receipts.find(value => value.status === 'completed');
-          const questionJob = snapshot.jobs.find(job => job.cardId === card.id && job.step === 'question' &&
-            job.status === 'done' && job.measuredSource);
-          const angleJob = questionJob && snapshot.jobs.find(job =>
-            questionJob.key.startsWith(`${job.key}#question#`) && job.step === 'angles' &&
-            job.measuredSource === questionJob.measuredSource && job.status === 'done');
-          const extractJob = angleJob && snapshot.jobs.find(job => job.step === 'extract' &&
-            job.paragraphId === angleJob.paragraphId && job.paragraphVersion === angleJob.paragraphVersion &&
-            job.measuredSource === questionJob?.measuredSource && job.status === 'done');
-          const cloudMeasured = !!receipt || !!(outbox && research?.[outbox.id]);
-          const route = [extractJob && (extractJob.measuredSource === 'in_cloud' ? 'Read in the cloud' :
-            'Read on this device'),
-            outbox && (outbox.status === 'approved' || cloudMeasured) && 'Question approved by you',
-            cloudMeasured && 'Researched in the cloud'].filter(Boolean).join(' · ');
-          return <article className="item-card" key={card.id}>
-            {route && <p className="muted">{route}</p>}
-            <div role="status" aria-live="polite">
-              {(stale.stale || failedCheckVisible || eligibility === 'stale' || eligibility === 'terminal' ||
-                privacyChanged) && <p>{provenChange ? copy.definite : copy.uncertain}{' '}
-                {privacyChanged && 'Your privacy settings may also have changed. '}Check again.</p>}
-              {card.questionStatus === 'waiting' && <p>{copy.draftQuestion}</p>}
-              {outbox?.status === 'approved' && outbox && checkingSend?.[outbox.id] &&
-                <p>{copy.checkingBeforeResearch}</p>}
-              {outbox?.status === 'approved' && outbox && searching?.[outbox.id] && <p>{copy.searching}</p>}
-            </div>
-            {card.askedDirectly ? <><h4>{copy.questionHeading}</h4><p>{copy.requestedVariant}</p></> : card.angle &&
-              <div><strong>{angleLabels[card.angle]}</strong></div>}
-            <blockquote>“{card.itemQuote}”</blockquote>{card.concern && <p>{card.concern}</p>}
-            {!card.askedDirectly && <><h4>{copy.questionHeading}</h4>
-              {card.triageVersion === 'v2.1' ? <ProfileBlock card={card} profile={snapshot.profile} /> :
-                <FreshWhy card={card} profile={snapshot.profile} />}</>}
-            {card.questionStatus === 'blocked' && <p>{questionStatus}</p>}
-            {(eligibility === 'stale' || eligibility === 'terminal') && checkThis &&
-              <button disabled={controlsDisabled || !head?.itemId || head.status === 'removed'} onClick={() => {
-                if (head?.itemId) void checkThis(head.itemId)
-                  .catch(() => setResearchError('Could not check the changed statement.'));
-              }}>Check again</button>}
-            <DraftControls card={card} outbox={outbox} receiptStatus={receipts[0]?.status} send={sendDraft}
-              planTexts={splitParagraphs(text)}
-              failureCode={receipts[0]?.failureCode} researchError={outbox && researchErrors?.[outbox.id]}
-              searching={!!outbox && !!searching?.[outbox.id]} checkingSend={!!outbox && !!checkingSend?.[outbox.id]}
-              statusInParent controlsDisabled={controlsDisabled} decline={declineDraft} reopen={reopenDraft}
-              research={researchAgain} />
-            {outbox && research?.[outbox.id] && <section><h4>What the research found</h4>
-              {!isGrounded(research[outbox.id].result) && <p>{copy.noSources}</p>}
-              <ResearchBlock result={research[outbox.id].result} />
-              <button disabled={controlsDisabled}
-                onClick={() => { void navigator.clipboard.writeText(research[outbox.id].result.text); }}>
-                Copy</button></section>}
-            {outbox && !research?.[outbox.id] && receipt && <div>
-              <p>Researched on {new Date(receipt.sentAt).toLocaleDateString()}.
-                Results aren't kept on this device.</p>
-              {researchAgain && outbox.status === 'approved' && !searching?.[outbox.id] &&
-                <button disabled={storageStatus !== 'saved' || controlsDisabled || !!checkingSend?.[outbox.id]}
-                onClick={() => { void researchAgain(outbox.id).then(() => setResearchError('')).catch(error =>
-                  setResearchError(error instanceof Error ? error.message : 'Research could not be completed.')); }}>
-                Research again</button>}
-              {researchError && <p role="alert">{researchError}</p>}
-            </div>}
-            {feedback && <div><h4>Was this question useful?</h4>
-              {(['useful', 'already knew', 'not relevant', 'wrong'] as Feedback[]).map(value =>
-                <button key={value} aria-pressed={card.feedback === value}
-                  onClick={() => feedback(card.id, value)}>{value}</button>)}</div>}
-          </article>;
-        })}
-        {storageStatus === 'saved' && unchecked.map(lineage => {
+        {storageStatus === 'saved' && !checksOnly && !cardOnly && unchecked.map(lineage => {
           const item = snapshot.items.find(value => value.id === lineage.itemId);
           return item && <article className="item-card" key={lineage.lineageId}>
             <p>{item.text}</p><p>{copy.uncertain} Please check.</p>
           </article>;
         })}
-        {storageStatus === 'saved' && removed.map(lineage => {
+        {storageStatus === 'saved' && !checksOnly && !cardOnly && removed.map(lineage => {
           const item = snapshot.items.find(value => value.id === lineage.itemId);
           return item && <article className="item-card" key={lineage.lineageId}>
             <p><s>{item.text}</s> · no longer in your plan</p>
           </article>;
         })}
+        {earlierCards.length > 0 && <section><h3>Earlier checks</h3>{earlierCards.map(renderCard)}</section>}
       </aside>
     </div>
   );

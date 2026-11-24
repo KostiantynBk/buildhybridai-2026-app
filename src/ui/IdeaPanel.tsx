@@ -11,6 +11,7 @@ import { researchFailureMessage } from '../ai/researchFailure';
 import { copy, displayMessage } from './copy';
 import { dedupeKeptOut, findPlanNames, nameWarning } from './planNames';
 import { isHeadingBlock } from '../structure/planStructure';
+import { useAutoGrow } from './useAutoGrow';
 
 export function IdeaPanel({ snapshot, idea, view, start, send, retry, decline, searching = false,
   checkingSend = false, busy = false, planTexts }: {
@@ -20,6 +21,8 @@ export function IdeaPanel({ snapshot, idea, view, start, send, retry, decline, s
   decline(id: string): Promise<void>;
 }) {
   const [text, setText] = useState(idea?.draft ?? '');
+  const textarea = useAutoGrow(text, `${idea?.id ?? ''}:${snapshot.jobs.find(job =>
+    job.key === idea?.describeJobKey)?.status ?? ''}`);
   const [message, setMessage] = useState('');
   const keptOut = dedupeKeptOut(idea?.keptOut ?? []);
   useEffect(() => { setText(idea?.draft ?? ''); }, [idea?.id, idea?.draft]);
@@ -83,7 +86,8 @@ export function IdeaPanel({ snapshot, idea, view, start, send, retry, decline, s
     {idea?.status === 'ready' && (job?.status === 'failed' || job?.status === 'superseded') &&
       <p>{job.errorName === 'ModeChanged' ? copy.modeChanged : copy.draftUnavailable}</p>}
     {idea?.status === 'ready' && job?.status === 'done' && <>
-      <label>Public description <textarea value={text} onChange={event => setText(event.target.value)} /></label>
+      <label>Public description <textarea ref={textarea} className="draft-textarea" rows={3} value={text}
+        onChange={event => setText(event.target.value)} /></label>
       {!idea.draft && <p>{IDEA_DRAFT_HINT}</p>}
       {keptOut.length > 0 && <p>Left out of the description: {keptOut.join(', ')}</p>}
       {cannotApprove && <p>{stale ? copy.definite : copy.uncertain} Draft again.</p>}

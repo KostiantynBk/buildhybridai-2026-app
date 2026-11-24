@@ -70,7 +70,8 @@ it('sends only the stored approved question through a mock and renders its unmod
   expect(staleCard).toContain('Café prices.');
   const held = renderToStaticMarkup(<NotebookPanel text="" save={() => {}} storageStatus="saved" snapshot={stale}
     configured ready research={{ e: view }} searching={{ e: true }} />);
-  const article = held.match(/<article class="item-card">([\s\S]*?)<\/article>/)?.[0] ?? '';
+  const articlePattern = /<article class="item-card" id="check-card-[^"]+-c"[^>]*>([\s\S]*?)<\/article>/;
+  const article = held.match(articlePattern)?.[0] ?? '';
   expect((article.match(/role="status"/g) ?? [])).toHaveLength(1);
   expect(article).toContain('Your plan changed since this was checked.');
   expect(article).toContain('Searching the web');

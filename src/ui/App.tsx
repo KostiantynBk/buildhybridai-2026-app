@@ -23,6 +23,8 @@ import { samplePlan } from './samplePlan';
 import { copy } from './copy';
 import { navigationItems } from './navigation';
 import { splitParagraphs } from '../store/matcher';
+import { CheckShortlist } from './CheckShortlist';
+import { hasCurrentStatements } from './marks';
 import { safeErrorName } from '../ai/errorMetadata';
 
 const emptySnapshot = (): Snapshot => ({ paragraphs: [], items: [], profile: [], jobs: [] });
@@ -48,6 +50,8 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
   const service = useMemo(createService, []);
   const [, refresh] = useState(0);
   const [page, setPage] = useState('Notebook');
+  const [statementView, setStatementView] = useState<'checks' | 'all'>('all');
+  const [focusRequest, setFocusRequest] = useState<{ cardId: string; trigger: Element | null } | null>(null);
   const [text, setText] = useState('');
   const textRef = useRef('');
   const [sampleActive, setSampleActive] = useState(false);
@@ -64,6 +68,9 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
   const [storageStatus, setStorageStatus] = useState<'loading' | 'saving' | 'saved' | 'error'>('loading');
   const [storageNotice, setStorageNotice] = useState('');
   const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
+  useEffect(() => {
+    if (statementView === 'checks' && !hasCurrentStatements(snapshot)) setStatementView('all');
+  }, [snapshot, statementView]);
   const [research, setResearch] = useState<Record<string, ResearchView>>({});
   const [ideaResearch, setIdeaResearch] = useState<Record<string, ResearchView>>({});
   const [researchErrors, setResearchErrors] = useState<Record<string, string>>({});
@@ -544,6 +551,16 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
       inFlight.current.delete(key); setResearchPhase(current => ({ ...current, [key]: undefined }));
     }
   };
+  const checkItem = async (itemId: string) => {
+    const trigger = typeof document === 'undefined' ? null : document.activeElement;
+    const store = storeRef.current;
+    if (!store) throw new Error('Local storage unavailable.');
+    const result = await store.requestCheck(itemId);
+    if (result.reason) throw new Error(result.reason);
+    await refreshData();
+    if (result.cardId) setFocusRequest({ cardId: result.cardId, trigger });
+    void schedulerRef.current?.tick();
+  };
   const latestIdea = [...(snapshot.ideas ?? [])].sort((a, b) => b.createdAt - a.createdAt ||
     b.id.localeCompare(a.id))[0];
   return (
@@ -593,6 +610,13 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
           if (!store || !await store.declineIdea(id)) throw new Error('Could not decline this description.');
           await refreshData();
         }} /></div>
+        <CheckShortlist snapshot={snapshot} view={statementView} setView={setStatementView}
+          disabled={storageStatus !== 'saved'} ready={cloudMode ? settings.values.cloud_enabled :
+            service.state.kind === 'ready'} foreground={foreground} cloudMode={cloudMode}
+          stalled={!cloudMode && service.state.kind === 'stalled'} retryRequired={!cloudMode && service.retryRequired}
+          paused={schedulerRef.current?.storagePaused()} activeClaim={schedulerRef.current?.activeClaim()}
+          check={itemId => { void checkItem(itemId).catch(error =>
+            setStorageNotice(error instanceof Error ? error.message : 'Could not start this check.')); }} />
         <NotebookPanel text={text} save={save} storageStatus={storageStatus} removedSampleIds={removedSampleIds}
         sampleActive={sampleActive &&
           snapshot.paragraphs.length === sampleIds.current.length &&
@@ -605,17 +629,12 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
         cloudMode={cloudMode} foreground={foreground} modelState={service.state.kind}
         retryRequired={service.retryRequired} activeClaim={schedulerRef.current?.activeClaim()}
         ownedClaim={schedulerRef.current?.ownedClaim()} storagePaused={schedulerRef.current?.storagePaused()}
+        checksOnly={statementView === 'checks'} focusRequest={focusRequest}
         prepareAgain={() => { void service.prepare().catch(() => undefined); }}
         extractVersion={settings.values.prompt_set === 'v1' ? 'extract.v1' : 'extract.v2'}
         research={research} researchErrors={researchErrors} searching={searching} checkingSend={checking}
         researchAgain={researchQuestion}
-        checkThis={async itemId => {
-          const store = storeRef.current;
-          if (!store) throw new Error('Local storage unavailable.');
-          const result = await store.requestCheck(itemId);
-          if (result.reason) throw new Error(result.reason);
-          await refreshData(); void schedulerRef.current?.tick();
-        }} sendDraft={async (cardId, text) => {
+        checkThis={checkItem} sendDraft={async (cardId, text) => {
           const store = storeRef.current;
           if (!store) throw new Error('Local storage unavailable.');
           if (storageStatusRef.current !== 'saved') throw new Error('Checking your latest change…');
