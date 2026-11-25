@@ -7,6 +7,7 @@ import { NotebookPanel } from './NotebookPanel';
 import { CheckShortlist } from './CheckShortlist';
 import { openDB } from 'idb';
 import { STORE_VERSION } from '../store';
+import { extractionEligible } from '../structure/planStructure';
 import { openLocalStore, type LocalStore } from '../store';
 import { Scheduler, type LocalService } from '../store/scheduler';
 import { pickV1 } from '../pipeline/prompts/pick.v1';
@@ -364,3 +365,70 @@ it.each(['migrated-card', 'migrated-current'] as const)(
       expect((await store.pickSnapshot('extract.v2', 5000)).ready).toBe(true);
     } finally { store.close(); }
   });
+it.each(['batch', 'unlinked'] as const)(
+  'rejects peer v2 short-list %s work even when the current prompt set is v1', async phase => {
+    const name = `pick-mixed-prompt-${crypto.randomUUID()}`;
+    const store = await openLocalStore(name);
+    const peer = await openLocalStore(name);
+    try {
+      const plan = await fourMarks(store);
+      const shortList = '- First plan option\n- Second option\n- Third option';
+      expect(extractionEligible(shortList, 'on_device', 'extract.v1', 12)).toBe(false);
+      expect(extractionEligible(shortList, 'on_device', 'extract.v2', 12)).toBe(true);
+      await peer.saveNotebook(`${plan}\n\n${shortList}`, 5000);
+      await peer.enqueueSettled(9001, 'extract.v2');
+      const job = (await peer.claim(9001))!;
+      expect(job.paragraph.text).toBe(shortList);
+      await peer.complete(job.job, [{ kind: 'assumption', text: 'A short-list item',
+        quote: 'First plan option', topics: [] }], 9001, 'on_device');
+      if (phase === 'unlinked') {
+        const db = await openDB(name, STORE_VERSION);
+        for (const key of await db.getAllKeys('comparisonBatches')) await db.delete('comparisonBatches', key);
+        db.close();
+      }
+      expect((await store.pickSnapshot('extract.v1', 9001)).ready).toBe(false);
+      const picker = new PickShortlist(() => {});
+      const runLocal = vi.fn();
+      await picker.run(store, { state: { kind: 'ready' }, subscribe: () => () => {}, runLocal } as LocalService,
+        new AbortController().signal, () => 'extract.v1', () => 9001);
+      expect(runLocal).not.toHaveBeenCalled();
+      if (phase === 'batch') {
+        await peer.finalizeReady();
+        expect((await store.pickSnapshot('extract.v1', 9001)).ready).toBe(false);
+        await peer.enqueueAngles(9001);
+        const angles = (await peer.claim(9001))!;
+        await peer.completeAngles(angles.job, (await peer.anglesInput(angles.job))!, [], 'peer', 9001, 'on_device');
+        expect((await store.pickSnapshot('extract.v1', 9001)).ready).toBe(true);
+      }
+    } finally { peer.close(); store.close(); }
+  });
+it('rechecks a newly completed peer v2 short-list batch at the v1 pick dispatch boundary', async () => {
+  const name = `pick-mixed-dispatch-${crypto.randomUUID()}`;
+  const store = await openLocalStore(name);
+  const peer = await openLocalStore(name);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  try {
+    const plan = await fourMarks(store);
+    const shortList = '- First plan option\n- Second option\n- Third option';
+    await peer.saveNotebook(`${plan}\n\n${shortList}`, 5000);
+    const invoked = vi.fn();
+    const entered = vi.fn();
+    const service = { state: { kind: 'ready' }, subscribe: () => () => {}, runLocal: async (job: Job<unknown>) => {
+      entered(); await gate;
+      if (job.beforeDispatch && !await job.beforeDispatch()) throw new Error('cancelled');
+      job.onDispatch?.(); invoked();
+      return { data: { picks: [4] }, source: 'on_device', latencyMs: 1, raw: '' };
+    } } as unknown as LocalService;
+    const picker = new PickShortlist(() => {});
+    const pending = picker.run(store, service, new AbortController().signal, () => 'extract.v1', () => 9001);
+    await vi.waitFor(() => expect(entered).toHaveBeenCalledOnce());
+    await peer.enqueueSettled(9001, 'extract.v2');
+    const job = (await peer.claim(9001))!;
+    await peer.complete(job.job, [{ kind: 'assumption', text: 'A short-list item',
+      quote: 'First plan option', topics: [] }], 9001, 'on_device');
+    release(); await pending;
+    expect(invoked).not.toHaveBeenCalled();
+    expect(picker.view(await store.snapshot(), false).chosen).toBe(false);
+  } finally { release?.(); peer.close(); store.close(); }
+});

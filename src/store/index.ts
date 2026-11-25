@@ -241,14 +241,16 @@ export class LocalStore {
         (job.status === 'pending' || job.status === 'running') && paragraphs.some(p =>
           p.id === job.paragraphId && p.version === job.paragraphVersion));
       const ready = !snapshot.cloudModeEnabled && !pending && paragraphs.every(paragraph => {
-        if (!extractionEligible(paragraph.text, 'on_device', version, MIN_WORDS)) return true;
-        const extract = jobs.find(job => job.key === jobKey(paragraph.id, paragraph.version));
         const batch = batches.some(value => value.paragraphId === paragraph.id &&
           value.paragraphVersion === paragraph.version);
         const unlinked = items.some(item => item.paragraphId === paragraph.id &&
           item.paragraphVersion === paragraph.version && item.status === 'current' && !item.lineageId);
-        return now - paragraph.updatedAt >= SETTLE_MS && extract?.status === 'done' && !batch && !unlinked &&
-          unconsideredItems(currentTriageItems(paragraph, items, lineages), considered).length === 0;
+        if (batch || unlinked || unconsideredItems(currentTriageItems(paragraph, items, lineages), considered).length) {
+          return false;
+        }
+        if (!extractionEligible(paragraph.text, 'on_device', version, MIN_WORDS)) return true;
+        const extract = jobs.find(job => job.key === jobKey(paragraph.id, paragraph.version));
+        return now - paragraph.updatedAt >= SETTLE_MS && extract?.status === 'done';
       });
       return { snapshot, ready };
     } catch (error) {
