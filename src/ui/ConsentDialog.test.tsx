@@ -17,7 +17,7 @@ it('opens a modal, traps Tab in both directions, and returns focus after close',
   class ElementStub {
     isConnected = true;
     focus() { doc.activeElement = this; }
-    closest() { return fallback; }
+    closest(selector: string) { return selector.startsWith('article') ? fallback : null; }
   }
   vi.stubGlobal('document', doc); vi.stubGlobal('HTMLElement', ElementStub);
   const trigger = new ElementStub(), fallback = new ElementStub();
@@ -72,5 +72,24 @@ it.each(['outbox', 'cloud'] as const)('uses stable main focus for a disabled or 
     (children[2].props as { onClick(): void }).onClick();
   }
   cleanup();
+  expect(doc.activeElement).toBe(main);
+});
+it.each(['detached', 'hidden'] as const)('falls back to main after peer deletion leaves a %s card', state => {
+  const doc = { activeElement: null as unknown, querySelector: () => main };
+  class ElementStub {
+    isConnected = true;
+    hidden = false;
+    focus() { doc.activeElement = this; }
+    closest(selector: string) { return selector.startsWith('[hidden]') && this.hidden ? this : null; }
+  }
+  vi.stubGlobal('document', doc); vi.stubGlobal('HTMLElement', ElementStub);
+  const main = new ElementStub(), trigger = new ElementStub(), card = new ElementStub();
+  trigger.isConnected = false;
+  card.isConnected = state !== 'detached'; card.hidden = state === 'hidden';
+  ConsentDialog({ request: { trigger: trigger as unknown as Element, fallback: card as unknown as Element,
+    main: main as unknown as Element, message: 'Fake', finish() {} } });
+  h.refs[0].current = { open: false, showModal() { this.open = true; }, close() { this.open = false; } };
+  h.refs[1].current = { focus() {} };
+  const cleanup = h.effects[0]()!; cleanup();
   expect(doc.activeElement).toBe(main);
 });

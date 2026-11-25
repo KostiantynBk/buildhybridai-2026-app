@@ -1,12 +1,12 @@
 import { useEffect, useRef } from 'react';
 
-export type ConsentFocus = { trigger: Element | null; fallback: Element | null };
+export type ConsentFocus = { trigger: Element | null; fallback: Element | null; main?: Element | null };
 export type ConsentRequest = ConsentFocus & { message: string; cloudMode?: boolean;
   validate?: () => Promise<boolean>; finish(accepted: boolean): void };
 
 export function consentFocus(trigger: Element | null): ConsentFocus {
-  return { trigger, fallback: trigger?.closest('article[tabindex], .idea-card') ??
-    document.querySelector?.('main') ?? null };
+  const main = document.querySelector?.('main[tabindex="-1"]') ?? null;
+  return { trigger, fallback: trigger?.closest('article[tabindex], .idea-card') ?? main, main };
 }
 
 export function ConsentDialog({ request }: { request: ConsentRequest }) {
@@ -20,11 +20,16 @@ export function ConsentDialog({ request }: { request: ConsentRequest }) {
     cancel.current?.focus();
     return () => {
       if (element.open) element.close();
-      if (!(request.cloudMode && accepted.current) && request.trigger instanceof HTMLElement &&
-          request.trigger.isConnected) request.trigger.focus();
-      if ((request.cloudMode && accepted.current || document.activeElement !== request.trigger) &&
-          request.fallback instanceof HTMLElement &&
-          request.fallback.isConnected) request.fallback.focus();
+      const focus = (target: Element | null | undefined) => {
+        if (!(target instanceof HTMLElement) || !target.isConnected ||
+            target.closest?.('[hidden], [inert], [aria-hidden="true"]') ||
+            (target.getClientRects && target.getClientRects().length === 0)) return false;
+        target.focus();
+        return document.activeElement === target;
+      };
+      if (!(request.cloudMode && accepted.current) && focus(request.trigger)) return;
+      if (focus(request.fallback)) return;
+      focus(request.main ?? document.querySelector?.('main[tabindex="-1"]'));
     };
   }, [request]);
   return <dialog ref={dialog} aria-labelledby="consent-title" aria-describedby="consent-message"
