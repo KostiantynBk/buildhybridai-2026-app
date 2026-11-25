@@ -726,7 +726,7 @@ it('keeps a saved editor and pauses automatic work after an items-store quota er
   await seed.saveNotebook(plan, 0);
   localFixture.ready = true;
   localFixture.run.mockResolvedValue({ data: { items: [{ kind: 'assumption', text: 'Ledger',
-    quote: 'fictional project', topics: [] }] }, source: 'on_device', latencyMs: 1, raw: '' });
+    quote: 'fictional project tracks', topics: [] }] }, source: 'on_device', latencyMs: 1, raw: '' });
   const original = IDBObjectStore.prototype.put;
   let inject = true;
   const spy = vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(function (this: IDBObjectStore, value, key) {

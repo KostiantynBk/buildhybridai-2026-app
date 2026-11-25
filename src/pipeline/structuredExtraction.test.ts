@@ -10,12 +10,13 @@ it('runs each v2 table row with header context and merges only exact deduplicate
     const row = job.prompt.includes('| Alpha | One |') ? 'Alpha' :
       job.prompt.includes('| Beta | Two |') ? 'Beta' : 'Gamma';
     const data: Extraction = { items: [
-      { kind: 'assumption', text: 'Header', quote: 'Risk', topics: [] },
+      { kind: 'assumption', text: 'Header', quote: 'Risk | Check', topics: [] },
       { kind: 'assumption', text: 'Altered', quote: row.toLowerCase(), topics: [] },
       { kind: 'assumption', text: 'Synthetic join',
         quote: `| Risk | Check |\n| ${row} | ${row === 'Alpha' ? 'One' : row === 'Beta' ? 'Two' : 'Three'} |`,
         topics: [] },
-      { kind: 'assumption', text: row, quote: row, topics: [] },
+      { kind: 'assumption', text: row,
+        quote: `| ${row} | ${row === 'Alpha' ? 'One' : row === 'Beta' ? 'Two' : 'Three'} |`, topics: [] },
     ] };
     return { data: data as T, source: 'on_device', raw: '', latencyMs: 1 };
   };
@@ -23,7 +24,8 @@ it('runs each v2 table row with header context and merges only exact deduplicate
   expect(seen).toHaveBeenCalledTimes(3);
   expect(seen.mock.calls.every(([job]) => job.prompt.includes('| Risk | Check |'))).toBe(true);
   expect(seen.mock.calls.every(([job]) => !job.prompt.includes('|---|---|'))).toBe(true);
-  expect(result.items.map(item => item.quote)).toEqual(['Risk', 'Alpha', 'Beta', 'Gamma']);
+  expect(result.items.map(item => item.quote)).toEqual(['Risk | Check', '| Alpha | One |', '| Beta | Two |',
+    '| Gamma | Three |']);
   expect(result.items.every(item => table.includes(item.quote))).toBe(true);
 });
 it('provides list context but never accepts a quote from the intro alone', async () => {
@@ -47,12 +49,13 @@ it('provides list context but never accepts a quote from the intro alone', async
 it('maps recovered list quotes back to balanced original formatting and rejects near misses', async () => {
   const list = 'Intro:\n- **Notebook** (left) saves locally.\n- *Other* item.\n- `Third` item.';
   const run = async <T,>(job: Job<T>) => {
-    const quotes = job.prompt.includes('Notebook') ? ['Notebook (left)', 'otebook (left)', 'Notebook (right)'] : [];
+    const quotes = job.prompt.includes('Notebook') ?
+      ['Notebook (left) saves', 'otebook (left) saves', 'Notebook (right) saves'] : [];
     return { data: { items: quotes.map(quote => ({ kind: 'decision', text: quote, quote, topics: [] })) } as T,
       source: 'on_device', raw: '', latencyMs: 1 };
   };
   const result = await extractStructured(run, 'My plan', list, undefined, 'extract.v2');
-  expect(result.items.map(item => item.quote)).toEqual(['**Notebook** (left)']);
+  expect(result.items.map(item => item.quote)).toEqual(['**Notebook** (left) saves']);
   expect(result.items.every(item => list.includes(item.quote))).toBe(true);
 });
 it('rejects altered arithmetic inside a code span on the real structured adoption path', async () => {
@@ -146,12 +149,12 @@ it('maps cloud quotes while keeping a single full-paragraph request', async () =
   const seen: string[] = [];
   const run = async <T,>(job: Job<T>) => {
     seen.push(job.prompt);
-    return { data: { items: [{ kind: 'assumption', text: 'Model', quote: 'on-device model', topics: [] }] } as T,
+    return { data: { items: [{ kind: 'assumption', text: 'Model', quote: 'Plan: on-device model', topics: [] }] } as T,
       source: 'in_cloud', raw: '', latencyMs: 1 };
   };
   const result = await extractStructured(run, 'My plan', paragraph, undefined, 'extract.v2', false);
   expect(seen).toEqual([`Title: My plan\nParagraph:\n${paragraph}`]);
-  expect(result.items[0].quote).toBe('**on-device** model');
+  expect(result.items[0].quote).toBe('Plan: **on-device** model');
 });
 it('uses one unchanged full-paragraph call when splitting is disabled', async () => {
   const seen = vi.fn();

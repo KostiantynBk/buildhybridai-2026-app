@@ -1078,11 +1078,12 @@ export class LocalStore {
           if (mode === 'in_cloud') return a.createdAt - b.createdAt || a.key.localeCompare(b.key);
           const p = priority(a) - priority(b);
           if (p) return p;
-          const kind = Number(a.step !== 'extract') - Number(b.step !== 'extract');
-          if (kind) return kind;
-          return (a.step === 'extract' && b.step === 'extract'
-            ? (order.get(a.paragraphId) ?? Infinity) - (order.get(b.paragraphId) ?? Infinity) : 0) ||
-            a.createdAt - b.createdAt || a.key.localeCompare(b.key);
+          if (priority(a) === 0) return a.createdAt - b.createdAt || a.key.localeCompare(b.key);
+          // Selection uses session-wide angle counts, so automatic picks depend on this plan order.
+          const paragraphOrder = (order.get(a.paragraphId) ?? Infinity) - (order.get(b.paragraphId) ?? Infinity);
+          const step = (job: StoredJob) => job.step === 'extract' ? 0 : job.step === 'compare' ? 1 :
+            job.step === 'angles' ? 2 : 3;
+          return paragraphOrder || step(a) - step(b) || a.createdAt - b.createdAt || a.key.localeCompare(b.key);
         });
       for (const job of jobs) {
         if ((job.runMode ?? 'on_device') !== mode) continue;

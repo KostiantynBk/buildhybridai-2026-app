@@ -20,8 +20,8 @@ it('binds original slots once without rescanning placeholder-like or dollar-sign
 it('drops unverified quotes, deduplicates and fills empty topics', async () => {
   const data = {
     items: [
-      { kind: 'decision', text: 'one', quote: 'FIRST line', topics: [] },
-      { kind: 'decision', text: 'duplicate', quote: 'first   line', topics: ['other'] },
+      { kind: 'decision', text: 'one', quote: 'FIRST line with', topics: [] },
+      { kind: 'decision', text: 'duplicate', quote: 'first   line with', topics: ['other'] },
       { kind: 'assumption', text: 'wrong', quote: 'absent', topics: ['other'] },
     ],
   };
@@ -44,12 +44,12 @@ it('drops unverified quotes, deduplicates and fills empty topics', async () => {
 
 it('recovers formatted quotes with legacy normalized whitespace and preserves plain partial matches', async () => {
   const data = { items: [
-    { kind: 'decision', text: 'formatted', quote: 'ON-device model', topics: [] },
-    { kind: 'decision', text: 'plain', quote: 'rice', topics: [] },
+    { kind: 'decision', text: 'formatted', quote: 'ON-device model has', topics: [] },
+    { kind: 'decision', text: 'plain', quote: 'model has a pri', topics: [] },
   ] };
   const runner = (async () => ({ data, latencyMs: 1, source: 'on_device', raw: '' })) as unknown as LocalRunner;
   const result = await extract(runner, 'Title', 'An **on-device**   model has a price.');
-  expect(result.items.map(item => item.quote)).toEqual(['**on-device**   model', 'rice']);
+  expect(result.items.map(item => item.quote)).toEqual(['**on-device**   model has', 'model has a pri']);
 });
 it('preserves input and legacy quote decisions across all 20 frozen plain-text notes', async () => {
   const notes = (JSON.parse(readFileSync('eval/set-v1/notes.json', 'utf8')) as

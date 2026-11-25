@@ -84,6 +84,7 @@ export async function extract(
       droppedBadQuotes++;
       continue;
     }
+    if (mapped.trim().split(/\s+/u).length < 3) continue;
     const key = normalizeQuote(mapped);
     if (seen.has(key)) {
       droppedDuplicates++;

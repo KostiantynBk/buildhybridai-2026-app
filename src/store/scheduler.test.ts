@@ -5,7 +5,7 @@ import { Scheduler, type LocalService } from './scheduler';
 import { LocalError } from '../ai/localModel';
 
 const long = 'one two three four five six seven eight nine ten eleven twelve thirteen';
-const result = { data: { items: [{ kind: 'assumption', text: 'test', quote: 'one two', topics: ['other'] }] },
+const result = { data: { items: [{ kind: 'assumption', text: 'test', quote: 'one two three', topics: ['other'] }] },
   latencyMs: 1, source: 'on_device', raw: '{}' };
 let store: LocalStore;
 let scheduler: Scheduler | undefined;
@@ -36,7 +36,7 @@ describe('durable scheduler', () => {
     const snapshot = await store.snapshot();
     expect(snapshot.jobs.filter(job => job.step === 'extract')).toHaveLength(1);
     expect(snapshot.jobs.find(job => job.step === 'extract')?.status).toBe('done');
-    expect(snapshot.items[0]).toMatchObject({ promptVersion: 'extract.v2', quote: 'one two' });
+    expect(snapshot.items[0]).toMatchObject({ promptVersion: 'extract.v2', quote: 'one two three' });
   });
   it('automatically wakes on the timer after the settle interval', async () => {
     const { service, run } = fakeService();

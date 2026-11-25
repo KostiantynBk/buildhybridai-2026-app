@@ -19,7 +19,7 @@ function result(quote: string, source = 'on_device') {
 it('uses one paragraph job and one atomic completion for local rows', async () => {
   const store = await openLocalStore(`rows-${crypto.randomUUID()}`);
   let now = 4000;
-  const runLocal = vi.fn().mockImplementation(async () => result('item'));
+  const runLocal = vi.fn().mockImplementation(async () => result('item describes a'));
   const scheduler = new Scheduler(store, { state: { kind: 'ready' }, subscribe: () => () => {}, runLocal },
     () => 'extract.v2', () => {}, () => now);
   try {
@@ -28,7 +28,7 @@ it('uses one paragraph job and one atomic completion for local rows', async () =
     expect(runLocal).toHaveBeenCalledTimes(3);
     expect(state.jobs.filter(job => job.step === 'extract')).toMatchObject([{ status: 'done' }]);
     expect(state.items).toHaveLength(1);
-    expect(state.items[0].quote).toBe('item');
+    expect(state.items[0].quote).toBe('item describes a');
     now++;
   } finally { scheduler.stop(); store.close(); }
 });

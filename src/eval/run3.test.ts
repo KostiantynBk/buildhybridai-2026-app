@@ -14,6 +14,12 @@ import { whynoteV1 } from '../pipeline/prompts/whynote.v1';
 import type { LocalRunner } from '../pipeline/extract';
 import { runGate2, runPracticeV2 } from './run3';
 
+function fixtureQuote(text: string, first: boolean): string {
+  const original = first ? text.slice(0, 20) : text.slice(-20);
+  if (original.trim().split(/\s+/).length >= 3) return original;
+  const words = text.split(/\s+/);
+  return (first ? words.slice(0, 3) : words.slice(-3)).join(' ');
+}
 function syntheticRunner() {
   return vi.fn(async (job: Job<unknown>) => {
     let data: unknown;
@@ -81,8 +87,11 @@ it('shares each distinct concern question across profiles without mismatching wh
       data = { seeing: 'You are building.', why: 'It matters.', used: [] };
     } else {
       const quote = (job.prompt.split('Paragraph:\n')[1] ?? '').split(/[.!?]/)[0].trim();
-      data = { items: [{ kind: 'assumption', text: 'frontend item', quote: quote.slice(0, 20), topics: ['frontend'] },
-        { kind: 'assumption', text: 'backend item', quote: quote.slice(-20), topics: ['backend'] }] };
+      data = { items: [
+        { kind: 'assumption', text: 'frontend item', quote: fixtureQuote(quote, true),
+          topics: ['frontend'] },
+        { kind: 'assumption', text: 'backend item', quote: fixtureQuote(quote, false),
+          topics: ['backend'] }] };
     }
     return { data, source: 'on_device', latencyMs: 1, raw: '{}' };
   });
@@ -126,8 +135,11 @@ it('reports v2-only counts on baseline notes without changing gate thresholds', 
       why: 'You have not done this before.', used: [] };
     else {
       const quote = (job.prompt.split('Paragraph:\n')[1] ?? '').split(/[.!?]/)[0].trim();
-      data = { items: [{ kind: 'decision', text: 'A decision', quote: quote.slice(0, 20), topics: ['payments'] },
-        { kind: 'open-question', text: 'A question', quote: quote.slice(-20), topics: ['payments'] }] };
+      data = { items: [
+        { kind: 'decision', text: 'A decision', quote: fixtureQuote(quote, true),
+          topics: ['payments'] },
+        { kind: 'open-question', text: 'A question', quote: fixtureQuote(quote, false),
+          topics: ['payments'] }] };
     }
     return { data, source: 'on_device', latencyMs: 1, raw: '{}' };
   });
