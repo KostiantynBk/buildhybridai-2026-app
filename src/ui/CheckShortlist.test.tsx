@@ -109,3 +109,16 @@ it('disables completed-receipt Research again on a heading history card', () => 
   expect(html).toContain('The source is now a heading and cannot be checked.');
   expect(html).toContain('<button disabled="">Research again</button>');
 });
+it('labels valid device selections only and reports choosing only when actively pending', () => {
+  const snapshot = fixture(); const marks = eligibleMarks(snapshot);
+  const render = (props: { chosen?: boolean; choosing?: boolean; cloudMode?: boolean; disabled?: boolean }) =>
+    renderToStaticMarkup(<CheckShortlist snapshot={snapshot} view="all" setView={() => {}} check={() => {}}
+      ready selectedMarks={[marks[3], marks[1], marks[0]]} {...props} />);
+  const chosen = render({ chosen: true });
+  expect(chosen.indexOf('Planning statement 3')).toBeLessThan(chosen.indexOf('Planning statement 1'));
+  expect(chosen).toContain('Chosen on this device');
+  expect(render({ chosen: false })).not.toContain('Chosen on this device');
+  expect(render({ chosen: true, cloudMode: true })).not.toContain('Chosen on this device');
+  expect(render({ choosing: true })).toContain('Choosing the three to check first');
+  expect(render({ choosing: true, disabled: true })).not.toContain('Choosing the three to check first');
+});

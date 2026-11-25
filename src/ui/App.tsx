@@ -27,6 +27,7 @@ import { CheckShortlist } from './CheckShortlist';
 import { hasCurrentStatements } from './marks';
 import { safeErrorName } from '../ai/errorMetadata';
 import { ConsentDialog, consentFocus, type ConsentFocus, type ConsentRequest } from './ConsentDialog';
+import { PickShortlist } from './pickShortlist';
 
 const emptySnapshot = (): Snapshot => ({ paragraphs: [], items: [], profile: [], jobs: [] });
 const removedSampleKey = 'tp.removedSampleIds';
@@ -112,6 +113,7 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
   const writes = useRef<Promise<void>>(Promise.resolve());
   const revision = useRef(0);
   const mounted = useRef(true);
+  const picker = useMemo(() => new PickShortlist(() => { if (mounted.current) refresh(n => n + 1); }), []);
   const clearing = useRef(false);
   const refreshSeq = useRef(0);
   const channelRef = useRef<BroadcastChannel | null>(null);
@@ -203,7 +205,7 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
               if (safeErrorName(error) === 'QuotaExceededError') setStorageNotice('Browser storage is full.');
               else setStorageStatus('error');
             }
-          });
+          }, (store, localService, signal, version, now) => picker.run(store, localService, signal, version, now));
         schedulerRef.current = scheduler;
         await scheduler.start();
       } catch {
@@ -593,6 +595,7 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
     }
   };
   const checkItem = async (itemId: string) => {
+    schedulerRef.current?.interruptIdle();
     const trigger = typeof document === 'undefined' ? null : document.activeElement;
     const store = storeRef.current;
     if (!store) throw new Error('Local storage unavailable.');
@@ -604,6 +607,7 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
   };
   const latestIdea = [...(snapshot.ideas ?? [])].sort((a, b) => b.createdAt - a.createdAt ||
     b.id.localeCompare(a.id))[0];
+  const picked = picker.view(snapshot, cloudMode);
   return (
     <div className="app">
       <header className="header"><div><div className="eyebrow">{copy.tagline}</div><h1>ThoughtPartner</h1></div>
@@ -635,6 +639,7 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
         searching={!!latestIdea && !!searching[`idea:${latestIdea.id}`]}
         checkingSend={!!latestIdea && !!checking[`idea:${latestIdea.id}`]}
         busy={storageStatus !== 'saved'} start={async () => {
+          schedulerRef.current?.interruptIdle();
           const store = storeRef.current;
           if (!store) throw new Error('Local storage unavailable.');
           if (storageStatusRef.current !== 'saved') throw new Error('Checking your latest change…');
@@ -655,6 +660,7 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
           await refreshData();
         }} /></div>
         <CheckShortlist snapshot={snapshot} view={statementView} setView={setStatementView}
+          selectedMarks={picked.marks} chosen={picked.chosen} choosing={picked.choosing}
           showMarks={storageStatus === 'saved'} disabled={storageStatus !== 'saved'}
           ready={cloudMode ? settings.values.cloud_enabled :
             service.state.kind === 'ready'} foreground={foreground} cloudMode={cloudMode}

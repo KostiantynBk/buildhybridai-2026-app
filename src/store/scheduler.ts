@@ -32,10 +32,14 @@ export class Scheduler {
   private unsubscribe: (() => void) | undefined;
   private active: AbortController | undefined;
   private activeJob: { job: StoredJob; paragraph: Paragraph } | undefined;
+  private idleController: AbortController | undefined;
+  private wakeAfterBusy = false;
   private readonly sessionId = crypto.randomUUID();
   constructor(private readonly store: LocalStore, private readonly service: LocalService,
     private readonly version: () => ExtractVersion, private readonly changed: () => void,
-    private readonly now: () => number = Date.now, private readonly failed: (error?: unknown) => void = () => {}) {}
+    private readonly now: () => number = Date.now, private readonly failed: (error?: unknown) => void = () => {},
+    private readonly idle?: (store: LocalStore, service: LocalService, signal: AbortSignal,
+      version: () => ExtractVersion, now: () => number) => Promise<void>) {}
   async start(): Promise<void> {
     this.stopped = false;
     try {
@@ -67,13 +71,24 @@ export class Scheduler {
   stop(): void {
     this.stopped = true;
     this.generation++;
-    this.active?.abort();
+    this.active?.abort(); this.idleController?.abort();
     if (this.timer) clearInterval(this.timer);
     this.unsubscribe?.();
   }
-  modeChanged(): void { this.generation++; this.blocked = false; this.active?.abort(); }
+  modeChanged(): void { this.generation++; this.blocked = false; this.active?.abort(); this.interruptIdle(); }
+  interruptIdle(): void { this.idleController?.abort(); }
+  private async resumeClaimsAfterIdle(): Promise<void> {
+    if (this.stopped) return;
+    try {
+      const snapshot = await this.store.snapshot();
+      if (this.stopped || !snapshot.jobs.some(job => job.status === 'pending' && job.nextRunAt <= this.now())) return;
+      if (this.busy) this.wakeAfterBusy = true;
+      else void this.tick();
+    } catch (error) { if (!this.stopped) this.failed(error); }
+  }
   edited(nextText?: string, previous?: Paragraph[]): void {
     this.paused = true;
+    this.interruptIdle();
     let unchangedCompare = false;
     if (nextText !== undefined && previous && this.activeJob?.job.step === 'compare') {
       const { job, paragraph } = this.activeJob;
@@ -118,8 +133,25 @@ export class Scheduler {
       await this.store.enqueueAngles(this.now(), mode);
       const ready = this.service.isReadyFor ? await this.service.isReadyFor(mode) : this.service.state.kind === 'ready';
       if (this.stopped || this.paused || this.blocked || !ready || generation !== this.generation) return;
+      // A pick retains the claim slot: durable jobs may enqueue but cannot accrue attempts behind it.
+      if (this.idleController) return;
       const claimed = await this.store.claim(this.now(), mode);
-      if (!claimed) return;
+      if (!claimed) {
+        const foreground = typeof document === 'undefined' || document.visibilityState === 'visible';
+        if (mode === 'on_device' && this.idle && !this.idleController && foreground &&
+            !this.stopped && !this.paused && generation === this.generation) {
+          const controller = new AbortController();
+          this.idleController = controller;
+          void this.idle(this.store, this.service, controller.signal, this.version, this.now).catch(() => undefined)
+            .finally(() => {
+              if (this.idleController === controller) this.idleController = undefined;
+              this.changed();
+              void this.resumeClaimsAfterIdle();
+            });
+        }
+        return;
+      }
+      this.interruptIdle();
       if (claimed.job.step === 'extract' && isHeadingBlock(claimed.paragraph.text)) {
         await this.store.supersedeJob(claimed.job);
         return;
@@ -266,6 +298,7 @@ export class Scheduler {
     } finally {
       this.busy = false;
       this.changed();
+      if (this.wakeAfterBusy) { this.wakeAfterBusy = false; queueMicrotask(() => { void this.tick(); }); }
     }
   }
 }

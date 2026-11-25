@@ -49,6 +49,7 @@ export interface Job<T> {
   instructions?: PromptContext;
   signal?: AbortSignal;
   onDispatch?: () => void;
+  beforeDispatch?: () => Promise<boolean>;
   requiredMode?: 'on_device' | 'in_cloud';
   validate?: (value: unknown) => value is T;
 }
@@ -277,6 +278,12 @@ export class LocalModelService {
       }
       if (this.state.kind !== 'ready') {
         throw new LocalError('not-ready', 'The local model is not ready.');
+      }
+      if (job.beforeDispatch && !await job.beforeDispatch()) {
+        throw new LocalError('cancelled', 'Local job no longer eligible before dispatch.');
+      }
+      if (job.signal?.aborted || (job.beforeDispatch && !this.deps.isForeground())) {
+        throw new LocalError('cancelled', 'Local job cancelled before dispatch.');
       }
       this.guardConfigAndApi();
       const dispatchStart = this.deps.now();

@@ -221,6 +221,42 @@ export class LocalStore {
       throw error;
     }
   }
+  /** Coherent, read-only admission snapshot for optional on-device shortlist ranking. */
+  async pickSnapshot(version: 'extract.v1' | 'extract.v2', now: number):
+    Promise<{ snapshot: Snapshot; ready: boolean }> {
+    const tx = this.db.transaction(['paragraphs', 'items', 'jobs', 'lineageVersions', 'cards', 'anglesConsidered',
+      'comparisonBatches', 'meta'], 'readonly');
+    void tx.done.catch(() => undefined);
+    try {
+      const [paragraphs, items, jobs, lineages, cards, considered, batches, mode] = await Promise.all([
+        tx.objectStore('paragraphs').getAll(), tx.objectStore('items').getAll(), tx.objectStore('jobs').getAll(),
+        tx.objectStore('lineageVersions').getAll(), tx.objectStore('cards').getAll(),
+        tx.objectStore('anglesConsidered').getAll(), tx.objectStore('comparisonBatches').getAll(),
+        tx.objectStore('meta').get('cloud-mode-consent'),
+      ]);
+      await tx.done;
+      const snapshot: Snapshot = { paragraphs, items, jobs, lineages, cards, profile: [],
+        cloudModeEnabled: mode?.value === true };
+      const pending = jobs.some(job => (job.runMode ?? 'on_device') === 'on_device' &&
+        (job.status === 'pending' || job.status === 'running') && paragraphs.some(p =>
+          p.id === job.paragraphId && p.version === job.paragraphVersion));
+      const ready = !snapshot.cloudModeEnabled && !pending && paragraphs.every(paragraph => {
+        if (!extractionEligible(paragraph.text, 'on_device', version, MIN_WORDS)) return true;
+        const extract = jobs.find(job => job.key === jobKey(paragraph.id, paragraph.version));
+        const batch = batches.some(value => value.paragraphId === paragraph.id &&
+          value.paragraphVersion === paragraph.version);
+        const unlinked = items.some(item => item.paragraphId === paragraph.id &&
+          item.paragraphVersion === paragraph.version && item.status === 'current' && !item.lineageId);
+        return now - paragraph.updatedAt >= SETTLE_MS && extract?.status === 'done' && !batch && !unlinked &&
+          unconsideredItems(currentTriageItems(paragraph, items, lineages), considered).length === 0;
+      });
+      return { snapshot, ready };
+    } catch (error) {
+      try { tx.abort(); } catch { /* Already finished or aborted. */ }
+      await tx.done.catch(() => undefined);
+      throw error;
+    }
+  }
   async startIdea(now = Date.now()): Promise<{ idea?: IdeaRecord; created?: boolean; reason?: string }> {
     const tx = this.db.transaction(['ideas', 'paragraphs', 'items', 'lineageVersions', 'jobs', 'meta'], 'readwrite');
     void tx.done.catch(() => undefined);

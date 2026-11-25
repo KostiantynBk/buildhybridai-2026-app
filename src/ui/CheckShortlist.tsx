@@ -4,12 +4,13 @@ import { angleLabels, eligibleMarks } from './marks';
 
 export function CheckShortlist({ snapshot, view, setView, check, disabled = false, activeClaim,
   ready = false, foreground = true, cloudMode = false, stalled = false, paused = false, retryRequired = false,
-  showMarks = true }: {
+  showMarks = true, selectedMarks, chosen = false, choosing = false }: {
   snapshot: Snapshot; view: 'checks' | 'all'; setView(view: 'checks' | 'all'): void;
   check(itemId: string): void; disabled?: boolean; activeClaim?: StoredJob; ready?: boolean; foreground?: boolean;
   cloudMode?: boolean; stalled?: boolean; paused?: boolean; retryRequired?: boolean; showMarks?: boolean;
+  selectedMarks?: ReturnType<typeof eligibleMarks>; chosen?: boolean; choosing?: boolean;
 }) {
-  const marks = showMarks ? eligibleMarks(snapshot) : [];
+  const marks = showMarks ? selectedMarks ?? eligibleMarks(snapshot) : [];
   const active = !disabled && ready && foreground && !stalled && !paused && !retryRequired &&
     snapshot.jobs.some(job => (job.step === 'extract' || (job.step === 'angles' && !job.requested)) &&
       job.status === 'running' && job.key === activeClaim?.key && job.attempts === activeClaim.attempts &&
@@ -22,6 +23,9 @@ export function CheckShortlist({ snapshot, view, setView, check, disabled = fals
         <p className="muted shortlist-label">In: {label.replace(/^Under “(.*?)”: “(.*)”$/u, 'Under $1: $2')
           .replace(/^“(.*)”$/u, '$1')}</p>
         <button disabled={disabled} onClick={() => check(item.id)}>Check this</button></li>)}</ul></>}
+    {chosen && showMarks && !cloudMode && marks.length > 0 && <p className="muted">Chosen on this device</p>}
+    {choosing && !disabled && ready && foreground && !cloudMode && !stalled && !paused && !retryRequired &&
+      <p role="status">Choosing the three to check first…</p>}
     {active && <p role="status">Still looking for things worth checking…</p>}
     <div aria-label="Statement view">
       <button aria-pressed={view === 'checks'} onClick={() => setView('checks')}>See all checks</button>
