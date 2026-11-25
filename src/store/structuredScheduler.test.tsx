@@ -37,7 +37,7 @@ it('does not persist partial rows on a row error and follows normal retries and 
   let now = 4000;
   const runLocal = vi.fn().mockImplementation(async () => {
     if (runLocal.mock.calls.length % 2 === 0) throw new Error('fake row failure');
-    return result('item');
+    return result('item describes a');
   });
   const scheduler = new Scheduler(store, { state: { kind: 'ready' }, subscribe: () => () => {}, runLocal },
     () => 'extract.v2', () => {}, () => now);
@@ -135,7 +135,7 @@ it('discards a partial batch when processing mode changes', async () => {
   let scheduler: Scheduler;
   const runLocal = vi.fn().mockImplementation(async () => {
     scheduler.modeChanged(); await store.setCloudModeConsent(true);
-    return result('item');
+    return result('item describes a');
   });
   scheduler = new Scheduler(store, { state: { kind: 'ready' }, subscribe: () => () => {}, runLocal },
     () => 'extract.v2', () => {}, () => 4000);
@@ -155,7 +155,7 @@ it('returns a hidden mid-sequence job to pending without partial items', async (
   vi.stubGlobal('document', doc);
   const runLocal = vi.fn().mockImplementation(async () => {
     doc.visibilityState = 'hidden'; for (const listener of listeners) listener();
-    return result('item');
+    return result('item describes a');
   });
   const scheduler = new Scheduler(store, { state: { kind: 'ready' }, subscribe: () => () => {}, runLocal },
     () => 'extract.v2', () => {}, () => 4000);

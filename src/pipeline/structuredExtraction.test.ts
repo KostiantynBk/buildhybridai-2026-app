@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { extractStructured, type Extraction } from './extract';
+import { extract, extractStructured, type Extraction } from './extract';
 import type { Job } from '../ai/localModel';
 
 const table = '| Risk | Check |\n|---|---|\n| Alpha | One |\n| Beta | Two |\n| Gamma | Three |';
@@ -11,7 +11,8 @@ it('runs each v2 table row with header context and merges only exact deduplicate
       job.prompt.includes('| Beta | Two |') ? 'Beta' : 'Gamma';
     const data: Extraction = { items: [
       { kind: 'assumption', text: 'Header', quote: 'Risk | Check', topics: [] },
-      { kind: 'assumption', text: 'Altered', quote: row.toLowerCase(), topics: [] },
+      { kind: 'assumption', text: 'Altered',
+        quote: `${row.toLowerCase()} | ${row === 'Alpha' ? 'One' : row === 'Beta' ? 'Two' : 'Three'}`, topics: [] },
       { kind: 'assumption', text: 'Synthetic join',
         quote: `| Risk | Check |\n| ${row} | ${row === 'Alpha' ? 'One' : row === 'Beta' ? 'Two' : 'Three'} |`,
         topics: [] },
@@ -27,6 +28,12 @@ it('runs each v2 table row with header context and merges only exact deduplicate
   expect(result.items.map(item => item.quote)).toEqual(['Risk | Check', '| Alpha | One |', '| Beta | Two |',
     '| Gamma | Three |']);
   expect(result.items.every(item => table.includes(item.quote))).toBe(true);
+  for (const quote of ['alpha | One', 'beta | Two', 'gamma | Three']) {
+    const runNormalized = async <T,>() => ({ data: { items: [
+      { kind: 'assumption', text: 'Altered', quote, topics: [] },
+    ] } as T, source: 'on_device', raw: '', latencyMs: 1 });
+    expect((await extract(runNormalized, 'My plan', table, undefined, 'extract.v2')).items[0]?.quote).toBe(quote);
+  }
 });
 it('provides list context but never accepts a quote from the intro alone', async () => {
   const list = 'Problems to solve:\n- First problem is long.\n- Second problem is long.\n- Third problem is long.';
