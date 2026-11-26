@@ -4,9 +4,9 @@ export type CheckFocusRequest = { cardId: string; trigger: Element | null };
 export function focusCheck(request: CheckFocusRequest, doc: Document, prefix: string): boolean {
   const target = doc.getElementById(`check-card-${prefix}-${request.cardId}`);
   if (!target) return false;
-  if (doc.activeElement === request.trigger || doc.activeElement === doc.body) {
-    target.scrollIntoView?.({ block: 'nearest' });
-    target.focus();
-  }
+  if (doc.activeElement !== request.trigger && doc.activeElement !== doc.body) return true;
+  if (target.closest?.('[inert], [hidden]')) return false;
+  target.scrollIntoView?.({ block: 'nearest' });
+  target.focus();
   return true;
 }

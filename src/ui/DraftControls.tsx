@@ -31,7 +31,7 @@ export function DraftControls({ card, outbox, receiptStatus, failureCode, resear
   const [busy, setBusy] = useState(false);
   const locked = useRef(false);
   const act = (operation: () => Promise<void>) => {
-    if (locked.current) return;
+    if (locked.current || controlsDisabled) return;
     locked.current = true; setBusy(true); setMessage('');
     void operation().catch(error => setMessage(
       error instanceof Error ? displayMessage(error.message) : 'Could not complete this action.'))

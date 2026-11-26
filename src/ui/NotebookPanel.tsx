@@ -112,7 +112,7 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
   useEffect(() => {
     if (!focusRequest || handledFocus.current === focusRequest || typeof document === 'undefined') return;
     if (focusCheck(focusRequest, document, cardPrefix)) handledFocus.current = focusRequest;
-  }, [focusRequest, snapshot.cards]);
+  }, [focusRequest, snapshot.cards, storageStatus, checksOnly, cardOnly]);
   const heads = lineageHeads(snapshot.lineages ?? []);
   const headingIds = new Set(snapshot.paragraphs.filter(paragraph => isHeadingBlock(paragraph.text))
     .map(paragraph => paragraph.id));
@@ -163,7 +163,8 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
   const quota = snapshot.jobs.some(job => job.step === 'extract' && job.status === 'failed' &&
     job.failureReason === 'model-input-quota' && snapshot.paragraphs.some(p =>
       p.id === job.paragraphId && p.version === job.paragraphVersion));
-  const hasItems = visibleGroups.length > 0 || visibleCards.length > 0 || (storageStatus === 'saved' &&
+  const showSavedItems = storageStatus === 'saved' || storageStatus === 'saving';
+  const hasItems = visibleGroups.length > 0 || visibleCards.length > 0 || (showSavedItems &&
     [...removed, ...unchecked].some(lineage => snapshot.items.some(item => item.id === lineage.itemId)));
   const markedItems = new Set(eligibleMarks(snapshot).map(value => value.item.id));
   const inChecksView = (item: Snapshot['items'][number]) => markedItems.has(item.id) ||
@@ -225,22 +226,26 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
             {card.questionStatus === 'blocked' && <p>{questionStatus}</p>}
             {(eligibility === 'stale' || eligibility === 'terminal') && checkThis &&
               <button disabled={controlsDisabled || !head?.itemId || head.status === 'removed'} onClick={() => {
-                if (head?.itemId) void checkThis(head.itemId)
+                if (storageStatus !== 'saving' && head?.itemId) void checkThis(head.itemId)
                   .catch(() => setResearchError('Could not check the changed statement.'));
               }}>Check again</button>}
             <DraftControls card={card} outbox={outbox} receiptStatus={receipts[0]?.status} send={sendDraft}
               draftBuffers={draftBuffers.current}
-              planTexts={splitParagraphs(text)}
+              planTexts={storageStatus === 'saving' ? snapshot.paragraphs.map(paragraph => paragraph.text) :
+                splitParagraphs(text)}
               failureCode={receipts[0]?.failureCode} researchError={outbox && researchErrors?.[outbox.id]}
               searching={!!outbox && !!searching?.[outbox.id]} checkingSend={!!outbox && !!checkingSend?.[outbox.id]}
-              statusInParent controlsDisabled={controlsDisabled} sendDisabled={headingSource}
+              statusInParent controlsDisabled={controlsDisabled || storageStatus === 'saving'}
+              sendDisabled={headingSource}
               decline={declineDraft} reopen={reopenDraft}
               research={researchAgain} />
             {outbox && research?.[outbox.id] && <section><h4>What the research found</h4>
               {!isGrounded(research[outbox.id].result) && <p>{copy.noSources}</p>}
               <ResearchBlock result={research[outbox.id].result} />
               <button disabled={controlsDisabled}
-                onClick={() => { void navigator.clipboard.writeText(research[outbox.id].result.text); }}>
+                onClick={() => {
+                  if (storageStatus !== 'saving') void navigator.clipboard.writeText(research[outbox.id].result.text);
+                }}>
                 Copy</button></section>}
             {outbox && !research?.[outbox.id] && receipt && <div>
               <p>Researched on {new Date(receipt.sentAt).toLocaleDateString()}.
@@ -248,15 +253,19 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
               {researchAgain && outbox.status === 'approved' && !searching?.[outbox.id] &&
                 <button disabled={storageStatus !== 'saved' || controlsDisabled || headingSource ||
                   eligibility === 'stale' || eligibility === 'terminal' || !!checkingSend?.[outbox.id]}
-                onClick={() => { void researchAgain(outbox.id).then(() => setResearchError('')).catch(error =>
-                  setResearchError(error instanceof Error ? error.message : 'Research could not be completed.')); }}>
+                onClick={() => {
+                  if (storageStatus !== 'saving') void researchAgain(outbox.id).then(() => setResearchError(''))
+                    .catch(error => setResearchError(error instanceof Error ? error.message :
+                      'Research could not be completed.'));
+                }}>
                 Research again</button>}
               {researchError && <p role="alert">{researchError}</p>}
             </div>}
             {feedback && <div><h4>Was this question useful?</h4>
               {(['useful', 'already knew', 'not relevant', 'wrong'] as Feedback[]).map(value =>
                 <button key={value} aria-pressed={card.feedback === value}
-                  onClick={() => feedback(card.id, value)}>{value}</button>)}</div>}
+                  onClick={() => { if (storageStatus !== 'saving') feedback(card.id, value); }}>
+                  {value}</button>)}</div>}
           </article>;
   };
   return (
@@ -276,7 +285,8 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
           disabled={storageStatus === 'loading'} placeholder="Start with the idea you are exploring…" />
         {storageStatus === 'error' && <p role="alert">Could not save in this browser. Your changes may be lost.</p>}
       </section>}
-      <aside className="panel thoughts"><span className="eyebrow">Alongside your work</span>
+      <aside className="panel thoughts" inert={storageStatus === 'saving' || undefined}
+        aria-busy={storageStatus === 'saving' || undefined}><span className="eyebrow">Alongside your work</span>
         <h2>What your plan relies on</h2>
         {(currentExtractionFailed || reading || looking || quota || work.length > 0 || storagePaused ||
           stalled || (storageStatus === 'saved' && failedAngles > 0)) &&
@@ -329,7 +339,7 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
             ? 'Cannot check unsaved changes.' :
               emptyReason(snapshot, configured, ready, cloudMode, extractVersion, foreground)}</p></div>}
         {visibleGroups.map(({ paragraph, items }) => <section key={paragraph.id}
-          hidden={storageStatus !== 'saved' || ((cardOnly || checksOnly) && !items.some(inChecksView))}>
+          hidden={!showSavedItems || ((cardOnly || checksOnly) && !items.some(inChecksView))}>
           <h3>{paragraphLabel(paragraph, snapshot.paragraphs)}</h3>
           {items.map(item => {
             const head = heads.find(lineage => lineage.lineageId === item.lineageId);
@@ -348,8 +358,8 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
               <p>{item.text}</p><blockquote>“{item.quote}”</blockquote>
               {mark?.angle && <p>Worth checking · {angleLabels[mark.angle]}</p>}
               {checkThis && <button disabled={storageStatus !== 'saved' || controlsDisabled} onClick={() => {
-                void checkThis(item.id).catch(error => setResearchError(error instanceof Error
-                  ? displayMessage(error.message) : 'Could not start this check.'));
+                if (storageStatus !== 'saving') void checkThis(item.id).catch(error => setResearchError(
+                  error instanceof Error ? displayMessage(error.message) : 'Could not start this check.'));
               }}>Check this</button>}
               {head?.status === 'changed' && !head.needsConfirmation && head.paragraphVersion === paragraph.version &&
                 <p>Changed: was “{previous?.text ?? 'earlier statement'}”</p>}
@@ -363,13 +373,13 @@ export function NotebookPanel({ text, save, storageStatus, snapshot, configured,
             </div>;
           })}
         </section>)}
-        {storageStatus === 'saved' && !checksOnly && !cardOnly && unchecked.map(lineage => {
+        {showSavedItems && !checksOnly && !cardOnly && unchecked.map(lineage => {
           const item = snapshot.items.find(value => value.id === lineage.itemId);
           return item && <article className="item-card" key={lineage.lineageId}>
             <p>{item.text}</p><p>{copy.uncertain} Please check.</p>
           </article>;
         })}
-        {storageStatus === 'saved' && !checksOnly && !cardOnly && removed.map(lineage => {
+        {showSavedItems && !checksOnly && !cardOnly && removed.map(lineage => {
           const item = snapshot.items.find(value => value.id === lineage.itemId);
           return item && <article className="item-card" key={lineage.lineageId}>
             <p><s>{item.text}</s> · no longer in your plan</p>

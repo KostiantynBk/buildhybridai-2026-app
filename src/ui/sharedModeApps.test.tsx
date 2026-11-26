@@ -613,7 +613,16 @@ it('preserves the edited idea draft when a blank save fails and the same plan re
     expect((nodes(renderIdea()).find(node => node.type === 'textarea')!.props as { value: string }).value)
       .toBe('My corrected public wording');
     component(app, 'NotebookPanel').save('');
-    expect(component(app, 'CheckShortlist').showMarks).toBe(false);
+    expect(component(app, 'CheckShortlist').showMarks).toBe(true);
+    expect(component(app, 'CheckShortlist').saving).toBe(true);
+    const requestCheck = vi.spyOn(LocalStore.prototype, 'requestCheck');
+    try {
+      await expect(component(app, 'NotebookPanel').checkThis('not-a-real-item'))
+        .rejects.toThrow('Checking your latest change');
+      await expect(component(app, 'NotebookPanel').sendDraft('not-a-real-card', 'A fake question?'))
+        .rejects.toThrow('Checking your latest change');
+      expect(requestCheck).not.toHaveBeenCalled();
+    } finally { requestCheck.mockRestore(); }
     expect(ideaWrapper(app).props.hidden).toBe(true);
     const hiddenWrapper = ideaWrapper(app);
     h.enter(child);

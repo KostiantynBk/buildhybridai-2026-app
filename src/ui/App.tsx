@@ -595,6 +595,7 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
     }
   };
   const checkItem = async (itemId: string) => {
+    if (storageStatusRef.current !== 'saved') throw new Error('Checking your latest change…');
     schedulerRef.current?.interruptIdle();
     const trigger = typeof document === 'undefined' ? null : document.activeElement;
     const store = storeRef.current;
@@ -661,7 +662,8 @@ export default function App({ developerPlayer = false }: { developerPlayer?: boo
         }} /></div>
         <CheckShortlist snapshot={snapshot} view={statementView} setView={setStatementView}
           selectedMarks={picked.marks} chosen={picked.chosen} choosing={picked.choosing}
-          showMarks={storageStatus === 'saved'} disabled={storageStatus !== 'saved'}
+          showMarks={storageStatus === 'saved' || storageStatus === 'saving'}
+          saving={storageStatus === 'saving'} disabled={storageStatus !== 'saved'}
           ready={cloudMode ? settings.values.cloud_enabled :
             service.state.kind === 'ready'} foreground={foreground} cloudMode={cloudMode}
           stalled={!cloudMode && service.state.kind === 'stalled'} retryRequired={!cloudMode && service.retryRequired}

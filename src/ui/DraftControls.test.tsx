@@ -52,3 +52,18 @@ it('loads a question arriving after waiting without replacing a later user edit'
   field = nodes(tree).find(element => element.type === 'textarea')!;
   expect((field.props as { value: string }).value).toBe('My edited question?');
 });
+it('does not start Send while retained controls are disabled and works after re-enabling', () => {
+  hooks.reset();
+  const card = { id: 'c', questionStatus: 'ready', draftQuestion: 'A fictional question?' } as ThoughtCard;
+  const send = vi.fn().mockResolvedValue(undefined);
+  const render = (controlsDisabled: boolean) => {
+    hooks.begin(); return DraftControls({ card, send, controlsDisabled })!;
+  };
+  const button = (disabled: boolean) => nodes(render(disabled)).find(element => element.type === 'button' &&
+    (element.props as { children?: string }).children === 'Send this question')!;
+  expect((button(true).props as { disabled?: boolean }).disabled).toBe(true);
+  (button(true).props as { onClick(): void }).onClick();
+  expect(send).not.toHaveBeenCalled();
+  (button(false).props as { onClick(): void }).onClick();
+  expect(send).toHaveBeenCalledWith('c', 'A fictional question?');
+});
